@@ -1,8 +1,8 @@
-# Design Document: Semantic Video Moment Retrieval (SVMR) Subnet
+# Design Document: ChronoSeek
 
 ## 1. Introduction
 
-The SVMR Subnet aims to provide a decentralized service for retrieving specific video moments based on natural language queries. This document outlines the system architecture, including the miner and validator logic, leveraging state-of-the-art (SOTA) research in Temporal Video Grounding (TVG) and Video Moment Retrieval (VMR).
+ChronoSeek aims to provide a decentralized service for retrieving specific video moments based on natural language queries. This document outlines the system architecture, including the miner and validator logic, leveraging state-of-the-art (SOTA) research in Temporal Video Grounding (TVG) and Video Moment Retrieval (VMR).
 
 ## 2. Core Problem Definition
 

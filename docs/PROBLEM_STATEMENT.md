@@ -8,7 +8,7 @@ Existing tools rely on metadata, subtitles, or manual chaptering and cannot reli
 
 > "the scene where two generals fight each other with guns"
 
-The **Semantic Video Moment Retrieval (SVMR) Subnet** solves this problem by enabling semantic video moment retrieval in a decentralized, competitive environment.
+**ChronoSeek** solves this problem by enabling semantic video moment retrieval in a decentralized, competitive environment.
 
 ## Key Challenges
 

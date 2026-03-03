@@ -4,11 +4,12 @@ import bittensor as bt
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+
 class VideoDownloader:
     """
     Handles secure video downloading with retry logic.
     """
-    
+
     @staticmethod
     def download_video(url: str, timeout: int = 60) -> str:
         """
@@ -26,10 +27,10 @@ class VideoDownloader:
             http = requests.Session()
             http.mount("https://", adapter)
             http.mount("http://", adapter)
-            
+
             response = http.get(url, stream=True, timeout=timeout)
             response.raise_for_status()
-            
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:

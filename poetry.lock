@@ -230,6 +230,18 @@ typing_extensions = {version = ">=4.5", markers = "python_version < \"3.13\""}
 trio = ["trio (>=0.31.0) ; python_version < \"3.10\"", "trio (>=0.32.0) ; python_version >= \"3.10\""]
 
 [[package]]
+name = "argparse"
+version = "1.4.0"
+description = "Python command-line parsing library"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "argparse-1.4.0-py2.py3-none-any.whl", hash = "sha256:c31647edb69fd3d465a847ea3157d37bed1f95f19760b11a47aa91c04b666314"},
+    {file = "argparse-1.4.0.tar.gz", hash = "sha256:62b089a55be1d8949cd2bc7e0df0bddb9e028faefc8c32038cc84862aefdd6e4"},
+]
+
+[[package]]
 name = "async-substrate-interface"
 version = "1.6.3"
 description = "Asyncio library for interacting with substrate. Mostly API-compatible with py-substrate-interface"
@@ -3670,4 +3682,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12, <3.15"
-content-hash = "daf672ea7d0e3cd42ffcac41791c1b1d894ddfc0e6b27758ae61e42593aa9c62"
+content-hash = "fdbf9eeae2c69156d5116d71108e39c660047dc05bbb7faf06719dd6b6797a61"

@@ -2,9 +2,9 @@
 
 ## 1. Executive Summary
 
-The **Semantic Video Moment Retrieval (SVMR) Subnet** addresses a critical gap in the explosive growth of video data: **discoverability**. While video creation and storage have scaled exponentially (YouTube, TikTok, enterprise archives), the ability to granularly search *within* videos remains stuck in the metadata era (titles, tags).
+**ChronoSeek** addresses a critical gap in the explosive growth of video data: **discoverability**. While video creation and storage have scaled exponentially (YouTube, TikTok, enterprise archives), the ability to granularly search *within* videos remains stuck in the metadata era (titles, tags).
 
-SVMR unlocks the "dark data" inside videos by enabling natural language search for specific moments (e.g., *"the exact second the rocket booster separates"*), democratizing access to video intelligence without reliance on centralized tech giants.
+**ChronoSeek** unlocks the "dark data" inside videos by enabling natural language search for specific moments (e.g., *"the exact second the rocket booster separates"*), democratizing access to video intelligence without reliance on centralized tech giants.
 
 ## 2. Market Opportunity
 
@@ -27,7 +27,7 @@ The market sits at the intersection of three high-growth sectors:
 
 ## 3. Competitive Landscape
 
-| Solution Type | Examples | Limitations | SVMR Advantage |
+| Solution Type | Examples | Limitations | ChronoSeek Advantage |
 | :--- | :--- | :--- | :--- |
 | **Centralized Giants** | YouTube, Google Photos | • Optimized for ad revenue, not granular search.<br>• Privacy concerns.<br>• "Walled gardens" (cannot index private archives). | • **Decentralized:** Can run on private/local data.<br>• **Incentivized:** Miners compete for accuracy, not ad clicks. |
 | **Enterprise SaaS** | Twelve Labs, Vidrovr | • Expensive API costs.<br>• Vendor lock-in.<br>• Data must be uploaded to their cloud. | • **Cost-Effective:** Market-driven pricing via Bittensor.<br>• **Privacy:** Validators/Miners can operate on encrypted/local data in future iterations. |

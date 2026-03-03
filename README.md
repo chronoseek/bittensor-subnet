@@ -1,8 +1,8 @@
-# Semantic Video Moment Retrieval (SVMR) Subnet
+# ChronoSeek
 
 > **A Bittensor subnet for decentralized semantic video moment retrieval.**
 
-The **SVMR Subnet** enables semantic search over video content by mapping natural-language scene descriptions to precise timestamp intervals within a video.
+**ChronoSeek** enables semantic search over video content by mapping natural-language scene descriptions to precise timestamp intervals within a video.
 
 ---
 
@@ -111,6 +111,38 @@ The validator generates synthetic tasks, queries miners, and scores them.
 poetry run python validator.py --netuid 298 --subtensor.network test
 ```
 *Ensure your wallet/hotkey is registered on SN298.*
+
+## ⚙️ Running with PM2 (Production)
+
+For long-running processes, use [PM2](https://pm2.keymetrics.io/).
+
+### 1. Install PM2
+```bash
+npm install pm2 -g
+```
+
+### 2. Start Miner
+```bash
+# Using the poetry environment python interpreter
+pm2 start miner.py --name miner \
+    --interpreter $(poetry env info -p)/bin/python \
+    -- --netuid 298 --subtensor.network test --wallet.name default --wallet.hotkey default
+```
+
+### 3. Start Validator
+```bash
+# Using the poetry environment python interpreter
+pm2 start validator.py --name validator \
+    --interpreter $(poetry env info -p)/bin/python \
+    -- --netuid 298 --subtensor.network test --wallet.name default --wallet.hotkey default
+```
+
+### 4. Manage Processes
+```bash
+pm2 list
+pm2 logs miner
+pm2 logs validator
+```
 
 ## 🔧 Environment Variables
 
