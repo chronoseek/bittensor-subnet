@@ -6,6 +6,26 @@ The **SVMR Subnet** enables semantic search over video content by mapping natura
 
 ---
 
+## ⚠️ MVP Disclaimer (Hackathon)
+
+**Current Status:** Proof of Concept (MVP)
+
+This repository represents the initial **Minimum Viable Product (MVP)** implementation of the ChronoSeek protocol. 
+
+**MVP Scope Limitations:**
+*   **Model:** Miners currently use a baseline **CLIP (ViT-B/32)** sliding window approach. This is computationally expensive and not optimized for long-form video.
+*   **Dataset:** Validators generate tasks using a fixed subset of the **ActivityNet Captions** dataset (or a fallback public domain set) to ensure deterministic, objective scoring during the bootstrap phase.
+*   **Scoring:** Scoring is binary (Pass/Fail) based on a strict Intersection-over-Union (IoU) threshold > 0.5.
+*   **Inference:** All inference happens locally on the miner.
+
+**Future Enhancements (Roadmap):**
+1.  **Modular Inference:** Integration with **Chutes (SN64)** for serverless, verifiable model execution.
+2.  **SOTA Models:** Transition to temporal-aware architectures like **Moment-DETR** or **VideoLlama**.
+3.  **Synthetic Tasks:** Implementation of a VLM-based Oracle (using GPT-4o or Gemini) to generate infinite synthetic training tasks from any video URL.
+4.  **Vector Caching:** Miners will implement vector databases (Milvus/Chroma) to cache video embeddings, enabling millisecond-level retrieval for repeated queries.
+
+---
+
 ## 📚 Project Documentation
 
 This project is organized into the following key documents:
@@ -21,7 +41,7 @@ This project is organized into the following key documents:
 
 ---
 
-## 🚀 Quick Start (Ideathon)
+## 🚀 Quick Start (Hackathon)
 
 ### 1. The Core Concept
 We are building a decentralized protocol where:
@@ -43,7 +63,7 @@ Miners
    └─ Semantic video analysis (CLIP / SOTA Models)
 ```
 
-## �📦 Installation & Setup
+## 📦 Installation & Setup
 
 This project uses `poetry` for dependency management.
 

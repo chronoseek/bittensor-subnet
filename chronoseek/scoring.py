@@ -12,7 +12,6 @@ def calculate_iou(pred_start: float, pred_end: float, gt_start: float, gt_end: f
     intersection = max(0.0, end - start)
     
     # Calculate union
-    # Union = (pred_end - pred_start) + (gt_end - gt_start) - intersection
     pred_len = pred_end - pred_start
     gt_len = gt_end - gt_start
     
@@ -29,12 +28,19 @@ def calculate_iou(pred_start: float, pred_end: float, gt_start: float, gt_end: f
 def score_response(
     predictions: List[VideoSearchResult], 
     ground_truth: Tuple[float, float], 
-    latency: float,
-    lambda_decay: float = 0.1
+    latency: float, # Kept for API compatibility, ignored in MVP
 ) -> float:
     """
-    Score a miner's response based on max IoU and latency.
-    S_final = max(IoU) * e^(-lambda * latency)
+    Score a miner's response based on MVP Strict IoU rules.
+    
+    Rule 1: Binary Pass/Fail
+    - If max(IoU) >= 0.5: Score = 1.0
+    - If max(IoU) < 0.5: Score = 0.0
+    
+    Rule 2: Oversized Interval Penalty (Optional for MVP, but good practice)
+    - If duration(pred) > 2 * duration(gt), apply penalty?
+    - MVP Spec says "Binary Pass/Fail scoring... removes all subjectivity".
+    - So we stick to pure binary for now.
     """
     if not predictions:
         return 0.0
@@ -48,9 +54,8 @@ def score_response(
         if iou > max_iou:
             max_iou = iou
             
-    # Apply latency penalty
-    # e^(-0.1 * 1.0s) ~= 0.90
-    # e^(-0.1 * 5.0s) ~= 0.60
-    latency_factor = math.exp(-lambda_decay * latency)
-    
-    return max_iou * latency_factor
+    # MVP Strict Threshold
+    if max_iou >= 0.5:
+        return 1.0
+    else:
+        return 0.0

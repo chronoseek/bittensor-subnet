@@ -28,11 +28,12 @@ async def query_miner(
         # Generate Epistula headers
         headers = generate_header(wallet.hotkey, request.model_dump())
         
+        # MVP: Increase timeout to 60s because miners download video on the fly
         resp = await client.post(
             f"{endpoint}/search", 
             json=request.model_dump(),
             headers=headers,
-            timeout=10.0
+            timeout=60.0 
         )
         resp.raise_for_status()
         latency = time.time() - start_time
@@ -50,35 +51,40 @@ async def run_step(
 ) -> List[Tuple[int, float]]:
     """
     Run a single validation step:
-    1. Generate task
+    1. Generate task (ActivityNet)
     2. Query all miners via HTTP + Epistula
-    3. Score responses
+    3. Score responses (Strict IoU)
     
     Returns: List of (uid, score)
     """
     
     # 1. Generate Task
     video_url, query, ground_truth = task_gen.generate_task()
-    logger.info(f"Generated task: {query} for {video_url}")
+    bt.logging.info(f"Generated task: '{query}' for {video_url} | GT: {ground_truth}")
     
     request_model = VideoSearchRequest(video_url=video_url, query=query)
     
-    # 2. Identify Miners with Endpoints
-    # In a real subnet, we'd use subtensor.get_commitment(netuid, uid)
-    # For simulation/template, we'll assume we can resolve endpoints.
-    # If using standard axon info: metagraph.axons[uid].ip + port
-    
     scores = []
     
-    # Example loop over metagraph (commented out until we have real endpoints)
-    # for uid in metagraph.uids:
-    #     axon = metagraph.axons[uid]
-    #     if axon.ip == "0.0.0.0": continue
-    #     
-    #     endpoint = f"{axon.ip}:{axon.port}"
-    #     resp, latency = await query_miner(client, endpoint, request_model, wallet)
-    #     
-    #     score = score_response(resp.results, ground_truth, latency)
-    #     scores.append((uid, score))
+    # MVP: Loop over metagraph to query miners
+    # We skip UIDs with no IP (0.0.0.0) or private IPs if not local dev
+    for uid in metagraph.uids:
+        axon = metagraph.axons[uid]
+        if axon.ip == "0.0.0.0": 
+            continue
+        
+        endpoint = f"{axon.ip}:{axon.port}"
+        bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
+        
+        resp, latency = await query_miner(client, endpoint, request_model, wallet)
+        
+        if not resp.results:
+            bt.logging.debug(f"Miner {uid} returned no results.")
+            score = 0.0
+        else:
+            score = score_response(resp.results, ground_truth, latency)
+            bt.logging.info(f"Miner {uid} response: {resp.results[0]} | Score: {score}")
+            
+        scores.append((uid, score))
     
     return scores

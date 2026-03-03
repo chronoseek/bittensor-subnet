@@ -13,7 +13,8 @@ import sys
 import numpy as np
 from typing import List
 
-from chronoseek.validator.task_gen import SyntheticTaskGenerator
+# Use ActivityNetTaskGenerator for MVP
+from chronoseek.validator.task_gen import ActivityNetTaskGenerator
 from chronoseek.validator.forward import run_step
 
 HEARTBEAT_TIMEOUT = 600  # seconds
@@ -37,7 +38,7 @@ async def run_validator_loop(
     Async validator loop.
     """
     # Initialize components
-    task_gen = SyntheticTaskGenerator()
+    task_gen = ActivityNetTaskGenerator()
     async_client = httpx.AsyncClient(timeout=30.0)
     
     # Get tempo

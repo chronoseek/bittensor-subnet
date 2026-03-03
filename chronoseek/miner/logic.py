@@ -1,33 +1,126 @@
-import random
-from typing import List
+import os
+import numpy as np
+from typing import List, Tuple
 from chronoseek.schemas import VideoSearchResult
+import bittensor as bt
+
+# Modular components
+from chronoseek.miner.utils.video_downloader import VideoDownloader
+from chronoseek.miner.utils.frame_extractor import FrameExtractor
+from chronoseek.miner.utils.clip_engine import CLIPProcessorEngine
 
 class MinerLogic:
     """
     Core logic for the SVMR Miner.
+    
+    This implementation follows a modular design pattern:
+    1. VideoDownloader: Handles fetching content.
+    2. FrameExtractor: Handles video processing.
+    3. CLIPProcessorEngine: Handles ML inference.
+    4. MinerLogic: Orchestrates the pipeline and implements search heuristics.
     """
     
     def __init__(self):
-        # Load models here (CLIP, etc.)
-        pass
+        # Initialize ML engine once at startup
+        self.ml_engine = CLIPProcessorEngine(model_id="openai/clip-vit-base-patch32")
         
     def search(self, video_url: str, query: str) -> List[VideoSearchResult]:
         """
-        Search for the query in the video.
+        Execute the search pipeline.
         """
-        # TODO: Implement Tier 1 Baseline (CLIP Sliding Window)
-        # 1. Download video
-        # 2. Extract frames
-        # 3. Encode frames & query
-        # 4. Compute similarity
+        bt.logging.info(f"Processing query: '{query}' for video: {video_url}")
         
-        # Mock logic: return a random 10s interval
-        # assuming video is ~2 min long
-        start = random.uniform(0, 100)
-        return [
-            VideoSearchResult(
-                start=start,
-                end=start + 10.0,
-                confidence=random.uniform(0.7, 0.99)
-            )
-        ]
+        # 1. Download
+        video_path = VideoDownloader.download_video(video_url)
+        if not video_path:
+            bt.logging.error("Video download failed.")
+            return []
+            
+        try:
+            # 2. Extract Frames
+            frames_data = FrameExtractor.extract_frames(video_path, fps=1)
+            if not frames_data:
+                bt.logging.error("Frame extraction failed or video is empty.")
+                return []
+                
+            timestamps, images = zip(*frames_data)
+            
+            # 3. Inference (Compute Similarity)
+            probs = self.ml_engine.compute_similarity(query, list(images))
+            if len(probs) == 0:
+                bt.logging.error("Inference returned no scores.")
+                return []
+                
+            # 4. Search Heuristics (Thresholding & Merging)
+            results = self._find_best_segment(probs, timestamps)
+            return results
+            
+        except Exception as e:
+            bt.logging.error(f"Search pipeline error: {e}")
+            return []
+        finally:
+            # Cleanup
+            if os.path.exists(video_path):
+                os.remove(video_path)
+
+    def _find_best_segment(self, probs: np.ndarray, timestamps: Tuple[float, ...]) -> List[VideoSearchResult]:
+        """
+        Heuristic to find the best contiguous segment from frame probabilities.
+        """
+        # Dynamic threshold: Top 10% of scores
+        threshold = np.percentile(probs, 90)
+        
+        candidates = []
+        current_start_idx = None
+        gap_tolerance = 2 # frames
+        gap_counter = 0
+        
+        for i, prob in enumerate(probs):
+            if prob > threshold:
+                if current_start_idx is None:
+                    current_start_idx = i
+                gap_counter = 0
+            else:
+                if current_start_idx is not None:
+                    gap_counter += 1
+                    if gap_counter > gap_tolerance:
+                        end_idx = i - gap_counter
+                        segment_probs = probs[current_start_idx:end_idx+1]
+                        score = np.mean(segment_probs) if len(segment_probs) > 0 else 0.0
+                        candidates.append((timestamps[current_start_idx], timestamps[end_idx], score))
+                        current_start_idx = None
+        
+        # Handle trailing segment
+        if current_start_idx is not None:
+            end_idx = len(probs) - 1
+            segment_probs = probs[current_start_idx:end_idx+1]
+            score = np.mean(segment_probs) if len(segment_probs) > 0 else 0.0
+            candidates.append((timestamps[current_start_idx], timestamps[end_idx], score))
+        
+        # Rank candidates
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        
+        results = []
+        if candidates:
+            best = candidates[0]
+            start_t, end_t, score = best
+            
+            # Enforce minimum duration (5s)
+            if end_t - start_t < 5.0:
+                end_t = start_t + 5.0
+                
+            results.append(VideoSearchResult(
+                start=start_t,
+                end=end_t,
+                confidence=float(score)
+            ))
+        else:
+            # Fallback: Middle 10s
+            mid = timestamps[len(timestamps)//2]
+            results.append(VideoSearchResult(
+                start=mid,
+                end=mid+10.0,
+                confidence=0.1
+            ))
+            
+        return results
