@@ -5,6 +5,7 @@ Implements the synthetic task generation, miner querying (HTTP+Epistula), and Io
 
 import os
 import time
+import argparse
 import asyncio
 import httpx
 import bittensor as bt
@@ -108,20 +109,42 @@ async def run_validator_loop(
     finally:
         await async_client.aclose()
 
+def get_config():
+    """
+    Parse arguments and return configuration.
+    Priority: CLI > Environment Variables > Defaults
+    """
+    parser = argparse.ArgumentParser(description="ChronoSeek Validator")
+    
+    # Wallet args
+    parser.add_argument("--wallet.name", default=os.getenv("WALLET_NAME", "default"), help="Wallet name")
+    parser.add_argument("--wallet.hotkey", default=os.getenv("HOTKEY_NAME", "default"), help="Hotkey name")
+    
+    # Subtensor args
+    parser.add_argument("--netuid", type=int, default=int(os.getenv("NETUID", "1")), help="Subnet NetUID")
+    parser.add_argument("--subtensor.network", default=os.getenv("NETWORK", "finney"), help="Bittensor network")
+    parser.add_argument("--subtensor.chain_endpoint", default=None, help="Chain endpoint")
+
+    # Logging
+    parser.add_argument("--logging.level", default=os.getenv("LOG_LEVEL", "INFO"), choices=["DEBUG", "INFO", "TRACE"], help="Logging level")
+    
+    # Bittensor CLI config
+    bt.Wallet.add_args(parser)
+    bt.Subtensor.add_args(parser)
+    bt.logging.add_args(parser)
+
+    return bt.Config(parser)
+
 def main():
     """Run the SVMR subnet validator."""
     # 1. Configuration
-    config = bt.Config()
-    config.wallet.name = os.getenv("WALLET_NAME", "default")
-    config.wallet.hotkey = os.getenv("HOTKEY_NAME", "default")
-    config.netuid = int(os.getenv("NETUID", "1"))
-    config.subtensor.network = os.getenv("NETWORK", "finney")
+    config = get_config()
     
-    # Set logging level (default INFO)
-    log_level = os.getenv("LOG_LEVEL", "INFO")
-    if log_level == "DEBUG":
+    # Setup logging
+    bt.logging(config=config, logging_dir=config.logging.logging_dir)
+    if config.logging.level == "DEBUG":
         bt.logging.set_debug(True)
-    elif log_level == "TRACE":
+    elif config.logging.level == "TRACE":
         bt.logging.set_trace(True)
     
     bt.logging.info(f"Starting SVMR Validator on network={config.subtensor.network}, netuid={config.netuid}")
@@ -135,7 +158,8 @@ def main():
     try:
         # 2. Setup
         wallet = bt.Wallet(config=config)
-        ## check if wallet exists (exit if not)
+        bt.logging.info(f"Wallet: {wallet}")
+
         try:
             if wallet.hotkey:
                 bt.logging.info(f"Starting Validator with hotkey: {wallet.hotkey.ss58_address}")

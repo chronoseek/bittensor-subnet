@@ -85,23 +85,32 @@ poetry install
 poetry env activate
 ```
 
-## 🏃‍♂️ Running Locally
+### 3. Set up Hugging Face Token
+To download models (e.g., CLIP), you need a Hugging Face token.
+1. Get your token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+2. Set it in your environment:
+```bash
+export HF_TOKEN=your_token_here
+```
+*Or add it to your `.env` file.*
+
+## 🏃‍♂️ Running on Testnet (SN298)
 
 ### 1. Start the Miner
 The miner listens for HTTP requests from validators.
 ```bash
 # Starts miner on port 8000
-poetry run python miner.py
+poetry run python miner.py --netuid 298 --subtensor.network test
 ```
-*You can configure the wallet/hotkey via environment variables (see `miner.py`).*
+*Ensure your wallet/hotkey is registered on SN298.*
 
 ### 2. Start the Validator
 The validator generates synthetic tasks, queries miners, and scores them.
 ```bash
 # Starts validator loop
-poetry run python validator.py
+poetry run python validator.py --netuid 298 --subtensor.network test
 ```
-*Note: For local testing without a running Bittensor chain, ensure the code handles mock metagraphs appropriately.*
+*Ensure your wallet/hotkey is registered on SN298.*
 
 ## 🔧 Environment Variables
 
@@ -109,7 +118,8 @@ poetry run python validator.py
 |----------|-------------|---------|
 | `WALLET_NAME` | Name of your coldkey | `default` |
 | `HOTKEY_NAME` | Name of your hotkey | `default` |
-| `NETUID` | Subnet NetUID | `1` |
-| `NETWORK` | Network (finney, test, local) | `finney` |
+| `NETUID` | Subnet NetUID | `298` (Mainnet TBD) |
+| `NETWORK` | Network (finney, test, local) | `test` |
 | `PORT` | Miner HTTP Port | `8000` |
 | `LOG_LEVEL` | Logging verbosity | `INFO` |
+| `HF_TOKEN` | Hugging Face Token | `None` |

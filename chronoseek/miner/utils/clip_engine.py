@@ -15,9 +15,13 @@ class CLIPProcessorEngine:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         bt.logging.info(f"Loading CLIP model '{model_id}' on {self.device}...")
         
+        token = os.getenv("HF_TOKEN")
+        if not token:
+            bt.logging.warning("HF_TOKEN not found in environment. Public models may be rate-limited.")
+
         try:
-            self.model = CLIPModel.from_pretrained(model_id).to(self.device)
-            self.processor = CLIPProcessor.from_pretrained(model_id)
+            self.model = CLIPModel.from_pretrained(model_id, token=token).to(self.device)
+            self.processor = CLIPProcessor.from_pretrained(model_id, token=token)
             bt.logging.success("CLIP model loaded successfully.")
         except Exception as e:
             bt.logging.error(f"Failed to load CLIP model: {e}")
