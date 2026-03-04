@@ -58,32 +58,51 @@ async def run_step(
     """
 
     # 1. Generate Task
+    bt.logging.info("=" * 50)
+    bt.logging.info(f"STARTING VALIDATION STEP")
+    bt.logging.info("=" * 50)
+
+    bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
     video_url, query, ground_truth = task_gen.generate_task()
-    bt.logging.info(f"Generated task: '{query}' for {video_url} | GT: {ground_truth}")
+    
+    bt.logging.info("-" * 40)
+    bt.logging.info(f"Video URL:   {video_url}")
+    bt.logging.info(f"Query:       {query}")
+    bt.logging.info(f"Ground Truth: {ground_truth}")
+    bt.logging.info("-" * 40)
 
     request_model = VideoSearchRequest(video_url=video_url, query=query)
 
     scores = []
-
+    
     # MVP: Loop over metagraph to query miners
     # We skip UIDs with no IP (0.0.0.0) or private IPs if not local dev
+    bt.logging.info(f"\n>>> Phase 2: Querying Miners ({len(metagraph.uids)} total)")
+    
     for uid in metagraph.uids:
         axon = metagraph.axons[uid]
         if axon.ip == "0.0.0.0":
             continue
 
-        endpoint = f"{axon.ip}:{axon.port}"
+        endpoint = f"http://{axon.ip}:{axon.port}"
         bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
 
         resp, latency = await query_miner(client, endpoint, request_model, wallet)
 
         if not resp.results:
-            bt.logging.debug(f"Miner {uid} returned no results.")
+            bt.logging.warning(f"[UID {uid}] No results | Latency: {latency:.2f}s | Score: 0.0000")
             score = 0.0
         else:
             score = score_response(resp.results, ground_truth, latency)
-            bt.logging.info(f"Miner {uid} response: {resp.results[0]} | Score: {score}")
+            result = resp.results[0]
+            
+            # Format result string nicely
+            res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
+            bt.logging.success(f"[UID {uid}] Score: {score:.4f} | Latency: {latency:.2f}s | Result: {res_str}")
 
-        scores.append((uid, score))
+        scores.append((int(uid), score))
 
+    bt.logging.info("=" * 50)
+    bt.logging.info("STEP COMPLETED")
+    bt.logging.info("=" * 50)
     return scores

@@ -32,28 +32,47 @@ class MinerLogic:
         bt.logging.info(f"Processing query: '{query}' for video: {video_url}")
 
         # 1. Download
+        bt.logging.info("=" * 40)
+        bt.logging.info(f"MINER: STARTING SEARCH")
+        bt.logging.info(f"Video: {video_url}")
+        bt.logging.info(f"Query: {query}")
+        bt.logging.info("=" * 40)
+
+        bt.logging.info(f">>> Step 1: Downloading Video")
         video_path = VideoDownloader.download_video(video_url)
         if not video_path:
             bt.logging.error("Video download failed.")
             return []
+        bt.logging.info(f"Video downloaded to {video_path}")
 
         try:
             # 2. Extract Frames
+            bt.logging.info(f">>> Step 2: Extracting Frames (1 fps)")
             frames_data = FrameExtractor.extract_frames(video_path, fps=1)
             if not frames_data:
                 bt.logging.error("Frame extraction failed or video is empty.")
                 return []
+            bt.logging.info(f"Extracted {len(frames_data)} frames.")
 
             timestamps, images = zip(*frames_data)
 
             # 3. Inference (Compute Similarity)
+            bt.logging.info(f">>> Step 3: Running CLIP Inference")
             probs = self.ml_engine.compute_similarity(query, list(images))
             if len(probs) == 0:
                 bt.logging.error("Inference returned no scores.")
                 return []
+            bt.logging.info(f"Inference complete. Max score: {max(probs):.4f}")
 
             # 4. Search Heuristics (Thresholding & Merging)
+            bt.logging.info(">>> Step 4: Applying Search Heuristics")
             results = self._find_best_segment(probs, timestamps)
+            
+            if results:
+                best = results[0]
+                bt.logging.success(f"Best Segment: {best.start:.1f}s - {best.end:.1f}s (Conf: {best.confidence:.4f})")
+            
+            bt.logging.info("=" * 40)
             return results
 
         except Exception as e:

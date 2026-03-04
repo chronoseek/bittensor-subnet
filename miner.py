@@ -8,6 +8,11 @@ import argparse
 import uvicorn
 import bittensor as bt
 from fastapi import FastAPI, Request, HTTPException, Depends
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 from chronoseek.schemas import VideoSearchRequest, VideoSearchResponse
 from chronoseek.miner.logic import MinerLogic
 from chronoseek.epistula import verify_signature
@@ -28,13 +33,17 @@ async def search(
     The verify_signature dependency ensures the request is authenticated.
     """
     bt.logging.info(f"Received request from {caller_hotkey}: {payload.query}")
+    bt.logging.debug(f"Video URL: {payload.video_url}")
 
     if miner_logic is None:
+        bt.logging.error("Miner logic not initialized")
         raise HTTPException(status_code=503, detail="Miner logic not initialized")
 
     try:
+        bt.logging.info("Starting search processing...")
         # TODO: Check if caller_hotkey is a registered validator with stake
         results = miner_logic.search(payload.video_url, payload.query)
+        bt.logging.success(f"Search completed. Found {len(results)} results.")
         return VideoSearchResponse(results=results)
     except Exception as e:
         bt.logging.error(f"Error processing request: {e}")
@@ -53,53 +62,30 @@ def get_config():
     """
     parser = argparse.ArgumentParser(description="ChronoSeek Miner")
 
-    # Wallet args
-    parser.add_argument(
-        "--wallet.name",
-        type=str,
-        default=os.getenv("WALLET_NAME", "default"),
-        help="Wallet name",
-    )
-    parser.add_argument(
-        "--wallet.hotkey",
-        type=str,
-        default=os.getenv("HOTKEY_NAME", "default"),
-        help="Hotkey name",
-    )
+    # Add bittensor arguments first
+    bt.Wallet.add_args(parser)
+    bt.Subtensor.add_args(parser)
+    bt.Axon.add_args(parser)
+    bt.logging.add_args(parser)
 
-    # Subtensor args
+    # Add custom arguments
     parser.add_argument(
         "--netuid",
         type=int,
         default=int(os.getenv("NETUID", "1")),
         help="Subnet NetUID",
     )
-    parser.add_argument(
-        "--subtensor.network",
-        type=str,
-        default=os.getenv("NETWORK", "finney"),
-        help="Bittensor network",
-    )
 
-    # Miner args
-    parser.add_argument(
-        "--axon.port",
-        type=int,
-        default=int(os.getenv("PORT", "8000")),
-        help="Miner Axon Port",
-    )
-    parser.add_argument(
-        "--logging.level",
-        default=os.getenv("LOG_LEVEL", "INFO"),
-        choices=["DEBUG", "INFO", "TRACE"],
-        help="Logging level",
-    )
-
-    # Bittensor CLI config (to allow passing --wallet.path etc)
-    bt.Wallet.add_args(parser)
-    bt.Subtensor.add_args(parser)
-    bt.Axon.add_args(parser)
-    bt.logging.add_args(parser)
+    # Set defaults from environment variables for bittensor arguments
+    defaults = {
+        'wallet.name': os.getenv("WALLET_NAME", "default"),
+        'wallet.hotkey': os.getenv("HOTKEY_NAME", "default"),
+        'wallet.path': os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
+        'subtensor.network': os.getenv("NETWORK", "finney"),
+        'axon.port': int(os.getenv("PORT", "8000")),
+        'logging.level': os.getenv("LOG_LEVEL", "INFO"),
+    }
+    parser.set_defaults(**defaults)
 
     return bt.Config(parser)
 
@@ -112,14 +98,21 @@ def main():
 
     # Setup logging
     bt.logging(config=config, logging_dir=config.logging.logging_dir)
+    bt.logging.on() # Ensure console logging is on
+    
+    # Force debug if requested, otherwise default to INFO
     if config.logging.level == "DEBUG":
         bt.logging.set_debug(True)
     elif config.logging.level == "TRACE":
         bt.logging.set_trace(True)
+    else:
+        # Default to INFO if not specified
+        bt.logging.set_info(True)
 
     bt.logging.info(
         f"Starting ChronoSeek Miner on network={config.subtensor.network}, netuid={config.netuid}"
     )
+    bt.logging.info(f"Full config: {config}")
 
     # 1. Setup Bittensor objects
     wallet = bt.Wallet(config=config)
@@ -166,8 +159,12 @@ def main():
         # and the miner can still function if previously registered correctly.
 
     bt.logging.info(f"Starting Miner HTTP Server on port {server_port}")
-    uvicorn.run(app, host="0.0.0.0", port=server_port)
-
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=server_port)
+    except KeyboardInterrupt:
+        bt.logging.info("Miner stopped by user")
+    except Exception as e:
+        bt.logging.error(f"Miner error: {e}")
 
 if __name__ == "__main__":
     main()

@@ -150,6 +150,7 @@ pm2 logs validator
 |----------|-------------|---------|
 | `WALLET_NAME` | Name of your coldkey | `default` |
 | `HOTKEY_NAME` | Name of your hotkey | `default` |
+| `WALLET_PATH` | Path to your wallet storage | `~/.bittensor/wallets/` |
 | `NETUID` | Subnet NetUID | `298` (Mainnet TBD) |
 | `NETWORK` | Network (finney, test, local) | `test` |
 | `PORT` | Miner HTTP Port | `8000` |

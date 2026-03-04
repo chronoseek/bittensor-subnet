@@ -13,6 +13,10 @@ import threading
 import sys
 import numpy as np
 from typing import List
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Use ActivityNetTaskGenerator for MVP
 from chronoseek.validator.task_gen import ActivityNetTaskGenerator
@@ -104,7 +108,7 @@ async def run_validator_loop(
                         wait_for_finalization=False,
                     )
                     if success:
-                        bt.logging.info("Successfully set weights")
+                        bt.logging.success("Successfully set weights")
                         last_weight_block = current_block
                 except Exception as e:
                     bt.logging.error(f"Failed to set weights: {e}")
@@ -123,47 +127,31 @@ def get_config():
     """
     parser = argparse.ArgumentParser(description="ChronoSeek Validator")
 
-    # Wallet args
-    parser.add_argument(
-        "--wallet.name",
-        type=str,
-        default=os.getenv("WALLET_NAME", "default"),
-        help="Wallet name",
-    )
-    parser.add_argument(
-        "--wallet.hotkey",
-        type=str,
-        default=os.getenv("HOTKEY_NAME", "default"),
-        help="Hotkey name",
-    )
+    # Add bittensor arguments first
+    bt.Wallet.add_args(parser)
+    bt.Subtensor.add_args(parser)
+    bt.logging.add_args(parser)
 
-    # Subtensor args
+    # Add custom arguments
     parser.add_argument(
         "--netuid",
         type=int,
         default=int(os.getenv("NETUID", "1")),
         help="Subnet NetUID",
     )
-    parser.add_argument(
-        "--subtensor.network",
-        type=str,
-        default=os.getenv("NETWORK", "finney"),
-        help="Bittensor network",
-    )
 
-    # Logging
-    parser.add_argument(
-        "--logging.level",
-        type=str,
-        default=os.getenv("LOG_LEVEL", "INFO"),
-        choices=["DEBUG", "INFO", "TRACE"],
-        help="Logging level",
-    )
-
-    # Bittensor CLI config
-    bt.Wallet.add_args(parser)
-    bt.Subtensor.add_args(parser)
-    bt.logging.add_args(parser)
+    # Set defaults from environment variables for bittensor arguments
+    # Note: We must use the internal argument names (dest) which usually replace dots with underscores
+    # However, bittensor seems to use dots in dest names, so we use a dict to set defaults
+    defaults = {
+        "wallet.name": os.getenv("WALLET_NAME", "default"),
+        "wallet.hotkey": os.getenv("HOTKEY_NAME", "default"),
+        "wallet.path": os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
+        "subtensor.network": os.getenv("NETWORK", "finney"),
+        "logging.level": os.getenv("LOG_LEVEL", "INFO"),
+    }
+    
+    parser.set_defaults(**defaults)
 
     return bt.Config(parser)
 
@@ -175,14 +163,21 @@ def main():
 
     # Setup logging
     bt.logging(config=config, logging_dir=config.logging.logging_dir)
+    bt.logging.on() # Ensure console logging is on
+    
+    # Force debug if requested, otherwise default to INFO
     if config.logging.level == "DEBUG":
         bt.logging.set_debug(True)
     elif config.logging.level == "TRACE":
         bt.logging.set_trace(True)
+    else:
+        # Default to INFO if not specified
+        bt.logging.set_info(True)
 
     bt.logging.info(
         f"Starting ChronoSeek Validator on network={config.subtensor.network}, netuid={config.netuid}"
     )
+    bt.logging.info(f"Full config: {config}")
 
     # Heartbeat setup
     last_heartbeat = [time.time()]
@@ -225,6 +220,7 @@ def main():
             f"Validator registered with UID: {metagraph.hotkeys.index(wallet.hotkey.ss58_address)}"
         )
 
+        bt.logging.info("Starting validator loop...")
         asyncio.run(
             run_validator_loop(
                 subtensor, wallet, metagraph, config.netuid, stop_event, last_heartbeat
