@@ -1,13 +1,16 @@
 import httpx
 import time
 import logging
+import asyncio
+from uuid import uuid4
 import bittensor as bt
 from typing import List, Tuple
-from chronoseek.schemas import VideoSearchRequest, VideoSearchResponse
+from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
 from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
 
 logger = logging.getLogger(__name__)
+MAX_CONCURRENT_MINER_REQUESTS = 8
 
 
 async def query_miner(
@@ -45,6 +48,34 @@ async def query_miner(
         return VideoSearchResponse(results=[]), 0.0
 
 
+async def query_uid(
+    semaphore: asyncio.Semaphore,
+    uid: int,
+    endpoint: str,
+    client: httpx.AsyncClient,
+    request_model: VideoSearchRequest,
+    wallet: bt.Wallet,
+    ground_truth: Tuple[float, float],
+) -> Tuple[int, float]:
+    async with semaphore:
+        bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
+        resp, latency = await query_miner(client, endpoint, request_model, wallet)
+
+        if not resp.results:
+            bt.logging.warning(
+                f"[UID {uid}] No results | Request: {request_model.request_id} | Latency: {latency:.2f}s | Score: 0.0000"
+            )
+            return int(uid), 0.0
+
+        score = score_response(resp.results, ground_truth, latency)
+        result = resp.results[0]
+        res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
+        bt.logging.success(
+            f"[UID {uid}] Request: {request_model.request_id} | Score: {score:.4f} | Latency: {latency:.2f}s | Result: {res_str}"
+        )
+        return int(uid), score
+
+
 async def run_step(
     task_gen, metagraph: bt.Metagraph, wallet: bt.Wallet, client: httpx.AsyncClient
 ) -> List[Tuple[int, float]]:
@@ -64,14 +95,20 @@ async def run_step(
 
     bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
     video_url, query, ground_truth = task_gen.generate_task()
+    request_id = f"validation-{uuid4()}"
     
     bt.logging.info("-" * 40)
+    bt.logging.info(f"Request ID:  {request_id}")
     bt.logging.info(f"Video URL:   {video_url}")
     bt.logging.info(f"Query:       {query}")
     bt.logging.info(f"Ground Truth: {ground_truth}")
     bt.logging.info("-" * 40)
 
-    request_model = VideoSearchRequest(video_url=video_url, query=query)
+    request_model = VideoSearchRequest(
+        request_id=request_id,
+        video={"url": video_url},
+        query=query,
+    )
 
     scores = []
     
@@ -79,28 +116,29 @@ async def run_step(
     # We skip UIDs with no IP (0.0.0.0) or private IPs if not local dev
     bt.logging.info(f"\n>>> Phase 2: Querying Miners ({len(metagraph.uids)} total)")
     
+    tasks = []
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_MINER_REQUESTS)
+
     for uid in metagraph.uids:
         axon = metagraph.axons[uid]
         if axon.ip == "0.0.0.0":
             continue
 
         endpoint = f"http://{axon.ip}:{axon.port}"
-        bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
+        tasks.append(
+            query_uid(
+                semaphore,
+                int(uid),
+                endpoint,
+                client,
+                request_model,
+                wallet,
+                ground_truth,
+            )
+        )
 
-        resp, latency = await query_miner(client, endpoint, request_model, wallet)
-
-        if not resp.results:
-            bt.logging.warning(f"[UID {uid}] No results | Latency: {latency:.2f}s | Score: 0.0000")
-            score = 0.0
-        else:
-            score = score_response(resp.results, ground_truth, latency)
-            result = resp.results[0]
-            
-            # Format result string nicely
-            res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
-            bt.logging.success(f"[UID {uid}] Score: {score:.4f} | Latency: {latency:.2f}s | Result: {res_str}")
-
-        scores.append((int(uid), score))
+    if tasks:
+        scores.extend(await asyncio.gather(*tasks))
 
     bt.logging.info("=" * 50)
     bt.logging.info("STEP COMPLETED")

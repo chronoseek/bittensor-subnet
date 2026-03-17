@@ -1,6 +1,6 @@
 import math
 from typing import List, Tuple
-from chronoseek.schemas import VideoSearchResult
+from chronoseek.protocol_models import VideoSearchResult
 
 
 def calculate_iou(

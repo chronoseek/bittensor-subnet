@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VideoSearchResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "status", "results"],
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "const": "2026-03-01"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["accepted", "processing", "completed", "failed"]
+    },
+    "results": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end", "confidence"],
+        "properties": {
+          "start": {
+            "type": "number",
+            "minimum": 0
+          },
+          "end": {
+            "type": "number",
+            "minimum": 0
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "miner_metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

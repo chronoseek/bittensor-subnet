@@ -1,13 +1,21 @@
 import os
 import numpy as np
 from typing import List, Tuple
-from chronoseek.schemas import VideoSearchResult
+from chronoseek.protocol_models import VideoSearchResult
 import bittensor as bt
 
 # Modular components
 from chronoseek.miner.utils.video_downloader import VideoDownloader
 from chronoseek.miner.utils.frame_extractor import FrameExtractor
 from chronoseek.miner.utils.clip_engine import CLIPProcessorEngine
+
+
+class SearchPipelineError(Exception):
+    def __init__(self, code: str, message: str, details: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
 
 
 class MinerLogic:
@@ -42,7 +50,11 @@ class MinerLogic:
         video_path = VideoDownloader.download_video(video_url)
         if not video_path:
             bt.logging.error("Video download failed.")
-            return []
+            raise SearchPipelineError(
+                "VIDEO_FETCH_FAILED",
+                "The video URL could not be fetched.",
+                {"video_url": video_url},
+            )
         bt.logging.info(f"Video downloaded to {video_path}")
 
         try:
@@ -51,7 +63,11 @@ class MinerLogic:
             frames_data = FrameExtractor.extract_frames(video_path, fps=1)
             if not frames_data:
                 bt.logging.error("Frame extraction failed or video is empty.")
-                return []
+                raise SearchPipelineError(
+                    "VIDEO_UNREADABLE",
+                    "The downloaded video could not be decoded into frames.",
+                    {"video_url": video_url},
+                )
             bt.logging.info(f"Extracted {len(frames_data)} frames.")
 
             timestamps, images = zip(*frames_data)
@@ -61,7 +77,11 @@ class MinerLogic:
             probs = self.ml_engine.compute_similarity(query, list(images))
             if len(probs) == 0:
                 bt.logging.error("Inference returned no scores.")
-                return []
+                raise SearchPipelineError(
+                    "INFERENCE_FAILED",
+                    "The miner could not compute similarity scores for this request.",
+                    {"video_url": video_url},
+                )
             bt.logging.info(f"Inference complete. Max score: {max(probs):.4f}")
 
             # 4. Search Heuristics (Thresholding & Merging)
@@ -75,9 +95,15 @@ class MinerLogic:
             bt.logging.info("=" * 40)
             return results
 
+        except SearchPipelineError:
+            raise
         except Exception as e:
             bt.logging.error(f"Search pipeline error: {e}")
-            return []
+            raise SearchPipelineError(
+                "INTERNAL_ERROR",
+                "The miner encountered an unexpected search pipeline error.",
+                {"video_url": video_url},
+            ) from e
         finally:
             # Cleanup
             if os.path.exists(video_path):

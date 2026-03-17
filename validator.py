@@ -19,8 +19,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Use ActivityNetTaskGenerator for MVP
-from chronoseek.validator.task_gen import ActivityNetTaskGenerator
-from chronoseek.validator.forward import run_step
+from chronoseek.validator import task_gen as task_gen_module
+from chronoseek.validator import forward as forward_module
 
 HEARTBEAT_TIMEOUT = 600  # seconds
 
@@ -47,7 +47,7 @@ async def run_validator_loop(
     Async validator loop.
     """
     # Initialize components
-    task_gen = ActivityNetTaskGenerator()
+    task_gen = task_gen_module.ActivityNetTaskGenerator()
     async_client = httpx.AsyncClient(timeout=30.0)
 
     # Get tempo
@@ -72,7 +72,9 @@ async def run_validator_loop(
                     scores = new_scores
 
             # --- 1. Run Validation Step ---
-            step_scores = await run_step(task_gen, metagraph, wallet, async_client)
+            step_scores = await forward_module.run_step(
+                task_gen, metagraph, wallet, async_client
+            )
 
             # Update moving average scores
             alpha = 0.1

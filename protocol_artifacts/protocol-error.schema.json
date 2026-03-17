@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProtocolError",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "error"],
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "const": "2026-03-01"
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "INVALID_REQUEST",
+            "UNSUPPORTED_PROTOCOL_VERSION",
+            "VIDEO_FETCH_FAILED",
+            "VIDEO_UNREADABLE",
+            "QUERY_INVALID",
+            "INFERENCE_FAILED",
+            "TIMEOUT",
+            "INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

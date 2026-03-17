@@ -1,0 +1,37 @@
+{
+  "tasks": [
+    {
+      "task_id": "activitynet-bootstrap-001",
+      "split": "validation",
+      "difficulty": "easy",
+      "video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+      "query": "the big rabbit wakes up from his hole",
+      "ground_truth": {
+        "start": 10.0,
+        "end": 25.0
+      }
+    },
+    {
+      "task_id": "activitynet-bootstrap-002",
+      "split": "validation",
+      "difficulty": "medium",
+      "video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+      "query": "two characters are arguing on the bridge",
+      "ground_truth": {
+        "start": 50.0,
+        "end": 70.0
+      }
+    },
+    {
+      "task_id": "activitynet-bootstrap-003",
+      "split": "validation",
+      "difficulty": "medium",
+      "video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+      "query": "a robot runs down the street",
+      "ground_truth": {
+        "start": 120.0,
+        "end": 135.0
+      }
+    }
+  ]
+}

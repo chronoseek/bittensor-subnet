@@ -1,6 +1,6 @@
 import unittest
 from chronoseek.scoring import calculate_iou, score_response
-from chronoseek.schemas import VideoSearchResult
+from chronoseek.protocol_models import VideoSearchResult
 
 
 class TestScoring(unittest.TestCase):
