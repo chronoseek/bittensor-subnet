@@ -109,7 +109,7 @@ async def search(
 
     try:
         bt.logging.info("Starting search processing...")
-        results = miner_logic.search(payload.video_url, payload.query)
+        results = miner_logic.search(payload.video_url, payload.query, top_k=payload.top_k)
         bt.logging.success(f"Search completed. Found {len(results)} results.")
         return VideoSearchResponse(request_id=payload.request_id, results=results)
     except miner_logic_module.SearchPipelineError as e:

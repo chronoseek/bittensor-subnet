@@ -2,7 +2,7 @@ import os
 import torch
 import numpy as np
 import bittensor as bt
-from typing import List, Tuple
+from typing import List
 from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
 
@@ -34,28 +34,54 @@ class CLIPProcessorEngine:
 
     def compute_similarity(self, query: str, images: List[Image.Image]) -> np.ndarray:
         """
-        Compute similarity scores between a text query and a list of images.
-        Returns: 1D numpy array of probabilities/scores.
+        Compute cosine similarity scores between a text query and a list of images.
+        Returns a 1D numpy array normalized to [0, 1].
         """
         if not images:
             return np.array([])
 
         try:
-            inputs = self.processor(
-                text=[query], images=images, return_tensors="pt", padding=True
+            text_inputs = self.processor(
+                text=[query],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
             ).to(self.device)
 
             with torch.no_grad():
-                outputs = self.model(**inputs)
-                # logits_per_image: [num_images, num_text] -> [num_images, 1]
-                logits_per_image = outputs.logits_per_image
-                # Softmax across the batch dimension isn't quite right for "independent" relevance,
-                # but standard CLIP usage often does softmax(dim=1) for text retrieval or dim=0 for image retrieval.
-                # Here we want raw similarity or normalized scores.
-                # Let's use raw probabilities from softmax for now as per original logic.
-                probs = logits_per_image.softmax(dim=0).cpu().numpy().flatten()
+                text_features = self.model.get_text_features(**text_inputs)
+                text_features = text_features / text_features.norm(
+                    dim=-1, keepdim=True
+                )
 
-            return probs
+                batch_scores: List[np.ndarray] = []
+                batch_size = 32
+
+                for start in range(0, len(images), batch_size):
+                    image_batch = images[start : start + batch_size]
+                    image_inputs = self.processor(
+                        images=image_batch,
+                        return_tensors="pt",
+                    ).to(self.device)
+                    image_features = self.model.get_image_features(**image_inputs)
+                    image_features = image_features / image_features.norm(
+                        dim=-1, keepdim=True
+                    )
+                    similarities = torch.matmul(
+                        image_features, text_features.T
+                    ).squeeze(-1)
+                    batch_scores.append(similarities.cpu().numpy())
+
+            scores = np.concatenate(batch_scores).astype(np.float32)
+            if scores.size == 0:
+                return np.array([])
+
+            score_min = float(np.min(scores))
+            score_max = float(np.max(scores))
+            if score_max - score_min < 1e-8:
+                return np.full_like(scores, 0.5, dtype=np.float32)
+
+            return (scores - score_min) / (score_max - score_min)
 
         except Exception as e:
             bt.logging.error(f"Inference failed: {e}")

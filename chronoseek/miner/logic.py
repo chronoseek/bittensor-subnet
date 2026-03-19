@@ -33,7 +33,7 @@ class MinerLogic:
         # Initialize ML engine once at startup
         self.ml_engine = CLIPProcessorEngine(model_id="openai/clip-vit-base-patch32")
 
-    def search(self, video_url: str, query: str) -> List[VideoSearchResult]:
+    def search(self, video_url: str, query: str, top_k: int = 5) -> List[VideoSearchResult]:
         """
         Execute the search pipeline.
         """
@@ -86,7 +86,7 @@ class MinerLogic:
 
             # 4. Search Heuristics (Thresholding & Merging)
             bt.logging.info(">>> Step 4: Applying Search Heuristics")
-            results = self._find_best_segment(probs, timestamps)
+            results = self._find_best_segment(probs, timestamps, top_k=top_k)
             
             if results:
                 best = results[0]
@@ -109,22 +109,40 @@ class MinerLogic:
             if os.path.exists(video_path):
                 os.remove(video_path)
 
+    def _interval_iou(self, left: tuple[float, float], right: tuple[float, float]) -> float:
+        start = max(left[0], right[0])
+        end = min(left[1], right[1])
+        intersection = max(0.0, end - start)
+        union = max(left[1], right[1]) - min(left[0], right[0])
+        if union <= 0:
+            return 0.0
+        return intersection / union
+
     def _find_best_segment(
-        self, probs: np.ndarray, timestamps: Tuple[float, ...]
+        self, probs: np.ndarray, timestamps: Tuple[float, ...], top_k: int = 5
     ) -> List[VideoSearchResult]:
         """
-        Heuristic to find the best contiguous segment from frame probabilities.
+        Find top-k temporal segments from CLIP frame similarities.
         """
-        # Dynamic threshold: Top 10% of scores
-        threshold = np.percentile(probs, 90)
+        if len(probs) == 0:
+            return []
+
+        kernel = np.array([0.2, 0.6, 0.2], dtype=np.float32)
+        smoothed = np.convolve(probs, kernel, mode="same")
+        threshold = max(
+            float(np.percentile(smoothed, 75)),
+            float(np.mean(smoothed) + 0.35 * np.std(smoothed)),
+        )
+        high_conf_threshold = float(np.percentile(probs, 85))
 
         candidates = []
         current_start_idx = None
-        gap_tolerance = 2  # frames
+        gap_tolerance = 1
         gap_counter = 0
 
-        for i, prob in enumerate(probs):
-            if prob > threshold:
+        for i, score in enumerate(smoothed):
+            is_active = score >= threshold or probs[i] >= high_conf_threshold
+            if is_active:
                 if current_start_idx is None:
                     current_start_idx = i
                 gap_counter = 0
@@ -133,42 +151,73 @@ class MinerLogic:
                     gap_counter += 1
                     if gap_counter > gap_tolerance:
                         end_idx = i - gap_counter
-                        segment_probs = probs[current_start_idx : end_idx + 1]
+                        segment_probs = smoothed[current_start_idx : end_idx + 1]
+                        raw_probs = probs[current_start_idx : end_idx + 1]
                         score = (
-                            np.mean(segment_probs) if len(segment_probs) > 0 else 0.0
+                            0.65 * float(np.max(segment_probs))
+                            + 0.35 * float(np.mean(raw_probs))
+                            if len(segment_probs) > 0
+                            else 0.0
                         )
+                        start_idx = max(0, current_start_idx - 1)
+                        end_idx = min(len(timestamps) - 1, end_idx + 1)
                         candidates.append(
-                            (timestamps[current_start_idx], timestamps[end_idx], score)
+                            (timestamps[start_idx], timestamps[end_idx], score)
                         )
                         current_start_idx = None
 
-        # Handle trailing segment
         if current_start_idx is not None:
             end_idx = len(probs) - 1
-            segment_probs = probs[current_start_idx : end_idx + 1]
-            score = np.mean(segment_probs) if len(segment_probs) > 0 else 0.0
+            segment_probs = smoothed[current_start_idx : end_idx + 1]
+            raw_probs = probs[current_start_idx : end_idx + 1]
+            score = (
+                0.65 * float(np.max(segment_probs))
+                + 0.35 * float(np.mean(raw_probs))
+                if len(segment_probs) > 0
+                else 0.0
+            )
+            start_idx = max(0, current_start_idx - 1)
             candidates.append(
-                (timestamps[current_start_idx], timestamps[end_idx], score)
+                (timestamps[start_idx], timestamps[end_idx], score)
             )
 
-        # Rank candidates
+        if not candidates:
+            ranked_frames = np.argsort(smoothed)[::-1][: max(1, min(top_k, len(smoothed)))]
+            frame_duration = (
+                float(np.median(np.diff(np.array(timestamps)))) if len(timestamps) > 1 else 1.0
+            )
+            default_window = max(4.0, 4 * frame_duration)
+            for idx in ranked_frames:
+                center = timestamps[int(idx)]
+                candidates.append(
+                    (
+                        max(0.0, center - default_window / 2),
+                        center + default_window / 2,
+                        float(smoothed[int(idx)]),
+                    )
+                )
+
         candidates.sort(key=lambda x: x[2], reverse=True)
 
         results = []
-        if candidates:
-            best = candidates[0]
-            start_t, end_t, score = best
-
-            # Enforce minimum duration (5s)
+        for start_t, end_t, score in candidates:
             if end_t - start_t < 5.0:
                 end_t = start_t + 5.0
-
+            interval = (float(start_t), float(end_t))
+            if any(self._interval_iou(interval, (res.start, res.end)) > 0.7 for res in results):
+                continue
             results.append(
-                VideoSearchResult(start=start_t, end=end_t, confidence=float(score))
+                VideoSearchResult(
+                    start=interval[0],
+                    end=interval[1],
+                    confidence=float(max(0.0, min(1.0, score))),
+                )
             )
-        else:
-            # Fallback: Middle 10s
-            mid = timestamps[len(timestamps) // 2]
-            results.append(VideoSearchResult(start=mid, end=mid + 10.0, confidence=0.1))
+            if len(results) >= top_k:
+                break
+
+        if not results:
+            mid = float(timestamps[len(timestamps) // 2])
+            results.append(VideoSearchResult(start=mid, end=mid + 8.0, confidence=0.1))
 
         return results
