@@ -50,6 +50,8 @@ class CLIPProcessorEngine:
 
             with torch.no_grad():
                 text_features = self.model.get_text_features(**text_inputs)
+                if not isinstance(text_features, torch.Tensor):
+                    text_features = self._extract_feature_tensor(text_features)
                 text_features = text_features / text_features.norm(
                     dim=-1, keepdim=True
                 )
@@ -64,6 +66,8 @@ class CLIPProcessorEngine:
                         return_tensors="pt",
                     ).to(self.device)
                     image_features = self.model.get_image_features(**image_inputs)
+                    if not isinstance(image_features, torch.Tensor):
+                        image_features = self._extract_feature_tensor(image_features)
                     image_features = image_features / image_features.norm(
                         dim=-1, keepdim=True
                     )
@@ -86,3 +90,16 @@ class CLIPProcessorEngine:
         except Exception as e:
             bt.logging.error(f"Inference failed: {e}")
             return np.array([])
+
+    @staticmethod
+    def _extract_feature_tensor(output) -> torch.Tensor:
+        """
+        Handle transformers return-type differences across versions.
+        """
+        if isinstance(output, torch.Tensor):
+            return output
+        if hasattr(output, "pooler_output") and output.pooler_output is not None:
+            return output.pooler_output
+        if hasattr(output, "last_hidden_state") and output.last_hidden_state is not None:
+            return output.last_hidden_state[:, 0, :]
+        raise TypeError(f"Unsupported feature output type: {type(output)}")

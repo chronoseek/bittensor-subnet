@@ -112,6 +112,25 @@ poetry run python validator.py --netuid 298 --subtensor.network test
 ```
 *Ensure your wallet/hotkey is registered on SN298.*
 
+### 3. Local Miner Search Test
+You can test `miner.py` directly without running a validator by sending a signed
+Epistula request to `/search` with `scripts/test_miner_search.py`.
+
+```bash
+# In terminal A: start miner
+poetry run python miner.py --netuid 298 --subtensor.network test
+
+# In terminal B: run a signed search request
+poetry run python scripts/test_miner_search.py \
+  --video-url "https://www.w3schools.com/html/mov_bbb.mp4" \
+  --query "people talking"
+```
+
+Optional flags:
+- `--endpoint` (default: `http://127.0.0.1:8000/search`)
+- `--top-k` (default: `3`)
+- `--wallet-name`, `--wallet-hotkey`, `--wallet-path` (for Epistula signing key)
+
 ## ⚙️ Running with PM2 (Production)
 
 For long-running processes, use [PM2](https://pm2.keymetrics.io/).
