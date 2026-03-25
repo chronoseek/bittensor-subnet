@@ -15,7 +15,11 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from chronoseek.protocol_models import ProtocolError, VideoSearchRequest, VideoSearchResponse
+from chronoseek.protocol_models import (
+    ProtocolError,
+    VideoSearchRequest,
+    VideoSearchResponse,
+)
 from chronoseek.miner import logic as miner_logic_module
 from chronoseek.epistula import verify_signature
 
@@ -44,11 +48,15 @@ def build_protocol_error(
             or None,
         }
     )
-    return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=status_code, content=payload.model_dump(mode="json")
+    )
 
 
 @app.exception_handler(RequestValidationError)
-async def handle_request_validation_error(request: Request, exc: RequestValidationError):
+async def handle_request_validation_error(
+    request: Request, exc: RequestValidationError
+):
     request_id = None
     try:
         body = await request.json()
@@ -109,7 +117,9 @@ async def search(
 
     try:
         bt.logging.info("Starting search processing...")
-        results = miner_logic.search(payload.video_url, payload.query, top_k=payload.top_k)
+        results = miner_logic.search(
+            payload.video_url, payload.query, top_k=payload.top_k
+        )
         bt.logging.success(f"Search completed. Found {len(results)} results.")
         return VideoSearchResponse(request_id=payload.request_id, results=results)
     except miner_logic_module.SearchPipelineError as e:
@@ -117,7 +127,11 @@ async def search(
             f"Request {payload.request_id or 'unknown-request'} failed with {e.code}: {e.message}"
         )
         status_code = 500
-        if e.code in {"INVALID_REQUEST", "UNSUPPORTED_PROTOCOL_VERSION", "QUERY_INVALID"}:
+        if e.code in {
+            "INVALID_REQUEST",
+            "UNSUPPORTED_PROTOCOL_VERSION",
+            "QUERY_INVALID",
+        }:
             status_code = 400
         elif e.code == "VIDEO_FETCH_FAILED":
             status_code = 502
@@ -171,12 +185,12 @@ def get_config():
 
     # Set defaults from environment variables for bittensor arguments
     defaults = {
-        'wallet.name': os.getenv("WALLET_NAME", "default"),
-        'wallet.hotkey': os.getenv("HOTKEY_NAME", "default"),
-        'wallet.path': os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
-        'subtensor.network': os.getenv("NETWORK", "finney"),
-        'axon.port': int(os.getenv("PORT", "8000")),
-        'logging.level': os.getenv("LOG_LEVEL", "INFO"),
+        "wallet.name": os.getenv("WALLET_NAME", "default"),
+        "wallet.hotkey": os.getenv("HOTKEY_NAME", "default"),
+        "wallet.path": os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
+        "subtensor.network": os.getenv("NETWORK", "finney"),
+        "axon.port": int(os.getenv("PORT", "8000")),
+        "logging.level": os.getenv("LOG_LEVEL", "INFO"),
     }
     parser.set_defaults(**defaults)
 
@@ -207,8 +221,8 @@ def main():
 
     # Setup logging
     bt.logging(config=config, logging_dir=config.logging.logging_dir)
-    bt.logging.on() # Ensure console logging is on
-    
+    bt.logging.on()  # Ensure console logging is on
+
     # Force debug if requested, otherwise default to INFO
     if config.logging.level == "DEBUG":
         bt.logging.set_debug(True)
@@ -294,6 +308,7 @@ def main():
         bt.logging.info("Miner stopped by user")
     except Exception as e:
         bt.logging.error(f"Miner error: {e}")
+
 
 if __name__ == "__main__":
     main()

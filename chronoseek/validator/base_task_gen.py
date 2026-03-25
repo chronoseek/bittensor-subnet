@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, List, Dict
+from typing import List, Tuple
 
+GroundTruthInterval = Tuple[float, float]
+GroundTruthIntervals = List[GroundTruthInterval]
 
 class BaseTaskGenerator(ABC):
     """
@@ -9,8 +11,8 @@ class BaseTaskGenerator(ABC):
     """
 
     @abstractmethod
-    def generate_task(self) -> Tuple[str, str, Tuple[float, float]]:
+    def generate_task(self) -> Tuple[str, str, GroundTruthIntervals]:
         """
-        Returns: (video_url, query, ground_truth_interval)
+        Returns: (video_url, query, ground_truth_intervals)
         """
         pass

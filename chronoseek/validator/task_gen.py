@@ -1,6 +1,7 @@
 import random
 import json
 import os
+from collections import defaultdict
 from pathlib import Path
 from typing import Tuple, List, Dict
 from zipfile import ZipFile
@@ -31,7 +32,7 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         self.dataset = self._load_dataset()
 
     def _default_dataset_path(self) -> str:
-        return str(Path(__file__).resolve().parent / "data" / "activitynet_bootstrap.json")
+        return str(Path(__file__).resolve().parent / "data" / "smoke_test_tasks.json")
 
     def _load_huggingface_dataset(self) -> List[Dict]:
         hf_token = os.getenv("HF_TOKEN")
@@ -134,26 +135,70 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             if row.get("split") != self.split:
                 continue
 
+            intervals = self._normalize_interval_list(
+                row.get("ground_truths") if "ground_truths" in row else row.get("ground_truth")
+            )
+            if not intervals:
+                continue
+
             tasks.append(
                 {
                     "task_id": row.get("task_id"),
                     "split": row.get("split"),
                     "difficulty": row.get("difficulty"),
                     "video_url": row["video_url"],
-                    "captions": [row["query"]],
-                    "ground_truth_starts": [float(row["ground_truth"]["start"])],
-                    "ground_truth_ends": [float(row["ground_truth"]["end"])],
+                    "caption_intervals": {
+                        row["query"]: intervals,
+                    },
                 }
             )
         return tasks
 
+    def _normalize_interval_list(self, raw_intervals) -> List[Tuple[float, float]]:
+        if raw_intervals is None:
+            return []
+
+        if isinstance(raw_intervals, dict):
+            if "start" in raw_intervals and "end" in raw_intervals:
+                return [(float(raw_intervals["start"]), float(raw_intervals["end"]))]
+            return []
+
+        if isinstance(raw_intervals, (list, tuple)):
+            if (
+                len(raw_intervals) == 2
+                and all(isinstance(value, (int, float)) for value in raw_intervals)
+            ):
+                return [(float(raw_intervals[0]), float(raw_intervals[1]))]
+
+            normalized = []
+            for item in raw_intervals:
+                normalized.extend(self._normalize_interval_list(item))
+            return normalized
+
+        return []
+
     def _normalize_activitynet_database(self, data: dict) -> List[Dict]:
         tasks = []
-        for vid_id, content in data.get("database", {}).items():
-            url = content.get("url", "")
+        database = data.get("database") if isinstance(data.get("database"), dict) else data
+        for vid_id, content in database.items():
+            if not isinstance(content, dict):
+                continue
+
+            url = content.get("url") or f"https://www.youtube.com/watch?v={str(vid_id)[2:]}"
             sentences = content.get("sentences", [])
             timestamps = content.get("timestamps", [])
             if not url or not sentences or len(sentences) != len(timestamps):
+                continue
+
+            caption_intervals: Dict[str, List[Tuple[float, float]]] = {}
+            for sentence, pair in zip(sentences, timestamps):
+                if len(pair) != 2:
+                    continue
+                caption_intervals.setdefault(sentence, []).append(
+                    (float(pair[0]), float(pair[1]))
+                )
+
+            if not caption_intervals:
                 continue
 
             tasks.append(
@@ -162,12 +207,86 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
                     "split": self.split,
                     "difficulty": "unknown",
                     "video_url": url,
-                    "captions": list(sentences),
-                    "ground_truth_starts": [float(pair[0]) for pair in timestamps],
-                    "ground_truth_ends": [float(pair[1]) for pair in timestamps],
+                    "caption_intervals": caption_intervals,
                 }
             )
         return tasks
+
+    def _normalize_activitynet_rows(self, rows: List[dict]) -> List[Dict]:
+        grouped: Dict[str, Dict] = {}
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            split = row.get("split", self.split)
+            if split != self.split:
+                continue
+
+            video_id = row.get("video_id") or row.get("id") or row.get("task_id")
+            video_url = row.get("video_url") or row.get("url")
+            if not video_url and video_id:
+                video_url = f"https://www.youtube.com/watch?v={str(video_id)[2:]}"
+
+            caption = row.get("caption") or row.get("query") or row.get("sentence")
+            intervals = self._normalize_interval_list(
+                row.get("ground_truths")
+                if "ground_truths" in row
+                else row.get("ground_truth")
+                if "ground_truth" in row
+                else [row.get("start_time"), row.get("end_time")]
+                if row.get("start_time") is not None and row.get("end_time") is not None
+                else row.get("timestamps")
+            )
+
+            if not video_url or not caption or not intervals:
+                continue
+
+            task_key = str(video_id or video_url)
+            if task_key not in grouped:
+                grouped[task_key] = {
+                    "task_id": task_key,
+                    "split": split,
+                    "difficulty": row.get("difficulty", "unknown"),
+                    "video_url": video_url,
+                    "caption_intervals": defaultdict(list),
+                }
+
+            grouped[task_key]["caption_intervals"][caption].extend(intervals)
+
+        tasks = []
+        for task in grouped.values():
+            caption_intervals = {
+                caption: self._dedupe_intervals(intervals)
+                for caption, intervals in task["caption_intervals"].items()
+                if intervals
+            }
+            if not caption_intervals:
+                continue
+
+            tasks.append(
+                {
+                    "task_id": task["task_id"],
+                    "split": task["split"],
+                    "difficulty": task["difficulty"],
+                    "video_url": task["video_url"],
+                    "caption_intervals": caption_intervals,
+                }
+            )
+        return tasks
+
+    def _dedupe_intervals(
+        self, intervals: List[Tuple[float, float]]
+    ) -> List[Tuple[float, float]]:
+        seen = set()
+        deduped: List[Tuple[float, float]] = []
+        for start, end in intervals:
+            key = (round(float(start), 4), round(float(end), 4))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((float(start), float(end)))
+        return deduped
 
     def _load_local_dataset(self, dataset_path: str) -> List[Dict]:
         """
@@ -175,10 +294,22 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         """
         with open(dataset_path, "r") as f:
             data = json.load(f)
+            if isinstance(data, list):
+                tasks = self._normalize_activitynet_rows(data)
+                if tasks:
+                    return tasks
+
             if isinstance(data, dict) and "tasks" in data:
                 tasks = self._normalize_manifest_tasks(data)
                 if tasks:
                     return tasks
+
+            if isinstance(data, dict):
+                for key in ("rows", "data"):
+                    if isinstance(data.get(key), list):
+                        tasks = self._normalize_activitynet_rows(data[key])
+                        if tasks:
+                            return tasks
 
             tasks = self._normalize_activitynet_database(data)
             if tasks:
@@ -196,18 +327,16 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
         return self._load_huggingface_dataset()
 
-    def generate_task(self) -> Tuple[str, str, Tuple[float, float]]:
+    def generate_task(self) -> Tuple[str, str, List[Tuple[float, float]]]:
         """
-        Returns: (video_url, query, ground_truth_interval)
+        Returns: (video_url, query, ground_truth_intervals)
         """
         video = random.choice(self.dataset)
-        caption_index = random.randrange(len(video["captions"]))
+        captions = list(video["caption_intervals"].keys())
+        caption = random.choice(captions)
 
         return (
             video["video_url"],
-            video["captions"][caption_index],
-            (
-                video["ground_truth_starts"][caption_index],
-                video["ground_truth_ends"][caption_index],
-            ),
+            caption,
+            list(video["caption_intervals"][caption]),
         )

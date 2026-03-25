@@ -1,6 +1,8 @@
-import math
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 from chronoseek.protocol_models import VideoSearchResult
+
+GroundTruthInterval = Tuple[float, float]
+GroundTruthIntervals = Iterable[GroundTruthInterval]
 
 
 def calculate_iou(
@@ -29,9 +31,30 @@ def calculate_iou(
     return intersection / union
 
 
+def best_iou(
+    predictions: List[VideoSearchResult],
+    ground_truths: GroundTruthIntervals,
+) -> float:
+    """
+    Return the best IoU across all prediction and ground-truth interval pairs.
+    """
+    max_iou = 0.0
+    normalized_ground_truths = list(ground_truths)
+    if not predictions or not normalized_ground_truths:
+        return 0.0
+
+    for pred in predictions:
+        for gt_start, gt_end in normalized_ground_truths:
+            iou = calculate_iou(pred.start, pred.end, gt_start, gt_end)
+            if iou > max_iou:
+                max_iou = iou
+
+    return max_iou
+
+
 def score_response(
     predictions: List[VideoSearchResult],
-    ground_truth: Tuple[float, float],
+    ground_truth: GroundTruthInterval | GroundTruthIntervals,
     latency: float,  # Kept for API compatibility, ignored in MVP
 ) -> float:
     """
@@ -49,14 +72,16 @@ def score_response(
     if not predictions:
         return 0.0
 
-    gt_start, gt_end = ground_truth
+    if (
+        isinstance(ground_truth, tuple)
+        and len(ground_truth) == 2
+        and all(isinstance(value, (int, float)) for value in ground_truth)
+    ):
+        ground_truths = [ground_truth]
+    else:
+        ground_truths = list(ground_truth)
 
-    # Find best matching prediction (max IoU)
-    max_iou = 0.0
-    for pred in predictions:
-        iou = calculate_iou(pred.start, pred.end, gt_start, gt_end)
-        if iou > max_iou:
-            max_iou = iou
+    max_iou = best_iou(predictions, ground_truths)
 
     # MVP Strict Threshold
     if max_iou >= 0.5:

@@ -55,7 +55,7 @@ async def query_uid(
     client: httpx.AsyncClient,
     request_model: VideoSearchRequest,
     wallet: bt.Wallet,
-    ground_truth: Tuple[float, float],
+    ground_truths: List[Tuple[float, float]],
 ) -> Tuple[int, float]:
     async with semaphore:
         bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
@@ -67,7 +67,7 @@ async def query_uid(
             )
             return int(uid), 0.0
 
-        score = score_response(resp.results, ground_truth, latency)
+        score = score_response(resp.results, ground_truths, latency)
         result = resp.results[0]
         res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
         bt.logging.success(
@@ -94,14 +94,14 @@ async def run_step(
     bt.logging.info("=" * 50)
 
     bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
-    video_url, query, ground_truth = task_gen.generate_task()
+    video_url, query, ground_truths = task_gen.generate_task()
     request_id = f"validation-{uuid4()}"
     
     bt.logging.info("-" * 40)
     bt.logging.info(f"Request ID:  {request_id}")
     bt.logging.info(f"Video URL:   {video_url}")
     bt.logging.info(f"Query:       {query}")
-    bt.logging.info(f"Ground Truth: {ground_truth}")
+    bt.logging.info(f"Ground Truths: {ground_truths}")
     bt.logging.info("-" * 40)
 
     request_model = VideoSearchRequest(
@@ -133,7 +133,7 @@ async def run_step(
                 client,
                 request_model,
                 wallet,
-                ground_truth,
+                ground_truths,
             )
         )
 

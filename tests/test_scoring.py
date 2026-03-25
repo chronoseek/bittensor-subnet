@@ -1,5 +1,5 @@
 import unittest
-from chronoseek.scoring import calculate_iou, score_response
+from chronoseek.scoring import best_iou, calculate_iou, score_response
 from chronoseek.protocol_models import VideoSearchResult
 
 
@@ -54,6 +54,13 @@ class TestScoring(unittest.TestCase):
 
         # Case D: Empty predictions
         self.assertEqual(score_response([], gt, 0.1), 0.0)
+
+    def test_scoring_accepts_multiple_ground_truths(self):
+        preds = [VideoSearchResult(start=30.0, end=40.0, confidence=0.9)]
+        ground_truths = [(10.0, 20.0), (31.0, 39.0)]
+
+        self.assertEqual(score_response(preds, ground_truths, 0.1), 1.0)
+        self.assertAlmostEqual(best_iou(preds, ground_truths), 0.8)
 
 
 if __name__ == "__main__":

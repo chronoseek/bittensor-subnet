@@ -1,0 +1,43 @@
+{
+  "tasks": [
+    {
+      "task_id": "smoke-bootstrap-001",
+      "split": "validation",
+      "difficulty": "easy",
+      "video_url": "https://samplelib.com/lib/preview/mp4/sample-5s.mp4",
+      "query": "a person is on screen",
+      "ground_truths": [
+        {
+          "start": 0.0,
+          "end": 5.0
+        }
+      ]
+    },
+    {
+      "task_id": "smoke-bootstrap-002",
+      "split": "validation",
+      "difficulty": "easy",
+      "video_url": "https://samplelib.com/lib/preview/mp4/sample-10s.mp4",
+      "query": "a person is walking outside",
+      "ground_truths": [
+        {
+          "start": 0.0,
+          "end": 10.0
+        }
+      ]
+    },
+    {
+      "task_id": "smoke-bootstrap-003",
+      "split": "validation",
+      "difficulty": "easy",
+      "video_url": "https://samplelib.com/lib/preview/mp4/sample-15s.mp4",
+      "query": "a person is visible outdoors",
+      "ground_truths": [
+        {
+          "start": 0.0,
+          "end": 15.0
+        }
+      ]
+    }
+  ]
+}

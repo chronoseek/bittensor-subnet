@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--wallet-path",
-        default="~/subnets/wallets/chronoseek",
+        default="~/.bittensor/wallets/",
         help="Wallet path used to load keypair",
     )
     parser.add_argument(

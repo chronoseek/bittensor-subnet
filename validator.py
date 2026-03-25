@@ -152,7 +152,7 @@ def get_config():
         "subtensor.network": os.getenv("NETWORK", "finney"),
         "logging.level": os.getenv("LOG_LEVEL", "INFO"),
     }
-    
+
     parser.set_defaults(**defaults)
 
     return bt.Config(parser)
@@ -165,8 +165,8 @@ def main():
 
     # Setup logging
     bt.logging(config=config, logging_dir=config.logging.logging_dir)
-    bt.logging.on() # Ensure console logging is on
-    
+    bt.logging.on()  # Ensure console logging is on
+
     # Force debug if requested, otherwise default to INFO
     if config.logging.level == "DEBUG":
         bt.logging.set_debug(True)
