@@ -130,3 +130,26 @@ def test_row_oriented_dataset_loads_single_and_multiple_interval_formats(tmp_pat
     assert video_url == "https://www.youtube.com/watch?v=demo1234567"
     assert query == "a person waves"
     assert ground_truths == [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0), (7.0, 8.0)]
+
+
+def test_resolve_snapshot_dataset_file_accepts_row_json(tmp_path):
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+    dataset_path = snapshot_dir / "validation.json"
+    dataset_path.write_text(
+        json.dumps(
+            [
+                {
+                    "video_id": "v_demo1234567",
+                    "caption": "a person waves",
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ]
+        )
+    )
+
+    task_gen = ActivityNetTaskGenerator(dataset_path=str(dataset_path))
+    resolved = task_gen._resolve_snapshot_dataset_file(str(snapshot_dir))
+
+    assert resolved == str(dataset_path)

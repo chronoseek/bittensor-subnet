@@ -77,8 +77,12 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             except Exception:
                 continue
 
-            if isinstance(data, dict) and ("tasks" in data or "database" in data):
+            if self._is_supported_dataset_payload(data):
                 return str(candidate)
+
+        parquet_candidates = sorted(root.rglob("*.parquet"))
+        if parquet_candidates:
+            return str(parquet_candidates[0])
 
         dataset_script = root / "ActivityNet_Captions.py"
         if dataset_script.exists():
@@ -87,6 +91,18 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         raise FileNotFoundError(
             f"No supported ActivityNet JSON file was found in the Hugging Face snapshot for {self.dataset_repo_id}."
         )
+
+    def _is_supported_dataset_payload(self, data) -> bool:
+        if isinstance(data, list):
+            return True
+
+        if not isinstance(data, dict):
+            return False
+
+        if any(key in data for key in ("tasks", "database", "rows", "data")):
+            return True
+
+        return any(isinstance(value, dict) for value in data.values())
 
     def _download_original_activitynet_split(self, snapshot_root: Path) -> str:
         source_url = (
@@ -307,6 +323,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         """
         Load a local ActivityNet manifest for offline use or tests.
         """
+        if dataset_path.endswith(".parquet"):
+            return self._load_parquet_dataset(dataset_path)
+
         with open(dataset_path, "r") as f:
             data = json.load(f)
             if isinstance(data, list):
@@ -329,6 +348,22 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             tasks = self._normalize_activitynet_database(data)
             if tasks:
                 return tasks
+
+        raise ValueError(f"No usable ActivityNet tasks were found in {dataset_path}")
+
+    def _load_parquet_dataset(self, dataset_path: str) -> List[Dict]:
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as exc:
+            raise RuntimeError(
+                "pyarrow is required to read ActivityNet parquet files from Hugging Face snapshots."
+            ) from exc
+
+        table = pq.read_table(dataset_path)
+        rows = table.to_pylist()
+        tasks = self._normalize_activitynet_rows(rows)
+        if tasks:
+            return tasks
 
         raise ValueError(f"No usable ActivityNet tasks were found in {dataset_path}")
 
