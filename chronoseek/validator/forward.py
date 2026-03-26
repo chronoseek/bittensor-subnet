@@ -143,6 +143,4 @@ async def run_step(
         scores.extend(await asyncio.gather(*tasks))
 
     bt.logging.info("=" * 50)
-    bt.logging.info("STEP COMPLETED")
-    bt.logging.info("=" * 50)
     return scores

@@ -7,7 +7,7 @@ import os
 import argparse
 import uvicorn
 import bittensor as bt
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -20,13 +20,14 @@ from chronoseek.protocol_models import (
     VideoSearchRequest,
     VideoSearchResponse,
 )
+from chronoseek.miner.auth import ValidatorAuthContext, authorize_hotkey
 from chronoseek.miner import logic as miner_logic_module
 from chronoseek.epistula import verify_signature
 
 app = FastAPI()
 # Global logic instance (initialized in main)
 miner_logic = None
-allowed_validator_hotkeys = set()
+validator_auth = None
 
 
 def build_protocol_error(
@@ -106,13 +107,17 @@ async def search(
             request_id=payload.request_id,
         )
 
-    if allowed_validator_hotkeys and caller_hotkey not in allowed_validator_hotkeys:
+    is_authorized, auth_details = authorize_hotkey(validator_auth, caller_hotkey)
+    if not is_authorized:
+        bt.logging.warning(
+            f"Rejecting request {payload.request_id or 'unknown-request'} from hotkey {caller_hotkey} with stake {auth_details['caller_stake']:.6f} below minimum {auth_details['minimum_validator_stake']:.6f}"
+        )
         return build_protocol_error(
             code="INVALID_REQUEST",
-            message="Caller hotkey is not permitted to query this miner.",
+            message="Caller hotkey does not meet the minimum validator stake requirement.",
             status_code=403,
             request_id=payload.request_id,
-            details={"caller_hotkey": caller_hotkey},
+            details=auth_details,
         )
 
     try:
@@ -182,6 +187,12 @@ def get_config():
         default=int(os.getenv("NETUID", "1")),
         help="Subnet NetUID",
     )
+    parser.add_argument(
+        "--min-validator-stake",
+        type=float,
+        default=float(os.getenv("MIN_VALIDATOR_STAKE", "10000")),
+        help="Minimum validator stake required for the miner to accept a signed request.",
+    )
 
     # Set defaults from environment variables for bittensor arguments
     defaults = {
@@ -211,10 +222,9 @@ def resolve_server_port(config) -> int:
 
     return int(os.getenv("PORT", "8000"))
 
-
 def main():
     global miner_logic
-    global allowed_validator_hotkeys
+    global validator_auth
 
     # 0. Load configuration
     config = get_config()
@@ -256,24 +266,12 @@ def main():
             f"Miner registered with UID: {metagraph.hotkeys.index(wallet.hotkey.ss58_address)}"
         )
 
-    override_hotkeys = {
-        hotkey.strip()
-        for hotkey in os.getenv("ALLOWED_VALIDATOR_HOTKEYS", "").split(",")
-        if hotkey.strip()
-    }
-    validator_permit = getattr(metagraph, "validator_permit", None)
-    if validator_permit is not None and len(validator_permit) == len(metagraph.hotkeys):
-        allowed_validator_hotkeys = {
-            metagraph.hotkeys[index]
-            for index, permitted in enumerate(validator_permit)
-            if permitted
-        }
-    else:
-        allowed_validator_hotkeys = set(metagraph.hotkeys)
-
-    allowed_validator_hotkeys.update(override_hotkeys)
+    validator_auth = ValidatorAuthContext(
+        min_validator_stake=max(0.0, float(config.min_validator_stake)),
+        metagraph=metagraph,
+    )
     bt.logging.info(
-        f"Configured {len(allowed_validator_hotkeys)} allowed validator hotkeys."
+        f"Configured minimum validator stake requirement: {validator_auth.min_validator_stake:.6f}"
     )
 
     # Initialize Logic
