@@ -59,7 +59,9 @@ def test_generate_task_returns_expected_shape(tmp_path):
     assert isinstance(query, str) and query
     assert isinstance(ground_truths, list)
     assert ground_truths
-    assert all(isinstance(interval, tuple) and len(interval) == 2 for interval in ground_truths)
+    assert all(
+        isinstance(interval, tuple) and len(interval) == 2 for interval in ground_truths
+    )
 
 
 def test_generate_task_keeps_all_matching_intervals_for_caption(tmp_path):

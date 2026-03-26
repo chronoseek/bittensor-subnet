@@ -89,8 +89,12 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         )
 
     def _download_original_activitynet_split(self, snapshot_root: Path) -> str:
-        source_url = "https://cs.stanford.edu/people/ranjaykrishna/densevid/captions.zip"
-        cache_root = Path(self.cache_dir) if self.cache_dir else snapshot_root.parent.parent
+        source_url = (
+            "https://cs.stanford.edu/people/ranjaykrishna/densevid/captions.zip"
+        )
+        cache_root = (
+            Path(self.cache_dir) if self.cache_dir else snapshot_root.parent.parent
+        )
         activitynet_cache = cache_root / "chronoseek-activitynet"
         activitynet_cache.mkdir(parents=True, exist_ok=True)
 
@@ -136,7 +140,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
                 continue
 
             intervals = self._normalize_interval_list(
-                row.get("ground_truths") if "ground_truths" in row else row.get("ground_truth")
+                row.get("ground_truths")
+                if "ground_truths" in row
+                else row.get("ground_truth")
             )
             if not intervals:
                 continue
@@ -164,9 +170,8 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             return []
 
         if isinstance(raw_intervals, (list, tuple)):
-            if (
-                len(raw_intervals) == 2
-                and all(isinstance(value, (int, float)) for value in raw_intervals)
+            if len(raw_intervals) == 2 and all(
+                isinstance(value, (int, float)) for value in raw_intervals
             ):
                 return [(float(raw_intervals[0]), float(raw_intervals[1]))]
 
@@ -179,12 +184,17 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
     def _normalize_activitynet_database(self, data: dict) -> List[Dict]:
         tasks = []
-        database = data.get("database") if isinstance(data.get("database"), dict) else data
+        database = (
+            data.get("database") if isinstance(data.get("database"), dict) else data
+        )
         for vid_id, content in database.items():
             if not isinstance(content, dict):
                 continue
 
-            url = content.get("url") or f"https://www.youtube.com/watch?v={str(vid_id)[2:]}"
+            url = (
+                content.get("url")
+                or f"https://www.youtube.com/watch?v={str(vid_id)[2:]}"
+            )
             sentences = content.get("sentences", [])
             timestamps = content.get("timestamps", [])
             if not url or not sentences or len(sentences) != len(timestamps):
@@ -232,11 +242,16 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             intervals = self._normalize_interval_list(
                 row.get("ground_truths")
                 if "ground_truths" in row
-                else row.get("ground_truth")
-                if "ground_truth" in row
-                else [row.get("start_time"), row.get("end_time")]
-                if row.get("start_time") is not None and row.get("end_time") is not None
-                else row.get("timestamps")
+                else (
+                    row.get("ground_truth")
+                    if "ground_truth" in row
+                    else (
+                        [row.get("start_time"), row.get("end_time")]
+                        if row.get("start_time") is not None
+                        and row.get("end_time") is not None
+                        else row.get("timestamps")
+                    )
+                )
             )
 
             if not video_url or not caption or not intervals:

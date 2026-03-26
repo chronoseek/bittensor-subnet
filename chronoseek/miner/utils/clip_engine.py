@@ -52,9 +52,7 @@ class CLIPProcessorEngine:
                 text_features = self.model.get_text_features(**text_inputs)
                 if not isinstance(text_features, torch.Tensor):
                     text_features = self._extract_feature_tensor(text_features)
-                text_features = text_features / text_features.norm(
-                    dim=-1, keepdim=True
-                )
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
                 batch_scores: List[np.ndarray] = []
                 batch_size = 32
@@ -100,6 +98,9 @@ class CLIPProcessorEngine:
             return output
         if hasattr(output, "pooler_output") and output.pooler_output is not None:
             return output.pooler_output
-        if hasattr(output, "last_hidden_state") and output.last_hidden_state is not None:
+        if (
+            hasattr(output, "last_hidden_state")
+            and output.last_hidden_state is not None
+        ):
             return output.last_hidden_state[:, 0, :]
         raise TypeError(f"Unsupported feature output type: {type(output)}")

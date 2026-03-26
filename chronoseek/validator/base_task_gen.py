@@ -4,6 +4,7 @@ from typing import List, Tuple
 GroundTruthInterval = Tuple[float, float]
 GroundTruthIntervals = List[GroundTruthInterval]
 
+
 class BaseTaskGenerator(ABC):
     """
     Abstract base class for Task Generators.

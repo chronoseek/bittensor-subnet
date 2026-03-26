@@ -96,7 +96,7 @@ async def run_step(
     bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
     video_url, query, ground_truths = task_gen.generate_task()
     request_id = f"validation-{uuid4()}"
-    
+
     bt.logging.info("-" * 40)
     bt.logging.info(f"Request ID:  {request_id}")
     bt.logging.info(f"Video URL:   {video_url}")
@@ -111,11 +111,11 @@ async def run_step(
     )
 
     scores = []
-    
+
     # MVP: Loop over metagraph to query miners
     # We skip UIDs with no IP (0.0.0.0) or private IPs if not local dev
     bt.logging.info(f"\n>>> Phase 2: Querying Miners ({len(metagraph.uids)} total)")
-    
+
     tasks = []
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MINER_REQUESTS)
 

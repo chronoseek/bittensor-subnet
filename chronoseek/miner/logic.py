@@ -42,7 +42,9 @@ class MinerLogic:
         # Initialize ML engine once at startup
         self.ml_engine = CLIPProcessorEngine(model_id="openai/clip-vit-base-patch32")
 
-    def search(self, video_url: str, query: str, top_k: int = 5) -> List[VideoSearchResult]:
+    def search(
+        self, video_url: str, query: str, top_k: int = 5
+    ) -> List[VideoSearchResult]:
         """
         Execute the search pipeline.
         """
@@ -71,9 +73,7 @@ class MinerLogic:
             bt.logging.info(
                 f">>> Step 2: Coarse frame extraction ({self.COARSE_FPS} fps)"
             )
-            frames_data = FrameExtractor.extract_frames(
-                video_path, fps=self.COARSE_FPS
-            )
+            frames_data = FrameExtractor.extract_frames(video_path, fps=self.COARSE_FPS)
             if not frames_data:
                 bt.logging.error("Frame extraction failed or video is empty.")
                 raise SearchPipelineError(
@@ -142,20 +142,22 @@ class MinerLogic:
                             f"(max {float(np.max(merged_probs)):.4f})"
                         )
                     else:
-                        bt.logging.warning("Fine pass produced no scores; using coarse only.")
+                        bt.logging.warning(
+                            "Fine pass produced no scores; using coarse only."
+                        )
                 else:
                     bt.logging.warning("Fine extraction empty; using coarse only.")
 
             # 5. Search Heuristics (Thresholding & Merging)
             bt.logging.info(">>> Step 4: Applying search heuristics")
-            results = self._find_best_segment(
-                merged_probs, merged_ts, top_k=top_k
-            )
-            
+            results = self._find_best_segment(merged_probs, merged_ts, top_k=top_k)
+
             if results:
                 best = results[0]
-                bt.logging.success(f"Best Segment: {best.start:.1f}s - {best.end:.1f}s (Conf: {best.confidence:.4f})")
-            
+                bt.logging.success(
+                    f"Best Segment: {best.start:.1f}s - {best.end:.1f}s (Conf: {best.confidence:.4f})"
+                )
+
             bt.logging.info("=" * 40)
             return results
 
@@ -205,9 +207,7 @@ class MinerLogic:
             float(video_end),
             float(max(timestamps)) if timestamps else 0.0,
         )
-        return [
-            (max(0.0, t - pad_sec), min(end_limit, t + pad_sec)) for t in picked
-        ]
+        return [(max(0.0, t - pad_sec), min(end_limit, t + pad_sec)) for t in picked]
 
     @staticmethod
     def _merge_coarse_fine_timeline(
@@ -229,9 +229,7 @@ class MinerLogic:
             for t, p in zip(coarse_ts, coarse_probs)
             if not in_any_window(float(t))
         ]
-        fine_pairs = [
-            (float(t), float(p)) for t, p in zip(fine_ts, fine_probs)
-        ]
+        fine_pairs = [(float(t), float(p)) for t, p in zip(fine_ts, fine_probs)]
         merged = sorted(kept + fine_pairs, key=lambda x: x[0])
         if not merged:
             return coarse_ts, coarse_probs
@@ -239,7 +237,9 @@ class MinerLogic:
         ts, ps = zip(*merged)
         return tuple(ts), np.array(ps, dtype=np.float32)
 
-    def _interval_iou(self, left: tuple[float, float], right: tuple[float, float]) -> float:
+    def _interval_iou(
+        self, left: tuple[float, float], right: tuple[float, float]
+    ) -> float:
         start = max(left[0], right[0])
         end = min(left[1], right[1])
         intersection = max(0.0, end - start)
@@ -366,8 +366,7 @@ class MinerLogic:
             segment_probs = smoothed[current_start_idx : end_idx + 1]
             raw_probs = probs[current_start_idx : end_idx + 1]
             conf = (
-                0.65 * float(np.max(segment_probs))
-                + 0.35 * float(np.mean(raw_probs))
+                0.65 * float(np.max(segment_probs)) + 0.35 * float(np.mean(raw_probs))
                 if len(segment_probs) > 0
                 else 0.0
             )
@@ -378,7 +377,9 @@ class MinerLogic:
         median_dt = self._median_sample_spacing(timestamps)
 
         if not candidates:
-            ranked_frames = np.argsort(smoothed)[::-1][: max(1, min(top_k, len(smoothed)))]
+            ranked_frames = np.argsort(smoothed)[::-1][
+                : max(1, min(top_k, len(smoothed)))
+            ]
             span_idx = max(2, int(round(2.0 / max(median_dt, 0.05))))
             for idx in ranked_frames:
                 idx = int(idx)
@@ -394,7 +395,10 @@ class MinerLogic:
                 timestamps, smoothed, probs, i0, i1
             )
             interval = (float(start_t), float(end_t))
-            if any(self._interval_iou(interval, (res.start, res.end)) > 0.7 for res in results):
+            if any(
+                self._interval_iou(interval, (res.start, res.end)) > 0.7
+                for res in results
+            ):
                 continue
             results.append(
                 VideoSearchResult(
@@ -410,7 +414,11 @@ class MinerLogic:
             mid = float(timestamps[len(timestamps) // 2])
             span = max(4.0 * median_dt, 0.5)
             results.append(
-                VideoSearchResult(start=mid, end=min(mid + span, float(timestamps[-1])), confidence=0.1)
+                VideoSearchResult(
+                    start=mid,
+                    end=min(mid + span, float(timestamps[-1])),
+                    confidence=0.1,
+                )
             )
 
         return results

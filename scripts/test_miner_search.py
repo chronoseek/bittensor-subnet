@@ -18,7 +18,9 @@ from chronoseek.epistula import generate_header
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Test ChronoSeek miner /search endpoint")
+    parser = argparse.ArgumentParser(
+        description="Test ChronoSeek miner /search endpoint"
+    )
     parser.add_argument(
         "--endpoint",
         default="http://127.0.0.1:8000/search",

@@ -31,19 +31,19 @@ def parse_args():
     parser.add_argument(
         "--dataset-path",
         type=str,
-        default=os.getenv("CHRONOSEEK_VERIFY_DATASET_PATH", DEFAULT_SMOKE_TEST_DATASET_PATH),
+        default=DEFAULT_SMOKE_TEST_DATASET_PATH,
         help="Local smoke-test manifest/JSON path for verification. Defaults to the curated smoke-test dataset.",
     )
     parser.add_argument(
         "--split",
         type=str,
-        default=os.getenv("CHRONOSEEK_VERIFY_SPLIT", "validation"),
+        default="validation",
         help="Dataset split to use when loading from Hugging Face.",
     )
     parser.add_argument(
         "--attempts",
         type=int,
-        default=int(os.getenv("CHRONOSEEK_VERIFY_ATTEMPTS", "3")),
+        default=3,
         help="Number of random task attempts before failing verification.",
     )
     parser.add_argument(
@@ -97,7 +97,9 @@ def verify_protocol_response(request_id: str, results) -> VideoSearchResponse:
     return response
 
 
-def run_single_attempt(task_gen: ActivityNetTaskGenerator, miner: MinerLogic, task_number: int):
+def run_single_attempt(
+    task_gen: ActivityNetTaskGenerator, miner: MinerLogic, task_number: int
+):
     video_url, query, ground_truths = task_gen.generate_task()
 
     print_header("Task Generation")
