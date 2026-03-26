@@ -167,7 +167,7 @@ npm install pm2 -g
 # Using the poetry environment python interpreter
 pm2 start miner.py --name miner \
     --interpreter $(poetry env info -p)/bin/python \
-    -- --netuid 298 --subtensor.network test --wallet.name default --wallet.hotkey default
+    -- --wallet.name default --wallet.hotkey default
 ```
 
 ### 3. Start Validator
@@ -176,7 +176,7 @@ pm2 start miner.py --name miner \
 # Using the poetry environment python interpreter
 pm2 start validator.py --name validator \
     --interpreter $(poetry env info -p)/bin/python \
-    -- --netuid 298 --subtensor.network test --wallet.name default --wallet.hotkey default
+    -- --wallet.name default --wallet.hotkey default
 ```
 
 ### 4. Manage Processes

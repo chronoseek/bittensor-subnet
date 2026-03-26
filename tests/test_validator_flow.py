@@ -9,6 +9,8 @@ import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from validator import run_validator_loop
+from chronoseek.protocol_models import VideoSearchRequest
+from chronoseek.validator.forward import query_miner
 
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
@@ -114,3 +116,43 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
+
+    @patch("chronoseek.validator.forward.generate_header")
+    async def test_query_miner_serializes_request_payload_as_json(self, mock_generate_header):
+        mock_wallet = MagicMock()
+        mock_wallet.hotkey = MagicMock()
+
+        request = VideoSearchRequest(
+            request_id="req-1",
+            video={"url": "https://example.com/video.mp4"},
+            query="a person is speaking",
+            top_k=3,
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "protocol_version": "2026-03-01",
+            "request_id": "req-1",
+            "status": "completed",
+            "results": [],
+        }
+
+        client = AsyncMock()
+        client.post.return_value = mock_response
+        mock_generate_header.return_value = {"X-Test": "1"}
+
+        await query_miner(client, "127.0.0.1:8000", request, mock_wallet)
+
+        header_body = mock_generate_header.call_args.args[1]
+        self.assertEqual(
+            header_body["video"]["url"], "https://example.com/video.mp4"
+        )
+        self.assertIsInstance(header_body["video"]["url"], str)
+
+        sent_json = client.post.call_args.kwargs["json"]
+        self.assertEqual(sent_json["video"]["url"], "https://example.com/video.mp4")
+        self.assertIsInstance(sent_json["video"]["url"], str)

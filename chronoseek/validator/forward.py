@@ -25,17 +25,19 @@ async def query_miner(
     """
     start_time = time.time()
     try:
+        request_payload = request.model_dump(mode="json")
+
         # Ensure endpoint has scheme
         if not endpoint.startswith("http"):
             endpoint = f"http://{endpoint}"
 
         # Generate Epistula headers
-        headers = generate_header(wallet.hotkey, request.model_dump())
+        headers = generate_header(wallet.hotkey, request_payload)
 
         # MVP: Increase timeout to 60s because miners download video on the fly
         resp = await client.post(
             f"{endpoint}/search",
-            json=request.model_dump(),
+            json=request_payload,
             headers=headers,
             timeout=60.0,
         )
@@ -44,7 +46,7 @@ async def query_miner(
         return VideoSearchResponse(**resp.json()), latency
 
     except Exception as e:
-        logger.debug(f"Failed to query miner {endpoint}: {e}")
+        logger.warning(f"Failed to query miner {endpoint}: {e}")
         return VideoSearchResponse(results=[]), 0.0
 
 
