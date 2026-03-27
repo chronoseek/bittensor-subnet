@@ -103,9 +103,7 @@ class VideoDownloader:
                 downloaded_path = VideoDownloader._download_with_requests(url, timeout)
 
             if not VideoDownloader._looks_like_video_file(downloaded_path):
-                bt.logging.error(
-                    f"Downloaded file is missing or empty for URL: {url}"
-                )
+                bt.logging.error(f"Downloaded file is missing or empty for URL: {url}")
                 return ""
 
             return downloaded_path

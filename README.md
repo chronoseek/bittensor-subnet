@@ -106,7 +106,7 @@ export HF_TOKEN=your_token_here
 
 _Or add it to your `.env` file._
 
-## 🏃‍♂️ Running on Testnet (SN298)
+## 🏃‍♂️ Running your nodes (Testnet: SN298, Mainnet: TBD)
 
 ### 1. Start the Miner
 
@@ -114,7 +114,7 @@ The miner listens for HTTP requests from validators.
 
 ```bash
 # Starts miner on port 8000
-poetry run python miner.py --netuid 298 --subtensor.network test
+poetry run python miner.py
 ```
 
 _Ensure your wallet/hotkey is registered on SN298._
@@ -125,7 +125,7 @@ The validator generates synthetic tasks, queries miners, and scores them.
 
 ```bash
 # Starts validator loop
-poetry run python validator.py --netuid 298 --subtensor.network test
+poetry run python validator.py
 ```
 
 _Ensure your wallet/hotkey is registered on SN298._
@@ -137,7 +137,7 @@ Epistula request to `/search` with `scripts/test_miner_search.py`.
 
 ```bash
 # In terminal A: start miner
-poetry run python miner.py --netuid 298 --subtensor.network test
+poetry run python miner.py
 
 # In terminal B: run a signed search request
 poetry run python scripts/test_miner_search.py \
@@ -164,19 +164,13 @@ npm install pm2 -g
 ### 2. Start Miner
 
 ```bash
-# Using the poetry environment python interpreter
-pm2 start miner.py --name miner \
-    --interpreter $(poetry env info -p)/bin/python \
-    -- --wallet.name default --wallet.hotkey default
+pm2 start "poetry run python miner.py --wallet.name default --wallet.hotkey default" --name miner
 ```
 
 ### 3. Start Validator
 
 ```bash
-# Using the poetry environment python interpreter
-pm2 start validator.py --name validator \
-    --interpreter $(poetry env info -p)/bin/python \
-    -- --wallet.name default --wallet.hotkey default
+pm2 start "poetry run python validator.py --wallet.name default --wallet.hotkey default" --name validator
 ```
 
 ### 4. Manage Processes
@@ -189,23 +183,23 @@ pm2 logs validator
 
 ## 🔧 Environment Variables
 
-| Variable      | Description                   | Default                 |
-| ------------- | ----------------------------- | ----------------------- |
-| `WALLET_NAME` | Name of your coldkey          | `default`               |
-| `HOTKEY_NAME` | Name of your hotkey           | `default`               |
-| `WALLET_PATH` | Path to your wallet storage   | `~/.bittensor/wallets/` |
-| `NETUID`      | Subnet NetUID                 | `298` (Mainnet TBD)     |
-| `NETWORK`     | Network (finney, test, local) | `test`                  |
-| `PORT`        | Default value for `axon.port` | `8000`                  |
-| `MIN_VALIDATOR_STAKE` | Minimum validator stake required by the miner | `10000` |
-| `LOG_LEVEL`   | Logging verbosity             | `INFO`                  |
-| `HF_TOKEN`    | Hugging Face Token            | `None`                  |
-| `HF_HOME`     | Hugging Face cache directory  | `~/.cache/huggingface`  |
-| `HF_ACTIVITYNET_FILENAME` | Optional filename override inside the ActivityNet snapshot | `` |
-| `TASK_DATASET_PATH` | Optional local validator dataset path | `` |
-| `TASK_SPLIT` | Validator task split | `validation` |
-| `REQUIRE_ACCESSIBLE_VIDEOS` | Skip inaccessible validator task videos | `1` |
-| `TASK_MAX_SAMPLING_ATTEMPTS` | Max tries to find an accessible validator task | `50` |
-| `VIDEO_AVAILABILITY_CACHE_PATH` | JSON cache path for validator video availability checks | `` |
-| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks | `24` |
-| `VIDEO_AVAILABILITY_TIMEOUT` | Timeout for validator-side video availability checks (seconds) | `20` |
+| Variable                             | Description                                                    | Default                 |
+| ------------------------------------ | -------------------------------------------------------------- | ----------------------- |
+| `WALLET_NAME`                        | Name of your coldkey                                           | `default`               |
+| `HOTKEY_NAME`                        | Name of your hotkey                                            | `default`               |
+| `WALLET_PATH`                        | Path to your wallet storage                                    | `~/.bittensor/wallets/` |
+| `NETUID`                             | Subnet NetUID                                                  | `298` (Mainnet TBD)     |
+| `NETWORK`                            | Network (finney, test, local)                                  | `test`                  |
+| `PORT`                               | Default value for `axon.port`                                  | `8000`                  |
+| `MIN_VALIDATOR_STAKE`                | Minimum validator stake required by the miner                  | `10000`                 |
+| `LOG_LEVEL`                          | Logging verbosity                                              | `INFO`                  |
+| `HF_TOKEN`                           | Hugging Face Token                                             | `None`                  |
+| `HF_HOME`                            | Hugging Face cache directory                                   | `~/.cache/huggingface`  |
+| `HF_ACTIVITYNET_FILENAME`            | Optional filename override inside the ActivityNet snapshot     | ``                      |
+| `TASK_DATASET_PATH`                  | Optional local validator dataset path                          | ``                      |
+| `TASK_SPLIT`                         | Validator task split                                           | `validation`            |
+| `REQUIRE_ACCESSIBLE_VIDEOS`          | Skip inaccessible validator task videos                        | `1`                     |
+| `TASK_MAX_SAMPLING_ATTEMPTS`         | Max tries to find an accessible validator task                 | `50`                    |
+| `VIDEO_AVAILABILITY_CACHE_PATH`      | JSON cache path for validator video availability checks        | ``                      |
+| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks                       | `24`                    |
+| `VIDEO_AVAILABILITY_TIMEOUT`         | Timeout for validator-side video availability checks (seconds) | `20`                    |

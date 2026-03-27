@@ -105,7 +105,9 @@ async def run_validator_loop(
                     scores[uid] = alpha * score + (1 - alpha) * scores[uid]
 
             if step_scores:
-                ranked_step_scores = sorted(step_scores, key=lambda item: item[1], reverse=True)
+                ranked_step_scores = sorted(
+                    step_scores, key=lambda item: item[1], reverse=True
+                )
                 step_summary = ", ".join(
                     f"UID {uid}: {score:.4f}" for uid, score in ranked_step_scores[:10]
                 )
@@ -121,7 +123,8 @@ async def run_validator_loop(
                     reverse=True,
                 )
                 moving_summary = ", ".join(
-                    f"UID {uid}: {score:.4f}" for uid, score in ranked_moving_scores[:10]
+                    f"UID {uid}: {score:.4f}"
+                    for uid, score in ranked_moving_scores[:10]
                 )
                 bt.logging.info(f"Moving scores: {moving_summary}")
 
@@ -199,7 +202,8 @@ def get_config():
     parser.add_argument(
         "--require-accessible-videos",
         action="store_true",
-        default=os.getenv("REQUIRE_ACCESSIBLE_VIDEOS", "1") not in {"0", "false", "False"},
+        default=os.getenv("REQUIRE_ACCESSIBLE_VIDEOS", "1")
+        not in {"0", "false", "False"},
         help="Skip validator tasks whose source videos are not currently accessible.",
     )
     parser.add_argument(

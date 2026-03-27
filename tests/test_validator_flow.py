@@ -130,7 +130,9 @@ if __name__ == "__main__":
 class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
 
     @patch("chronoseek.validator.forward.generate_header")
-    async def test_query_miner_serializes_request_payload_as_json(self, mock_generate_header):
+    async def test_query_miner_serializes_request_payload_as_json(
+        self, mock_generate_header
+    ):
         mock_wallet = MagicMock()
         mock_wallet.hotkey = MagicMock()
 
@@ -157,9 +159,7 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         await query_miner(client, "127.0.0.1:8000", request, mock_wallet)
 
         header_body = mock_generate_header.call_args.args[1]
-        self.assertEqual(
-            header_body["video"]["url"], "https://example.com/video.mp4"
-        )
+        self.assertEqual(header_body["video"]["url"], "https://example.com/video.mp4")
         self.assertIsInstance(header_body["video"]["url"], str)
 
         sent_json = client.post.call_args.kwargs["json"]

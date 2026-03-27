@@ -82,7 +82,7 @@ async def query_miner(
             pass
 
         logger.warning(
-            f"Failed to query miner {wallet.hotkey.ss58_address}({endpoint}): {failure.message}"
+            f"Failed to query miner {wallet.hotkey.ss58_address} ({endpoint}): {failure.message}"
         )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
@@ -92,7 +92,7 @@ async def query_miner(
     except httpx.TimeoutException as exc:
         failure = MinerQueryFailure(kind="timeout", message=str(exc))
         logger.warning(
-            f"Failed to query miner {wallet.hotkey.ss58_address}({endpoint}): {failure.message}"
+            f"Failed to query miner {wallet.hotkey.ss58_address} ({endpoint}): {failure.message}"
         )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
@@ -101,7 +101,9 @@ async def query_miner(
         )
     except httpx.ConnectError as exc:
         failure = MinerQueryFailure(kind="connect_error", message=str(exc))
-        logger.warning(f"Failed to query miner {endpoint}: {failure.message}")
+        logger.warning(
+            f"Failed to query miner {wallet.hotkey.ss58_address} ({endpoint}): {failure.message}"
+        )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
             latency=0.0,
@@ -109,7 +111,9 @@ async def query_miner(
         )
     except Exception as exc:
         failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
-        logger.warning(f"Failed to query miner {endpoint}: {failure.message}")
+        logger.warning(
+            f"Failed to query miner {wallet.hotkey.ss58_address} ({endpoint}): {failure.message}"
+        )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
             latency=0.0,

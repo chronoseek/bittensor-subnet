@@ -224,6 +224,12 @@ def resolve_server_port(config) -> int:
         "Miner server port is not configured. Set --axon.port or provide PORT before config parsing."
     )
 
+
+def get_wallet_hotkey_address(wallet) -> str | None:
+    hotkey = getattr(wallet, "hotkey", None)
+    return getattr(hotkey, "ss58_address", None)
+
+
 def main():
     global miner_logic
     global validator_auth
@@ -251,21 +257,26 @@ def main():
 
     # 1. Setup Bittensor objects
     wallet = bt.Wallet(config=config)
-    bt.logging.info(f"Wallet: {wallet}")
+    wallet_hotkey = get_wallet_hotkey_address(wallet)
+    if not wallet_hotkey:
+        bt.logging.error(
+            "Wallet hotkey is unavailable. Check WALLET_NAME, HOTKEY_NAME, and WALLET_PATH before starting the miner."
+        )
+        return
 
     subtensor = bt.Subtensor(config=config)
     metagraph = bt.Metagraph(netuid=config.netuid, network=subtensor.network)
 
     # 2. Check Registration
-    if wallet.hotkey.ss58_address not in metagraph.hotkeys:
-        bt.logging.error(
-            f"Miner hotkey {wallet.hotkey.ss58_address} is NOT registered on netuid {config.netuid}"
-        )
-        # return # Commented out for local testing if needed, but in prod we should return
+    bt.logging.info(f"Wallet: {wallet}")
 
-    if wallet.hotkey.ss58_address in metagraph.hotkeys:
+    if wallet_hotkey not in metagraph.hotkeys:
+        bt.logging.error(
+            f"Miner hotkey {wallet_hotkey} is NOT registered on netuid {config.netuid}"
+        )
+    else:
         bt.logging.info(
-            f"Miner registered with UID: {metagraph.hotkeys.index(wallet.hotkey.ss58_address)}"
+            f"Miner registered with UID: {metagraph.hotkeys.index(wallet_hotkey)}"
         )
 
     validator_auth = ValidatorAuthContext(
