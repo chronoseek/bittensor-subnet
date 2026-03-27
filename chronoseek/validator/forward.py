@@ -39,6 +39,7 @@ async def query_miner(
     endpoint: str,
     request: VideoSearchRequest,
     wallet: bt.Wallet,
+    timeout_seconds: float = 60.0,
 ) -> MinerQueryResult:
     """
     Query a single miner with Epistula signing.
@@ -55,12 +56,11 @@ async def query_miner(
         # Generate Epistula headers
         headers = generate_header(wallet.hotkey, request_payload)
 
-        # MVP: Increase timeout to 60s because miners download video on the fly
         resp = await client.post(
             f"{endpoint}/search",
             json=request_payload,
             headers=headers,
-            timeout=60.0,
+            timeout=timeout_seconds,
         )
         resp.raise_for_status()
         latency = time.time() - start_time

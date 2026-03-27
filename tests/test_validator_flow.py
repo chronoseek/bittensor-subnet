@@ -68,6 +68,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 scores=np.zeros(mock_metagraph.n),
                 score_lock=MagicMock(),
                 max_miners_per_request=3,
+                miner_request_timeout_seconds=60.0,
             )
             await run_validator_loop(
                 mock_subtensor,

@@ -28,6 +28,7 @@ def test_gateway_health_endpoint():
         scores=np.zeros(2),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
+        miner_request_timeout_seconds=60.0,
     )
 
     client = TestClient(create_validator_gateway(runtime))
@@ -35,6 +36,27 @@ def test_gateway_health_endpoint():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_gateway_capabilities_endpoint():
+    runtime = ValidatorGatewayRuntime(
+        wallet=None,
+        metagraph=DummyMetagraph(),
+        scores=np.zeros(2),
+        score_lock=threading.Lock(),
+        max_miners_per_request=2,
+        miner_request_timeout_seconds=60.0,
+    )
+
+    client = TestClient(create_validator_gateway(runtime))
+    response = client.get("/capabilities")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "service": "validator-gateway",
+        "protocol_versions": ["2026-03-01"],
+    }
 
 
 @patch("chronoseek.validator.gateway.query_miner")
@@ -45,6 +67,7 @@ def test_gateway_search_returns_protocol_response(mock_query_miner):
         scores=np.array([0.9, 0.1]),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
+        miner_request_timeout_seconds=60.0,
     )
     mock_query_miner.side_effect = [
         MinerQueryResult(
@@ -101,6 +124,7 @@ def test_gateway_search_returns_structured_timeout_error(mock_query_miner):
         scores=np.array([0.9, 0.1]),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
+        miner_request_timeout_seconds=60.0,
     )
     mock_query_miner.return_value = MinerQueryResult(
         response=VideoSearchResponse(results=[]),

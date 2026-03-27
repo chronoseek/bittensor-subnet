@@ -257,6 +257,12 @@ def get_config():
         help="Maximum number of miners the optional validator API will query per request.",
     )
     parser.add_argument(
+        "--validator-api-miner-timeout-seconds",
+        type=float,
+        default=float(os.getenv("VALIDATOR_API_MINER_TIMEOUT_SECONDS", "60")),
+        help="Per-miner timeout in seconds for optional validator API search requests.",
+    )
+    parser.add_argument(
         "--hf-cache-dir",
         type=str,
         default=os.getenv("HF_HOME", ""),
@@ -355,6 +361,9 @@ def main():
             scores=np.zeros(metagraph.n),
             score_lock=threading.Lock(),
             max_miners_per_request=max(1, int(config.validator_api_max_miners)),
+            miner_request_timeout_seconds=max(
+                1.0, float(config.validator_api_miner_timeout_seconds)
+            ),
         )
 
         if config.enable_validator_api:

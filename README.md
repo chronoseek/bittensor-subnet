@@ -137,9 +137,11 @@ Validators can optionally expose a public API for application or developer use. 
 Supported endpoints:
 
 - `GET /health`
+- `GET /capabilities`
 - `POST /search`
 
 The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. When gateway-level failures occur, the validator returns structured protocol errors using the same `ProtocolError` envelope.
+The `/capabilities` endpoint exposes gateway metadata such as the supported protocol versions so upstream platform services can verify compatibility at startup.
 
 Gateway behavior:
 
@@ -230,7 +232,8 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_CACHE_PATH`      | JSON cache path for validator video availability checks        | ``                      |
 | `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks                       | `24`                    |
 | `VIDEO_AVAILABILITY_TIMEOUT`         | Timeout for validator-side video availability checks (seconds) | `20`                    |
-| `ENABLE_VALIDATOR_API`               | Enable the optional validator `/search` and `/health` API     | `0`                     |
+| `ENABLE_VALIDATOR_API`               | Enable the optional validator `/search`, `/health`, and `/capabilities` API | `0`                     |
 | `VALIDATOR_API_HOST`                 | Host for the optional validator API                            | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                 | Port for the optional validator API                            | `8010`                  |
-| `VALIDATOR_API_MAX_MINERS`           | Max miners queried per validator API request                   | `3`                     |
+| `VALIDATOR_API_MAX_MINERS`           | Max miners queried concurrently per validator API request      | `3`                     |
+| `VALIDATOR_API_MINER_TIMEOUT_SECONDS`| Per-miner timeout for validator API search fanout              | `60`                    |
