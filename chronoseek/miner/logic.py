@@ -58,14 +58,15 @@ class MinerLogic:
         bt.logging.info("=" * 40)
 
         bt.logging.info(f">>> Step 1: Downloading Video")
-        video_path = VideoDownloader.download_video(video_url)
-        if not video_path:
+        downloaded_video = VideoDownloader.download_video(video_url)
+        if not downloaded_video:
             bt.logging.error("Video download failed.")
             raise SearchPipelineError(
                 "VIDEO_FETCH_FAILED",
                 "The video URL could not be fetched.",
                 {"video_url": video_url},
             )
+        video_path = downloaded_video.path
         bt.logging.info(f"Video downloaded to {video_path}")
 
         try:
@@ -171,9 +172,9 @@ class MinerLogic:
                 {"video_url": video_url},
             ) from e
         finally:
-            # Cleanup
-            if os.path.exists(video_path):
-                os.remove(video_path)
+            VideoDownloader.cleanup(
+                downloaded_video if "downloaded_video" in locals() else None
+            )
 
     @staticmethod
     def _pick_refine_windows(

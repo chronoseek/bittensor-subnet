@@ -1,10 +1,18 @@
 import requests
 import tempfile
 import os
+import shutil
+from dataclasses import dataclass
 import bittensor as bt
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urlparse
+
+
+@dataclass
+class DownloadedVideo:
+    path: str
+    cleanup_paths: list[str]
 
 
 class VideoDownloader:
@@ -34,7 +42,7 @@ class VideoDownloader:
             return False
 
     @classmethod
-    def _download_with_requests(cls, url: str, timeout: int) -> str:
+    def _download_with_requests(cls, url: str, timeout: int) -> DownloadedVideo:
         # Configure retry strategy
         retry_strategy = Retry(
             total=3,
@@ -53,10 +61,13 @@ class VideoDownloader:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     tmp_file.write(chunk)
-            return tmp_file.name
+            return DownloadedVideo(
+                path=tmp_file.name,
+                cleanup_paths=[tmp_file.name],
+            )
 
     @classmethod
-    def _download_with_ytdlp(cls, url: str, timeout: int) -> str:
+    def _download_with_ytdlp(cls, url: str, timeout: int) -> DownloadedVideo:
         try:
             import yt_dlp
         except ImportError as exc:
@@ -87,26 +98,46 @@ class VideoDownloader:
             if os.path.exists(candidate):
                 downloaded_path = candidate
 
-        return downloaded_path
+        return DownloadedVideo(
+            path=downloaded_path,
+            cleanup_paths=[tmp_dir],
+        )
 
     @staticmethod
-    def download_video(url: str, timeout: int = 60) -> str:
+    def cleanup(downloaded_video: DownloadedVideo | None) -> None:
+        if downloaded_video is None:
+            return
+
+        for cleanup_path in downloaded_video.cleanup_paths:
+            try:
+                if os.path.isdir(cleanup_path):
+                    shutil.rmtree(cleanup_path, ignore_errors=True)
+                elif os.path.exists(cleanup_path):
+                    os.remove(cleanup_path)
+            except Exception as exc:
+                bt.logging.warning(
+                    f"Failed to clean up downloaded video artifact {cleanup_path}: {exc}"
+                )
+
+    @staticmethod
+    def download_video(url: str, timeout: int = 60) -> DownloadedVideo | None:
         """
         Download video to a temporary file.
-        Returns: Path to temp file or empty string on failure.
+        Returns: DownloadedVideo metadata or None on failure.
         """
         try:
             if VideoDownloader.is_youtube_url(url):
                 bt.logging.info("Detected YouTube URL. Downloading with yt-dlp.")
-                downloaded_path = VideoDownloader._download_with_ytdlp(url, timeout)
+                downloaded_video = VideoDownloader._download_with_ytdlp(url, timeout)
             else:
-                downloaded_path = VideoDownloader._download_with_requests(url, timeout)
+                downloaded_video = VideoDownloader._download_with_requests(url, timeout)
 
-            if not VideoDownloader._looks_like_video_file(downloaded_path):
+            if not VideoDownloader._looks_like_video_file(downloaded_video.path):
                 bt.logging.error(f"Downloaded file is missing or empty for URL: {url}")
-                return ""
+                VideoDownloader.cleanup(downloaded_video)
+                return None
 
-            return downloaded_path
+            return downloaded_video
         except Exception as e:
             bt.logging.error(f"Failed to download video: {e}")
-            return ""
+            return None
