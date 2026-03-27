@@ -3,6 +3,7 @@ from chronoseek.protocol_models import VideoSearchResult
 
 GroundTruthInterval = Tuple[float, float]
 GroundTruthIntervals = Iterable[GroundTruthInterval]
+STRICT_IOU_THRESHOLD = 0.5
 
 
 def calculate_iou(
@@ -58,16 +59,8 @@ def score_response(
     latency: float,  # Kept for API compatibility, ignored in MVP
 ) -> float:
     """
-    Score a miner's response based on MVP Strict IoU rules.
-
-    Rule 1: Binary Pass/Fail
-    - If max(IoU) >= 0.5: Score = 1.0
-    - If max(IoU) < 0.5: Score = 0.0
-
-    Rule 2: Oversized Interval Penalty (Optional for MVP, but good practice)
-    - If duration(pred) > 2 * duration(gt), apply penalty?
-    - MVP Spec says "Binary Pass/Fail scoring... removes all subjectivity".
-    - So we stick to pure binary for now.
+    Score a miner's response using the best IoU across predictions and ground truths.
+    This returns a continuous value in [0, 1].
     """
     if not predictions:
         return 0.0
@@ -81,10 +74,8 @@ def score_response(
     else:
         ground_truths = list(ground_truth)
 
-    max_iou = best_iou(predictions, ground_truths)
+    return best_iou(predictions, ground_truths)
 
-    # MVP Strict Threshold
-    if max_iou >= 0.5:
-        return 1.0
-    else:
-        return 0.0
+
+def passes_strict_iou(score: float, threshold: float = STRICT_IOU_THRESHOLD) -> bool:
+    return score >= threshold

@@ -104,6 +104,27 @@ async def run_validator_loop(
                 if uid < len(scores):
                     scores[uid] = alpha * score + (1 - alpha) * scores[uid]
 
+            if step_scores:
+                ranked_step_scores = sorted(step_scores, key=lambda item: item[1], reverse=True)
+                step_summary = ", ".join(
+                    f"UID {uid}: {score:.4f}" for uid, score in ranked_step_scores[:10]
+                )
+                bt.logging.info(f"Step scores: {step_summary}")
+
+                ranked_moving_scores = sorted(
+                    (
+                        (uid, float(scores[uid]))
+                        for uid, _ in step_scores
+                        if uid < len(scores)
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+                moving_summary = ", ".join(
+                    f"UID {uid}: {score:.4f}" for uid, score in ranked_moving_scores[:10]
+                )
+                bt.logging.info(f"Moving scores: {moving_summary}")
+
             # --- 2. Set Weights ---
             blocks_since_last = current_block - last_weight_block
             if blocks_since_last >= tempo:

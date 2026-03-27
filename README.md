@@ -16,7 +16,7 @@ This repository represents the initial **Minimum Viable Product (MVP)** implemen
 
 - **Model:** Miners currently use a baseline **CLIP (ViT-B/32)** sliding window approach. This is computationally expensive and not optimized for long-form video.
 - **Dataset:** Validators evaluate against **ActivityNet Captions** annotations. For local verification and smoke tests, the repo also includes a small curated fixture with directly downloadable sample videos.
-- **Scoring:** Scoring is binary (Pass/Fail) based on a strict Intersection-over-Union (IoU) threshold > 0.5.
+- **Scoring:** Validators score miners by best-match Intersection-over-Union (IoU) in `[0, 1]` and maintain moving averages for weight setting. A strict IoU threshold of `0.5` is still used in local verification scripts when you want pass/fail semantics.
 - **Inference:** All inference happens locally on the miner.
 
 **Future Enhancements (Roadmap):**
@@ -196,6 +196,16 @@ pm2 logs validator
 | `WALLET_PATH` | Path to your wallet storage   | `~/.bittensor/wallets/` |
 | `NETUID`      | Subnet NetUID                 | `298` (Mainnet TBD)     |
 | `NETWORK`     | Network (finney, test, local) | `test`                  |
-| `PORT`        | Miner HTTP Port               | `8000`                  |
+| `PORT`        | Default value for `axon.port` | `8000`                  |
+| `MIN_VALIDATOR_STAKE` | Minimum validator stake required by the miner | `10000` |
 | `LOG_LEVEL`   | Logging verbosity             | `INFO`                  |
 | `HF_TOKEN`    | Hugging Face Token            | `None`                  |
+| `HF_HOME`     | Hugging Face cache directory  | `~/.cache/huggingface`  |
+| `HF_ACTIVITYNET_FILENAME` | Optional filename override inside the ActivityNet snapshot | `` |
+| `TASK_DATASET_PATH` | Optional local validator dataset path | `` |
+| `TASK_SPLIT` | Validator task split | `validation` |
+| `REQUIRE_ACCESSIBLE_VIDEOS` | Skip inaccessible validator task videos | `1` |
+| `TASK_MAX_SAMPLING_ATTEMPTS` | Max tries to find an accessible validator task | `50` |
+| `VIDEO_AVAILABILITY_CACHE_PATH` | JSON cache path for validator video availability checks | `` |
+| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks | `24` |
+| `VIDEO_AVAILABILITY_TIMEOUT` | Timeout for validator-side video availability checks (seconds) | `20` |

@@ -14,7 +14,13 @@ load_dotenv()
 
 from chronoseek.miner.logic import MinerLogic, SearchPipelineError
 from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
-from chronoseek.scoring import best_iou, calculate_iou, score_response
+from chronoseek.scoring import (
+    STRICT_IOU_THRESHOLD,
+    best_iou,
+    calculate_iou,
+    passes_strict_iou,
+    score_response,
+)
 from chronoseek.validator.task_gen import ActivityNetTaskGenerator
 
 DEFAULT_SMOKE_TEST_DATASET_PATH = str(
@@ -49,7 +55,7 @@ def parse_args():
     parser.add_argument(
         "--require-pass",
         action="store_true",
-        help="Fail unless the final score passes the strict IoU threshold.",
+        help=f"Fail unless the final score passes the strict IoU threshold ({STRICT_IOU_THRESHOLD:.2f}).",
     )
     return parser.parse_args()
 
@@ -117,12 +123,13 @@ def run_single_attempt(
     print_header("Quality Check")
     best = response.results[0]
     raw_iou = best_iou([best], ground_truths)
-    binary_score = score_response(response.results, ground_truths, latency=0.0)
+    iou_score = score_response(response.results, ground_truths, latency=0.0)
 
     print(f"Top result: {best.start:.2f}s -> {best.end:.2f}s")
     print(f"Confidence: {best.confidence:.4f}")
     print(f"Raw IoU:    {raw_iou:.4f}")
-    print(f"Score:      {binary_score:.1f}")
+    print(f"IoU Score:  {iou_score:.4f}")
+    print(f"Strict Pass: {'yes' if passes_strict_iou(iou_score) else 'no'}")
     print("Top-result IoU by GT:")
     for start, end in ground_truths:
         iou = calculate_iou(best.start, best.end, start, end)
@@ -133,7 +140,7 @@ def run_single_attempt(
         "response": response,
         "ground_truths": ground_truths,
         "raw_iou": raw_iou,
-        "score": binary_score,
+        "score": iou_score,
     }
 
 
@@ -163,7 +170,7 @@ def main():
     for attempt_number in range(1, args.attempts + 1):
         try:
             result = run_single_attempt(task_gen, miner, attempt_number)
-            passed = result["score"] == 1.0
+            passed = passes_strict_iou(result["score"])
 
             print_header("Verification Summary")
             print("End-to-end flow: ok")
