@@ -13,6 +13,7 @@ import threading
 import sys
 import numpy as np
 from typing import List
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -21,6 +22,7 @@ load_dotenv()
 # Use ActivityNetTaskGenerator for MVP
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 HEARTBEAT_TIMEOUT = 600  # seconds
 
@@ -42,12 +44,32 @@ async def run_validator_loop(
     netuid: int,
     stop_event: threading.Event,
     last_heartbeat: List[float],
+    config: bt.Config,
 ):
     """
     Async validator loop.
     """
     # Initialize components
-    task_gen = task_gen_module.ActivityNetTaskGenerator()
+    availability_cache_path = config.video_availability_cache_path
+    if not availability_cache_path:
+        availability_cache_path = str(
+            Path.home() / ".cache" / "chronoseek" / "video_availability.json"
+        )
+
+    availability_checker = VideoAvailabilityChecker(
+        cache_path=availability_cache_path,
+        cache_ttl_seconds=int(config.video_availability_cache_ttl_hours * 3600),
+        timeout=config.video_availability_timeout,
+    )
+    task_gen = task_gen_module.ActivityNetTaskGenerator(
+        dataset_path=config.task_dataset_path or None,
+        split=config.task_split,
+        cache_dir=config.hf_cache_dir or None,
+        dataset_filename=config.hf_activitynet_filename or None,
+        require_accessible_videos=config.require_accessible_videos,
+        availability_checker=availability_checker,
+        max_sampling_attempts=config.task_max_sampling_attempts,
+    )
     async_client = httpx.AsyncClient(timeout=30.0)
 
     # Get tempo
@@ -141,6 +163,60 @@ def get_config():
         default=int(os.getenv("NETUID", "1")),
         help="Subnet NetUID",
     )
+    parser.add_argument(
+        "--task-dataset-path",
+        type=str,
+        default=os.getenv("TASK_DATASET_PATH", ""),
+        help="Optional local task dataset path. If omitted, ActivityNet is loaded from Hugging Face.",
+    )
+    parser.add_argument(
+        "--task-split",
+        type=str,
+        default=os.getenv("TASK_SPLIT", "validation"),
+        help="Task split to use when loading validator data.",
+    )
+    parser.add_argument(
+        "--require-accessible-videos",
+        action="store_true",
+        default=os.getenv("REQUIRE_ACCESSIBLE_VIDEOS", "1") not in {"0", "false", "False"},
+        help="Skip validator tasks whose source videos are not currently accessible.",
+    )
+    parser.add_argument(
+        "--task-max-sampling-attempts",
+        type=int,
+        default=int(os.getenv("TASK_MAX_SAMPLING_ATTEMPTS", "50")),
+        help="Maximum random samples to try before giving up on finding an accessible validator task.",
+    )
+    parser.add_argument(
+        "--video-availability-cache-path",
+        type=str,
+        default=os.getenv("VIDEO_AVAILABILITY_CACHE_PATH", ""),
+        help="Path to a JSON cache of validator video availability checks.",
+    )
+    parser.add_argument(
+        "--video-availability-cache-ttl-hours",
+        type=float,
+        default=float(os.getenv("VIDEO_AVAILABILITY_CACHE_TTL_HOURS", "24")),
+        help="TTL in hours for cached validator video availability checks.",
+    )
+    parser.add_argument(
+        "--video-availability-timeout",
+        type=int,
+        default=int(os.getenv("VIDEO_AVAILABILITY_TIMEOUT", "20")),
+        help="Timeout in seconds for validator-side video availability checks.",
+    )
+    parser.add_argument(
+        "--hf-cache-dir",
+        type=str,
+        default=os.getenv("HF_HOME", ""),
+        help="Optional Hugging Face cache directory for validator dataset downloads.",
+    )
+    parser.add_argument(
+        "--hf-activitynet-filename",
+        type=str,
+        default=os.getenv("HF_ACTIVITYNET_FILENAME", ""),
+        help="Optional filename override inside the ActivityNet Hugging Face snapshot.",
+    )
 
     # Set defaults from environment variables for bittensor arguments
     # Note: We must use the internal argument names (dest) which usually replace dots with underscores
@@ -225,7 +301,13 @@ def main():
         bt.logging.info("Starting validator loop...")
         asyncio.run(
             run_validator_loop(
-                subtensor, wallet, metagraph, config.netuid, stop_event, last_heartbeat
+                subtensor,
+                wallet,
+                metagraph,
+                config.netuid,
+                stop_event,
+                last_heartbeat,
+                config,
             )
         )
 

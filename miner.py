@@ -209,6 +209,10 @@ def get_config():
 
 
 def resolve_server_port(config) -> int:
+    axon_port = getattr(getattr(config, "axon", None), "port", None)
+    if isinstance(axon_port, int) and not isinstance(axon_port, bool):
+        return axon_port
+
     for index, arg in enumerate(os.sys.argv):
         if arg == "--axon.port" and index + 1 < len(os.sys.argv):
             try:
@@ -216,11 +220,9 @@ def resolve_server_port(config) -> int:
             except ValueError:
                 break
 
-    axon_port = getattr(getattr(config, "axon", None), "port", None)
-    if isinstance(axon_port, int) and not isinstance(axon_port, bool):
-        return axon_port
-
-    return int(os.getenv("PORT", "8000"))
+    raise ValueError(
+        "Miner server port is not configured. Set --axon.port or provide PORT before config parsing."
+    )
 
 def main():
     global miner_logic

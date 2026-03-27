@@ -7,8 +7,10 @@ from typing import Tuple, List, Dict
 from zipfile import ZipFile
 
 import requests
+import bittensor as bt
 
 from chronoseek.validator.base_task_gen import BaseTaskGenerator
+from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 
 class ActivityNetTaskGenerator(BaseTaskGenerator):
@@ -23,12 +25,18 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         dataset_repo_id: str = "friedrichor/ActivityNet_Captions",
         cache_dir: str | None = None,
         dataset_filename: str | None = None,
+        require_accessible_videos: bool = False,
+        availability_checker: VideoAvailabilityChecker | None = None,
+        max_sampling_attempts: int = 50,
     ):
         self.dataset_path = dataset_path
         self.split = split
         self.dataset_repo_id = dataset_repo_id
-        self.cache_dir = cache_dir or os.getenv("HF_HOME")
-        self.dataset_filename = dataset_filename or os.getenv("HF_ACTIVITYNET_FILENAME")
+        self.cache_dir = cache_dir
+        self.dataset_filename = dataset_filename
+        self.require_accessible_videos = require_accessible_videos
+        self.availability_checker = availability_checker
+        self.max_sampling_attempts = max(1, int(max_sampling_attempts))
         self.dataset = self._load_dataset()
 
     def _default_dataset_path(self) -> str:
@@ -38,7 +46,7 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
             raise ValueError(
-                "HF_TOKEN is required for validator task generation from Hugging Face."
+                "A HuggingFace token is required for validator task generation from HuggingFace."
             )
 
         try:
@@ -381,12 +389,26 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         """
         Returns: (video_url, query, ground_truth_intervals)
         """
-        video = random.choice(self.dataset)
-        captions = list(video["caption_intervals"].keys())
-        caption = random.choice(captions)
+        sample_count = min(len(self.dataset), self.max_sampling_attempts)
+        sampled_videos = random.sample(self.dataset, k=sample_count)
 
-        return (
-            video["video_url"],
-            caption,
-            list(video["caption_intervals"][caption]),
+        for video in sampled_videos:
+            if self.require_accessible_videos and self.availability_checker is not None:
+                availability = self.availability_checker.check(video["video_url"])
+                if not availability.accessible:
+                    bt.logging.info(
+                        f"Skipping unavailable validator task video {video['video_url']}: {availability.reason}"
+                    )
+                    continue
+
+            captions = list(video["caption_intervals"].keys())
+            caption = random.choice(captions)
+            return (
+                video["video_url"],
+                caption,
+                list(video["caption_intervals"][caption]),
+            )
+
+        raise RuntimeError(
+            "Unable to generate a validator task from an accessible video."
         )

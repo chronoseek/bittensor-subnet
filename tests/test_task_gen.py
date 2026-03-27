@@ -1,6 +1,7 @@
 import json
 
 from chronoseek.validator.task_gen import ActivityNetTaskGenerator
+from chronoseek.validator.video_availability import VideoAvailabilityResult
 
 
 def test_local_manifest_loads_validation_split(tmp_path):
@@ -153,3 +154,62 @@ def test_resolve_snapshot_dataset_file_accepts_row_json(tmp_path):
     resolved = task_gen._resolve_snapshot_dataset_file(str(snapshot_dir))
 
     assert resolved == str(dataset_path)
+
+
+class StubAvailabilityChecker:
+    def __init__(self, statuses):
+        self.statuses = statuses
+
+    def check(self, url):
+        return self.statuses[url]
+
+
+def test_generate_task_skips_inaccessible_videos(tmp_path):
+    dataset_path = tmp_path / "activitynet.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "task_id": "bad-video",
+                        "split": "validation",
+                        "difficulty": "easy",
+                        "video_url": "https://example.com/bad.mp4",
+                        "query": "bad query",
+                        "ground_truth": {"start": 1.0, "end": 2.0},
+                    },
+                    {
+                        "task_id": "good-video",
+                        "split": "validation",
+                        "difficulty": "easy",
+                        "video_url": "https://example.com/good.mp4",
+                        "query": "good query",
+                        "ground_truth": {"start": 3.0, "end": 4.0},
+                    },
+                ]
+            }
+        )
+    )
+
+    checker = StubAvailabilityChecker(
+        {
+            "https://example.com/bad.mp4": VideoAvailabilityResult(
+                accessible=False, reason="private"
+            ),
+            "https://example.com/good.mp4": VideoAvailabilityResult(
+                accessible=True, reason="ok"
+            ),
+        }
+    )
+
+    task_gen = ActivityNetTaskGenerator(
+        dataset_path=str(dataset_path),
+        require_accessible_videos=True,
+        availability_checker=checker,
+        max_sampling_attempts=2,
+    )
+
+    video_url, query, ground_truths = task_gen.generate_task()
+    assert video_url == "https://example.com/good.mp4"
+    assert query == "good query"
+    assert ground_truths == [(3.0, 4.0)]

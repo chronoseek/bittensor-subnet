@@ -68,6 +68,15 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 netuid=1,
                 stop_event=stop_event,
                 last_heartbeat=[0],
+                config=MagicMock(
+                    task_dataset_path="",
+                    task_split="validation",
+                    require_accessible_videos=False,
+                    task_max_sampling_attempts=10,
+                    video_availability_cache_path="",
+                    video_availability_cache_ttl_hours=24,
+                    video_availability_timeout=5,
+                ),
             )
 
         # Verification

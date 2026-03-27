@@ -2,10 +2,16 @@ import httpx
 import time
 import logging
 import asyncio
+import json
 from uuid import uuid4
 import bittensor as bt
+from dataclasses import dataclass
 from typing import List, Tuple
-from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
+from chronoseek.protocol_models import (
+    ProtocolError,
+    VideoSearchRequest,
+    VideoSearchResponse,
+)
 from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
 
@@ -13,12 +19,27 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
 
+@dataclass
+class MinerQueryFailure:
+    kind: str
+    message: str
+    status_code: int | None = None
+    protocol_code: str | None = None
+
+
+@dataclass
+class MinerQueryResult:
+    response: VideoSearchResponse
+    latency: float
+    failure: MinerQueryFailure | None = None
+
+
 async def query_miner(
     client: httpx.AsyncClient,
     endpoint: str,
     request: VideoSearchRequest,
     wallet: bt.Wallet,
-) -> Tuple[VideoSearchResponse, float]:
+) -> MinerQueryResult:
     """
     Query a single miner with Epistula signing.
     Returns (Response, Latency).
@@ -43,11 +64,57 @@ async def query_miner(
         )
         resp.raise_for_status()
         latency = time.time() - start_time
-        return VideoSearchResponse(**resp.json()), latency
+        return MinerQueryResult(
+            response=VideoSearchResponse(**resp.json()), latency=latency
+        )
 
-    except Exception as e:
-        logger.warning(f"Failed to query miner {endpoint}: {e}")
-        return VideoSearchResponse(results=[]), 0.0
+    except httpx.HTTPStatusError as exc:
+        failure = MinerQueryFailure(
+            kind="http_status",
+            message=str(exc),
+            status_code=exc.response.status_code,
+        )
+        try:
+            payload = ProtocolError(**exc.response.json())
+            failure.protocol_code = payload.error.code
+            failure.message = payload.error.message
+        except (ValueError, json.JSONDecodeError, TypeError):
+            pass
+
+        logger.warning(
+            f"Failed to query miner {wallet.hotkey.ss58_address}({endpoint}): {failure.message}"
+        )
+        return MinerQueryResult(
+            response=VideoSearchResponse(results=[]),
+            latency=0.0,
+            failure=failure,
+        )
+    except httpx.TimeoutException as exc:
+        failure = MinerQueryFailure(kind="timeout", message=str(exc))
+        logger.warning(
+            f"Failed to query miner {wallet.hotkey.ss58_address}({endpoint}): {failure.message}"
+        )
+        return MinerQueryResult(
+            response=VideoSearchResponse(results=[]),
+            latency=0.0,
+            failure=failure,
+        )
+    except httpx.ConnectError as exc:
+        failure = MinerQueryFailure(kind="connect_error", message=str(exc))
+        logger.warning(f"Failed to query miner {endpoint}: {failure.message}")
+        return MinerQueryResult(
+            response=VideoSearchResponse(results=[]),
+            latency=0.0,
+            failure=failure,
+        )
+    except Exception as exc:
+        failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
+        logger.warning(f"Failed to query miner {endpoint}: {failure.message}")
+        return MinerQueryResult(
+            response=VideoSearchResponse(results=[]),
+            latency=0.0,
+            failure=failure,
+        )
 
 
 async def query_uid(
@@ -61,11 +128,23 @@ async def query_uid(
 ) -> Tuple[int, float]:
     async with semaphore:
         bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
-        resp, latency = await query_miner(client, endpoint, request_model, wallet)
+        result = await query_miner(client, endpoint, request_model, wallet)
+        resp = result.response
+        latency = result.latency
 
         if not resp.results:
+            failure_suffix = ""
+            if result.failure is not None:
+                parts = [result.failure.kind]
+                if result.failure.status_code is not None:
+                    parts.append(str(result.failure.status_code))
+                if result.failure.protocol_code:
+                    parts.append(result.failure.protocol_code)
+                if result.failure.message:
+                    parts.append(result.failure.message)
+                failure_suffix = " | Failure: " + " | ".join(parts)
             bt.logging.warning(
-                f"[UID {uid}] No results | Request: {request_model.request_id} | Latency: {latency:.2f}s | Score: 0.0000"
+                f"[UID {uid}] No results | Request: {request_model.request_id} | Latency: {latency:.2f}s | Score: 0.0000{failure_suffix}"
             )
             return int(uid), 0.0
 
