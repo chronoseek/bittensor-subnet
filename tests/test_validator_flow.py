@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from validator import run_validator_loop
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
+from chronoseek.validator.gateway import ValidatorGatewayRuntime
 
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
@@ -61,10 +62,16 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         # Mock sleep to be instant
         with patch("asyncio.sleep", new_callable=AsyncMock):
+            runtime = ValidatorGatewayRuntime(
+                wallet=mock_wallet,
+                metagraph=mock_metagraph,
+                scores=np.zeros(mock_metagraph.n),
+                score_lock=MagicMock(),
+                max_miners_per_request=3,
+            )
             await run_validator_loop(
                 mock_subtensor,
-                mock_wallet,
-                mock_metagraph,
+                runtime,
                 netuid=1,
                 stop_event=stop_event,
                 last_heartbeat=[0],
@@ -76,6 +83,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     video_availability_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
+                    hf_cache_dir="",
+                    hf_activitynet_filename="",
                 ),
             )
 

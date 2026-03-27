@@ -22,6 +22,7 @@ load_dotenv()
 # Use ActivityNetTaskGenerator for MVP
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.validator.gateway import ValidatorGatewayRuntime, create_validator_gateway
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 HEARTBEAT_TIMEOUT = 600  # seconds
@@ -39,8 +40,7 @@ def heartbeat_monitor(last_heartbeat, stop_event):
 
 async def run_validator_loop(
     subtensor: bt.Subtensor,
-    wallet: bt.Wallet,
-    metagraph: bt.Metagraph,
+    runtime: ValidatorGatewayRuntime,
     netuid: int,
     stop_event: threading.Event,
     last_heartbeat: List[float],
@@ -77,7 +77,7 @@ async def run_validator_loop(
     bt.logging.info(f"Subnet tempo: {tempo} blocks")
 
     last_weight_block = 0
-    scores = np.zeros(metagraph.n)
+    scores = np.zeros(runtime.metagraph.n)
 
     try:
         while not stop_event.is_set():
@@ -86,16 +86,16 @@ async def run_validator_loop(
 
             # Sync metagraph (periodically)
             if current_block % 100 == 0:
-                metagraph.sync(subtensor=subtensor)
+                runtime.metagraph.sync(subtensor=subtensor)
                 # Resize scores if metagraph grew
-                if len(scores) < metagraph.n:
-                    new_scores = np.zeros(metagraph.n)
+                if len(scores) < runtime.metagraph.n:
+                    new_scores = np.zeros(runtime.metagraph.n)
                     new_scores[: len(scores)] = scores
                     scores = new_scores
 
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
-                task_gen, metagraph, wallet, async_client
+                task_gen, runtime.metagraph, runtime.wallet, async_client
             )
 
             # Update moving average scores
@@ -103,6 +103,8 @@ async def run_validator_loop(
             for uid, score in step_scores:
                 if uid < len(scores):
                     scores[uid] = alpha * score + (1 - alpha) * scores[uid]
+            with runtime.score_lock:
+                runtime.scores = np.array(scores, copy=True)
 
             if step_scores:
                 ranked_step_scores = sorted(
@@ -148,7 +150,7 @@ async def run_validator_loop(
                 # Set weights on chain
                 try:
                     success = subtensor.set_weights(
-                        wallet=wallet,
+                        wallet=runtime.wallet,
                         netuid=netuid,
                         uids=uids_list,
                         weights=weights_list,
@@ -229,6 +231,30 @@ def get_config():
         type=int,
         default=int(os.getenv("VIDEO_AVAILABILITY_TIMEOUT", "20")),
         help="Timeout in seconds for validator-side video availability checks.",
+    )
+    parser.add_argument(
+        "--enable-validator-api",
+        action="store_true",
+        default=os.getenv("ENABLE_VALIDATOR_API", "0") in {"1", "true", "True"},
+        help="Enable the optional public validator API with /search and /health endpoints.",
+    )
+    parser.add_argument(
+        "--validator-api-host",
+        type=str,
+        default=os.getenv("VALIDATOR_API_HOST", "0.0.0.0"),
+        help="Host for the optional validator API.",
+    )
+    parser.add_argument(
+        "--validator-api-port",
+        type=int,
+        default=int(os.getenv("VALIDATOR_API_PORT", "8010")),
+        help="Port for the optional validator API.",
+    )
+    parser.add_argument(
+        "--validator-api-max-miners",
+        type=int,
+        default=int(os.getenv("VALIDATOR_API_MAX_MINERS", "3")),
+        help="Maximum number of miners the optional validator API will query per request.",
     )
     parser.add_argument(
         "--hf-cache-dir",
@@ -323,16 +349,36 @@ def main():
             f"Validator registered with UID: {metagraph.hotkeys.index(wallet.hotkey.ss58_address)}"
         )
 
+        runtime = ValidatorGatewayRuntime(
+            wallet=wallet,
+            metagraph=metagraph,
+            scores=np.zeros(metagraph.n),
+            score_lock=threading.Lock(),
+            max_miners_per_request=max(1, int(config.validator_api_max_miners)),
+        )
+
+        if config.enable_validator_api:
+            import uvicorn
+
+            gateway_app = create_validator_gateway(runtime)
+
+            def run_gateway():
+                uvicorn.run(
+                    gateway_app,
+                    host=config.validator_api_host,
+                    port=config.validator_api_port,
+                )
+
+            api_thread = threading.Thread(target=run_gateway, daemon=True)
+            api_thread.start()
+            bt.logging.info(
+                f"Validator API enabled on {config.validator_api_host}:{config.validator_api_port}"
+            )
+
         bt.logging.info("Starting validator loop...")
         asyncio.run(
             run_validator_loop(
-                subtensor,
-                wallet,
-                metagraph,
-                config.netuid,
-                stop_event,
-                last_heartbeat,
-                config,
+                subtensor, runtime, config.netuid, stop_event, last_heartbeat, config
             )
         )
 

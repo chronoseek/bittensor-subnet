@@ -130,6 +130,33 @@ poetry run python validator.py
 
 _Ensure your wallet/hotkey is registered on SN298._
 
+### 2a. Optional Validator API
+
+Validators can optionally expose a public API for application or developer use. This is disabled by default.
+
+Supported endpoints:
+
+- `GET /health`
+- `POST /search`
+
+The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. When gateway-level failures occur, the validator returns structured protocol errors using the same `ProtocolError` envelope.
+
+Gateway behavior:
+
+- the validator queries several miners, ranked by the validator's current moving scores
+- it aggregates the returned windows across those miners
+- it returns the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
+- the response remains compatible with the shared protocol contract in the `git/protocol` repo
+
+Example:
+
+```bash
+poetry run python validator.py \
+  --enable-validator-api \
+  --validator-api-host 0.0.0.0 \
+  --validator-api-port 8010
+```
+
 ### 3. Local Miner Search Test
 
 You can test `miner.py` directly without running a validator by sending a signed
@@ -203,3 +230,7 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_CACHE_PATH`      | JSON cache path for validator video availability checks        | ``                      |
 | `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks                       | `24`                    |
 | `VIDEO_AVAILABILITY_TIMEOUT`         | Timeout for validator-side video availability checks (seconds) | `20`                    |
+| `ENABLE_VALIDATOR_API`               | Enable the optional validator `/search` and `/health` API     | `0`                     |
+| `VALIDATOR_API_HOST`                 | Host for the optional validator API                            | `0.0.0.0`               |
+| `VALIDATOR_API_PORT`                 | Port for the optional validator API                            | `8010`                  |
+| `VALIDATOR_API_MAX_MINERS`           | Max miners queried per validator API request                   | `3`                     |
