@@ -188,6 +188,23 @@ async def run_validator_loop(
         await async_client.aclose()
 
 
+async def run_gateway_only_loop(
+    subtensor: bt.Subtensor,
+    runtime: ValidatorGatewayRuntime,
+    stop_event: threading.Event,
+    last_heartbeat: List[float],
+):
+    bt.logging.info("Synthetic evaluation disabled; validator will serve gateway traffic only.")
+    while not stop_event.is_set():
+        current_block = subtensor.get_current_block()
+        last_heartbeat[0] = time.time()
+
+        if current_block % 100 == 0:
+            runtime.metagraph.sync(subtensor=subtensor)
+
+        await asyncio.sleep(12)
+
+
 def get_config():
     """
     Parse arguments and return configuration.
@@ -267,6 +284,13 @@ def get_config():
         action="store_true",
         default=os.getenv("ENABLE_VALIDATOR_API", "0") in {"1", "true", "True"},
         help="Enable the optional public validator API with /search and /health endpoints.",
+    )
+    parser.add_argument(
+        "--enable-synthetic-evaluation",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("ENABLE_SYNTHETIC_EVALUATION", "1")
+        in {"1", "true", "True"},
+        help="Enable validator synthetic evaluation and on-chain weight updates.",
     )
     parser.add_argument(
         "--validator-api-host",
@@ -414,12 +438,21 @@ def main():
                 f"Validator API enabled on {config.validator_api_host}:{config.validator_api_port}"
             )
 
-        bt.logging.info("Starting validator loop...")
-        asyncio.run(
-            run_validator_loop(
-                subtensor, runtime, config.netuid, stop_event, last_heartbeat, config
+        if config.enable_synthetic_evaluation:
+            bt.logging.info("Starting validator loop...")
+            asyncio.run(
+                run_validator_loop(
+                    subtensor,
+                    runtime,
+                    config.netuid,
+                    stop_event,
+                    last_heartbeat,
+                    config,
+                )
             )
-        )
+        else:
+            bt.logging.info("Starting validator in gateway-only mode...")
+            asyncio.run(run_gateway_only_loop(subtensor, runtime, stop_event, last_heartbeat))
 
     except KeyboardInterrupt:
         bt.logging.info("Validator stopped by user")

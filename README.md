@@ -130,6 +130,12 @@ poetry run python validator.py
 
 _Ensure your wallet/hotkey is registered on SN298._
 
+To run the validator without synthetic evaluation and weight updates (when you want to run only the API for organic request handling):
+
+```bash
+poetry run python validator.py --no-enable-synthetic-evaluation
+```
+
 ### 2a. Optional Validator API
 
 Validators can optionally expose a public API for application or developer use. This is disabled by default.
@@ -212,30 +218,31 @@ pm2 logs validator
 
 ## 🔧 Environment Variables
 
-| Variable                             | Description                                                    | Default                 |
-| ------------------------------------ | -------------------------------------------------------------- | ----------------------- |
-| `WALLET_NAME`                        | Name of your coldkey                                           | `default`               |
-| `HOTKEY_NAME`                        | Name of your hotkey                                            | `default`               |
-| `WALLET_PATH`                        | Path to your wallet storage                                    | `~/.bittensor/wallets/` |
-| `NETUID`                             | Subnet NetUID                                                  | `298` (Mainnet TBD)     |
-| `NETWORK`                            | Network (finney, test, local)                                  | `test`                  |
-| `PORT`                               | Default value for `axon.port`                                  | `8000`                  |
-| `MIN_VALIDATOR_STAKE`                | Minimum validator stake required by the miner                  | `10000`                 |
-| `LOG_LEVEL`                          | Logging verbosity                                              | `INFO`                  |
-| `HF_TOKEN`                           | Hugging Face Token                                             | `None`                  |
-| `HF_HOME`                            | Hugging Face cache directory                                   | `~/.cache/huggingface`  |
-| `HF_ACTIVITYNET_FILENAME`            | Optional filename override inside the ActivityNet snapshot     | ``                      |
-| `TASK_DATASET_PATH`                  | Optional local validator dataset path                          | ``                      |
-| `TASK_SPLIT`                         | Validator task split                                           | `validation`            |
-| `REQUIRE_ACCESSIBLE_VIDEOS`          | Skip inaccessible validator task videos                        | `1`                     |
-| `TASK_MAX_SAMPLING_ATTEMPTS`         | Max tries to find an accessible validator task                 | `50`                    |
-| `VIDEO_AVAILABILITY_CACHE_PATH`      | Legacy base path used to derive the validator accessible/inaccessible cache files | ``                      |
-| `ACCESSIBLE_VIDEO_CACHE_PATH`        | JSON cache path for validator videos confirmed to be accessible | ``                      |
-| `INACCESSIBLE_VIDEO_CACHE_PATH`      | JSON cache path for validator videos confirmed to be inaccessible | ``                      |
-| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks                       | `24`                    |
-| `VIDEO_AVAILABILITY_TIMEOUT`         | Timeout for validator-side video availability checks (seconds) | `20`                    |
-| `ENABLE_VALIDATOR_API`               | Enable the optional validator `/search`, `/health`, and `/capabilities` API | `0`                     |
-| `VALIDATOR_API_HOST`                 | Host for the optional validator API                            | `0.0.0.0`               |
-| `VALIDATOR_API_PORT`                 | Port for the optional validator API                            | `8010`                  |
-| `VALIDATOR_API_MAX_MINERS`           | Max miners queried concurrently per validator API request      | `3`                     |
-| `VALIDATOR_API_MINER_TIMEOUT_SECONDS`| Per-miner timeout for validator API search fanout              | `60`                    |
+| Variable                              | Description                                                                       | Default                 |
+| ------------------------------------- | --------------------------------------------------------------------------------- | ----------------------- |
+| `WALLET_NAME`                         | Name of your coldkey                                                              | `default`               |
+| `HOTKEY_NAME`                         | Name of your hotkey                                                               | `default`               |
+| `WALLET_PATH`                         | Path to your wallet storage                                                       | `~/.bittensor/wallets/` |
+| `NETUID`                              | Subnet NetUID                                                                     | `298` (Mainnet TBD)     |
+| `NETWORK`                             | Network (finney, test, local)                                                     | `test`                  |
+| `PORT`                                | Default value for `axon.port`                                                     | `8000`                  |
+| `MIN_VALIDATOR_STAKE`                 | Minimum validator stake required by the miner                                     | `10000`                 |
+| `LOG_LEVEL`                           | Logging verbosity                                                                 | `INFO`                  |
+| `HF_TOKEN`                            | Hugging Face Token                                                                | `None`                  |
+| `HF_HOME`                             | Hugging Face cache directory                                                      | `~/.cache/huggingface`  |
+| `HF_ACTIVITYNET_FILENAME`             | Optional filename override inside the ActivityNet snapshot                        | ``                      |
+| `TASK_DATASET_PATH`                   | Optional local validator dataset path                                             | ``                      |
+| `TASK_SPLIT`                          | Validator task split                                                              | `validation`            |
+| `REQUIRE_ACCESSIBLE_VIDEOS`           | Skip inaccessible validator task videos                                           | `1`                     |
+| `TASK_MAX_SAMPLING_ATTEMPTS`          | Max tries to find an accessible validator task                                    | `50`                    |
+| `VIDEO_AVAILABILITY_CACHE_PATH`       | Legacy base path used to derive the validator accessible/inaccessible cache files | ``                      |
+| `ACCESSIBLE_VIDEO_CACHE_PATH`         | JSON cache path for validator videos confirmed to be accessible                   | ``                      |
+| `INACCESSIBLE_VIDEO_CACHE_PATH`       | JSON cache path for validator videos confirmed to be inaccessible                 | ``                      |
+| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS`  | TTL for cached video availability checks                                          | `24`                    |
+| `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
+| `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
+| `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/health`, and `/capabilities` API       | `0`                     |
+| `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
+| `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
+| `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
+| `VALIDATOR_API_MINER_TIMEOUT_SECONDS` | Per-miner timeout for validator API search fanout                                 | `60`                    |
