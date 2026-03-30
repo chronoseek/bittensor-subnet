@@ -38,6 +38,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         self.availability_checker = availability_checker
         self.max_sampling_attempts = max(1, int(max_sampling_attempts))
         self.dataset = self._load_dataset()
+        self._tasks_by_video_url = {
+            task["video_url"]: task for task in self.dataset if task.get("video_url")
+        }
 
     def _default_dataset_path(self) -> str:
         return str(Path(__file__).resolve().parent / "data" / "smoke_test_tasks.json")
@@ -385,6 +388,42 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
         return self._load_huggingface_dataset()
 
+    def refresh_video_lookup(self) -> int:
+        if self.availability_checker is None:
+            return 0
+        return self.availability_checker.refresh_unavailable()
+
+    def _build_task_result(
+        self, video: Dict
+    ) -> Tuple[str, str, List[Tuple[float, float]]]:
+        captions = list(video["caption_intervals"].keys())
+        caption = random.choice(captions)
+        return (
+            video["video_url"],
+            caption,
+            list(video["caption_intervals"][caption]),
+        )
+
+    def _fallback_to_cached_accessible_video(
+        self, excluded_urls: set[str]
+    ) -> Tuple[str, str, List[Tuple[float, float]]] | None:
+        if self.availability_checker is None:
+            return None
+
+        accessible_urls = [
+            url
+            for url in self.availability_checker.get_accessible_urls()
+            if url not in excluded_urls and url in self._tasks_by_video_url
+        ]
+        if not accessible_urls:
+            return None
+
+        fallback_url = random.choice(accessible_urls)
+        bt.logging.info(
+            f"Falling back to cached accessible validator task video {fallback_url}"
+        )
+        return self._build_task_result(self._tasks_by_video_url[fallback_url])
+
     def generate_task(self) -> Tuple[str, str, List[Tuple[float, float]]]:
         """
         Returns: (video_url, query, ground_truth_intervals)
@@ -392,7 +431,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         sample_count = min(len(self.dataset), self.max_sampling_attempts)
         sampled_videos = random.sample(self.dataset, k=sample_count)
 
+        attempted_urls: set[str] = set()
         for video in sampled_videos:
+            attempted_urls.add(video["video_url"])
             if self.require_accessible_videos and self.availability_checker is not None:
                 availability = self.availability_checker.check(video["video_url"])
                 if not availability.accessible:
@@ -401,13 +442,11 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
                     )
                     continue
 
-            captions = list(video["caption_intervals"].keys())
-            caption = random.choice(captions)
-            return (
-                video["video_url"],
-                caption,
-                list(video["caption_intervals"][caption]),
-            )
+            return self._build_task_result(video)
+
+        fallback_task = self._fallback_to_cached_accessible_video(attempted_urls)
+        if fallback_task is not None:
+            return fallback_task
 
         raise RuntimeError(
             "Unable to generate a validator task from an accessible video."

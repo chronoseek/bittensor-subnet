@@ -50,14 +50,32 @@ async def run_validator_loop(
     Async validator loop.
     """
     # Initialize components
-    availability_cache_path = config.video_availability_cache_path
-    if not availability_cache_path:
-        availability_cache_path = str(
-            Path.home() / ".cache" / "chronoseek" / "video_availability.json"
-        )
+    cache_root = Path.home() / ".cache" / "chronoseek"
+    accessible_video_cache_path = config.accessible_video_cache_path
+    if not accessible_video_cache_path:
+        if config.video_availability_cache_path:
+            base_path = Path(config.video_availability_cache_path).expanduser()
+            accessible_video_cache_path = str(
+                base_path.with_name(f"{base_path.stem}_accessible{base_path.suffix or '.json'}")
+            )
+        else:
+            accessible_video_cache_path = str(cache_root / "accessible_videos.json")
+
+    inaccessible_video_cache_path = config.inaccessible_video_cache_path
+    if not inaccessible_video_cache_path:
+        if config.video_availability_cache_path:
+            base_path = Path(config.video_availability_cache_path).expanduser()
+            inaccessible_video_cache_path = str(
+                base_path.with_name(f"{base_path.stem}_inaccessible{base_path.suffix or '.json'}")
+            )
+        else:
+            inaccessible_video_cache_path = str(
+                cache_root / "inaccessible_videos.json"
+            )
 
     availability_checker = VideoAvailabilityChecker(
-        cache_path=availability_cache_path,
+        accessible_cache_path=accessible_video_cache_path,
+        inaccessible_cache_path=inaccessible_video_cache_path,
         cache_ttl_seconds=int(config.video_availability_cache_ttl_hours * 3600),
         timeout=config.video_availability_timeout,
     )
@@ -218,7 +236,19 @@ def get_config():
         "--video-availability-cache-path",
         type=str,
         default=os.getenv("VIDEO_AVAILABILITY_CACHE_PATH", ""),
-        help="Path to a JSON cache of validator video availability checks.",
+        help="Legacy base path used to derive accessible/inaccessible validator video cache files when explicit cache paths are not configured.",
+    )
+    parser.add_argument(
+        "--accessible-video-cache-path",
+        type=str,
+        default=os.getenv("ACCESSIBLE_VIDEO_CACHE_PATH", ""),
+        help="Path to a JSON cache of validator videos confirmed to be publicly accessible.",
+    )
+    parser.add_argument(
+        "--inaccessible-video-cache-path",
+        type=str,
+        default=os.getenv("INACCESSIBLE_VIDEO_CACHE_PATH", ""),
+        help="Path to a JSON cache of validator videos confirmed to be inaccessible.",
     )
     parser.add_argument(
         "--video-availability-cache-ttl-hours",

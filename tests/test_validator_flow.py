@@ -175,3 +175,28 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         sent_json = client.post.call_args.kwargs["json"]
         self.assertEqual(sent_json["video"]["url"], "https://example.com/video.mp4")
         self.assertIsInstance(sent_json["video"]["url"], str)
+
+    async def test_run_step_retries_when_no_accessible_video_is_found(self):
+        from chronoseek.validator.forward import run_step
+
+        task_gen = MagicMock()
+        task_gen.generate_task.side_effect = [
+            RuntimeError("Unable to generate a validator task from an accessible video."),
+            (
+                "https://example.com/video.mp4",
+                "a person waves",
+                [(1.0, 2.0)],
+            ),
+        ]
+        task_gen.refresh_video_lookup.return_value = 3
+
+        metagraph = MagicMock()
+        metagraph.uids = []
+        wallet = MagicMock()
+        client = AsyncMock()
+
+        scores = await run_step(task_gen, metagraph, wallet, client)
+
+        self.assertEqual(scores, [])
+        task_gen.refresh_video_lookup.assert_called_once()
+        self.assertEqual(task_gen.generate_task.call_count, 2)

@@ -179,7 +179,27 @@ async def run_step(
     bt.logging.info("=" * 50)
 
     bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
-    video_url, query, ground_truths = task_gen.generate_task()
+    try:
+        video_url, query, ground_truths = task_gen.generate_task()
+    except RuntimeError as exc:
+        bt.logging.warning(
+            f"Task generation could not find an accessible video: {exc}. Refreshing video availability checks and retrying."
+        )
+        refreshed_entries = 0
+        refresh_lookup = getattr(task_gen, "refresh_video_lookup", None)
+        if callable(refresh_lookup):
+            refreshed_entries = int(refresh_lookup())
+            bt.logging.info(
+                f"Refreshed {refreshed_entries} cached unavailable video availability entries."
+            )
+        try:
+            video_url, query, ground_truths = task_gen.generate_task()
+        except RuntimeError as retry_exc:
+            bt.logging.warning(
+                f"Skipping validation step because no accessible validator task was found after retry: {retry_exc}"
+            )
+            bt.logging.info("=" * 50)
+            return []
     request_id = f"validation-{uuid4()}"
 
     bt.logging.info("-" * 40)

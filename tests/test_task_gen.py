@@ -157,11 +157,22 @@ def test_resolve_snapshot_dataset_file_accepts_row_json(tmp_path):
 
 
 class StubAvailabilityChecker:
-    def __init__(self, statuses):
+    def __init__(self, statuses, accessible_urls=None):
         self.statuses = statuses
+        self.refreshed = 0
+        self.accessible_urls = list(accessible_urls or [])
 
     def check(self, url):
         return self.statuses[url]
+
+    def refresh_unavailable(self):
+        self.refreshed += 1
+        return len(
+            [status for status in self.statuses.values() if not status.accessible]
+        )
+
+    def get_accessible_urls(self):
+        return list(self.accessible_urls)
 
 
 def test_generate_task_skips_inaccessible_videos(tmp_path):
@@ -210,6 +221,96 @@ def test_generate_task_skips_inaccessible_videos(tmp_path):
     )
 
     video_url, query, ground_truths = task_gen.generate_task()
+    assert video_url == "https://example.com/good.mp4"
+    assert query == "good query"
+    assert ground_truths == [(3.0, 4.0)]
+
+
+def test_refresh_video_lookup_delegates_to_availability_checker(tmp_path):
+    dataset_path = tmp_path / "activitynet.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "task_id": "bad-video",
+                        "split": "validation",
+                        "difficulty": "easy",
+                        "video_url": "https://example.com/bad.mp4",
+                        "query": "bad query",
+                        "ground_truth": {"start": 1.0, "end": 2.0},
+                    }
+                ]
+            }
+        )
+    )
+
+    checker = StubAvailabilityChecker(
+        {
+            "https://example.com/bad.mp4": VideoAvailabilityResult(
+                accessible=False, reason="private"
+            ),
+        }
+    )
+
+    task_gen = ActivityNetTaskGenerator(
+        dataset_path=str(dataset_path),
+        require_accessible_videos=True,
+        availability_checker=checker,
+    )
+
+    removed_entries = task_gen.refresh_video_lookup()
+    assert removed_entries == 1
+    assert checker.refreshed == 1
+
+
+def test_generate_task_falls_back_to_cached_accessible_video(tmp_path, monkeypatch):
+    dataset_path = tmp_path / "activitynet.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "task_id": "bad-video",
+                        "split": "validation",
+                        "difficulty": "easy",
+                        "video_url": "https://example.com/bad.mp4",
+                        "query": "bad query",
+                        "ground_truth": {"start": 1.0, "end": 2.0},
+                    },
+                    {
+                        "task_id": "good-video",
+                        "split": "validation",
+                        "difficulty": "easy",
+                        "video_url": "https://example.com/good.mp4",
+                        "query": "good query",
+                        "ground_truth": {"start": 3.0, "end": 4.0},
+                    },
+                ]
+            }
+        )
+    )
+
+    checker = StubAvailabilityChecker(
+        {
+            "https://example.com/bad.mp4": VideoAvailabilityResult(
+                accessible=False, reason="private"
+            ),
+        },
+        accessible_urls=["https://example.com/good.mp4"],
+    )
+
+    task_gen = ActivityNetTaskGenerator(
+        dataset_path=str(dataset_path),
+        require_accessible_videos=True,
+        availability_checker=checker,
+        max_sampling_attempts=1,
+    )
+
+    monkeypatch.setattr("random.sample", lambda population, k: [population[0]])
+
+    video_url, query, ground_truths = task_gen.generate_task()
+
     assert video_url == "https://example.com/good.mp4"
     assert query == "good query"
     assert ground_truths == [(3.0, 4.0)]

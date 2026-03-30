@@ -229,7 +229,9 @@ pm2 logs validator
 | `TASK_SPLIT`                         | Validator task split                                           | `validation`            |
 | `REQUIRE_ACCESSIBLE_VIDEOS`          | Skip inaccessible validator task videos                        | `1`                     |
 | `TASK_MAX_SAMPLING_ATTEMPTS`         | Max tries to find an accessible validator task                 | `50`                    |
-| `VIDEO_AVAILABILITY_CACHE_PATH`      | JSON cache path for validator video availability checks        | ``                      |
+| `VIDEO_AVAILABILITY_CACHE_PATH`      | Legacy base path used to derive the validator accessible/inaccessible cache files | ``                      |
+| `ACCESSIBLE_VIDEO_CACHE_PATH`        | JSON cache path for validator videos confirmed to be accessible | ``                      |
+| `INACCESSIBLE_VIDEO_CACHE_PATH`      | JSON cache path for validator videos confirmed to be inaccessible | ``                      |
 | `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks                       | `24`                    |
 | `VIDEO_AVAILABILITY_TIMEOUT`         | Timeout for validator-side video availability checks (seconds) | `20`                    |
 | `ENABLE_VALIDATOR_API`               | Enable the optional validator `/search`, `/health`, and `/capabilities` API | `0`                     |
