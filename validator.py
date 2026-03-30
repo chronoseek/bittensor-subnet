@@ -28,6 +28,30 @@ from chronoseek.validator.video_availability import VideoAvailabilityChecker
 HEARTBEAT_TIMEOUT = 600  # seconds
 
 
+def seed_scores_from_metagraph(metagraph: bt.Metagraph) -> np.ndarray:
+    try:
+        incentives = getattr(metagraph, "I", None)
+        if incentives is None:
+            raise ValueError("metagraph incentives are unavailable")
+
+        scores = np.asarray(incentives, dtype=float).reshape(-1)
+        if len(scores) != int(metagraph.n):
+            raise ValueError(
+                f"metagraph incentive length mismatch: expected {metagraph.n}, got {len(scores)}"
+            )
+
+        if np.any(np.isnan(scores)) or np.any(scores < 0):
+            raise ValueError("metagraph incentives contain invalid values")
+
+        bt.logging.info("Initialized validator scores from metagraph incentives.")
+        return np.array(scores, copy=True)
+    except Exception as exc:
+        bt.logging.warning(
+            f"Falling back to zero-initialized validator scores: {exc}"
+        )
+        return np.zeros(int(metagraph.n), dtype=float)
+
+
 def heartbeat_monitor(last_heartbeat, stop_event):
     while not stop_event.is_set():
         time.sleep(5)
@@ -95,7 +119,7 @@ async def run_validator_loop(
     bt.logging.info(f"Subnet tempo: {tempo} blocks")
 
     last_weight_block = 0
-    scores = np.zeros(runtime.metagraph.n)
+    scores = np.array(runtime.scores, copy=True)
 
     try:
         while not stop_event.is_set():
@@ -107,9 +131,11 @@ async def run_validator_loop(
                 runtime.metagraph.sync(subtensor=subtensor)
                 # Resize scores if metagraph grew
                 if len(scores) < runtime.metagraph.n:
-                    new_scores = np.zeros(runtime.metagraph.n)
+                    new_scores = seed_scores_from_metagraph(runtime.metagraph)
                     new_scores[: len(scores)] = scores
                     scores = new_scores
+                elif len(scores) > runtime.metagraph.n:
+                    scores = scores[: runtime.metagraph.n]
 
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
@@ -412,7 +438,7 @@ def main():
         runtime = ValidatorGatewayRuntime(
             wallet=wallet,
             metagraph=metagraph,
-            scores=np.zeros(metagraph.n),
+            scores=seed_scores_from_metagraph(metagraph),
             score_lock=threading.Lock(),
             max_miners_per_request=max(1, int(config.validator_api_max_miners)),
             miner_request_timeout_seconds=max(

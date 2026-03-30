@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import threading
 from unittest.mock import MagicMock, AsyncMock, patch
 import numpy as np
 
@@ -8,13 +9,22 @@ import sys, os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from validator import run_validator_loop
+from validator import run_validator_loop, seed_scores_from_metagraph
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
 from chronoseek.validator.gateway import ValidatorGatewayRuntime
 
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
+
+    def test_seed_scores_from_metagraph_uses_incentives(self):
+        metagraph = MagicMock()
+        metagraph.n = 3
+        metagraph.I = [0.2, 0.3, 0.5]
+
+        scores = seed_scores_from_metagraph(metagraph)
+
+        np.testing.assert_allclose(scores, np.array([0.2, 0.3, 0.5]))
 
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
@@ -31,6 +41,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         # Configure Metagraph (3 neurons)
         mock_metagraph.n = 3
         mock_metagraph.hotkeys = ["h1", "h2", "h3"]
+        mock_metagraph.I = [0.2, 0.3, 0.5]
 
         # Configure Subtensor
         mock_subtensor.get_subnet_hyperparameters.return_value.tempo = 5
@@ -65,7 +76,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
             runtime = ValidatorGatewayRuntime(
                 wallet=mock_wallet,
                 metagraph=mock_metagraph,
-                scores=np.zeros(mock_metagraph.n),
+                scores=seed_scores_from_metagraph(mock_metagraph),
                 score_lock=MagicMock(),
                 max_miners_per_request=3,
                 miner_request_timeout_seconds=60.0,
@@ -131,6 +142,68 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(weights), 3)
 
         print("✅ Validator Flow Test Passed: Weights set correctly based on scores.")
+
+    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
+    @patch("chronoseek.validator.forward.run_step")
+    async def test_metagraph_growth_seeds_new_scores_from_incentives(
+        self, mock_run_step, mock_task_gen
+    ):
+        mock_subtensor = MagicMock()
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        stop_event = MagicMock()
+
+        mock_metagraph.n = 2
+        mock_metagraph.hotkeys = ["h1", "h2"]
+        mock_metagraph.I = [0.4, 0.6]
+
+        def sync_side_effect(*args, **kwargs):
+            mock_metagraph.n = 3
+            mock_metagraph.hotkeys = ["h1", "h2", "h3"]
+            mock_metagraph.I = [0.4, 0.6, 0.9]
+
+        mock_metagraph.sync.side_effect = sync_side_effect
+
+        mock_subtensor.get_subnet_hyperparameters.return_value.tempo = 100
+        mock_subtensor.get_current_block.side_effect = [0, 1]
+        stop_event.is_set.side_effect = [False, True]
+
+        async def run_step_side_effect(*args):
+            return []
+
+        mock_run_step.side_effect = run_step_side_effect
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            runtime = ValidatorGatewayRuntime(
+                wallet=mock_wallet,
+                metagraph=mock_metagraph,
+                scores=seed_scores_from_metagraph(mock_metagraph),
+                score_lock=threading.Lock(),
+                max_miners_per_request=3,
+                miner_request_timeout_seconds=60.0,
+            )
+            await run_validator_loop(
+                mock_subtensor,
+                runtime,
+                netuid=1,
+                stop_event=stop_event,
+                last_heartbeat=[0],
+                config=MagicMock(
+                    task_dataset_path="",
+                    task_split="validation",
+                    require_accessible_videos=False,
+                    task_max_sampling_attempts=10,
+                    video_availability_cache_path="",
+                    accessible_video_cache_path="",
+                    inaccessible_video_cache_path="",
+                    video_availability_cache_ttl_hours=24,
+                    video_availability_timeout=5,
+                    hf_cache_dir="",
+                    hf_activitynet_filename="",
+                ),
+            )
+
+        np.testing.assert_allclose(runtime.scores, np.array([0.4, 0.6, 0.9]))
 
 
 if __name__ == "__main__":
