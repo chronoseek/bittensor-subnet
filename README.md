@@ -241,8 +241,9 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_CACHE_TTL_HOURS`  | TTL for cached video availability checks                                          | `24`                    |
 | `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
 | `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
+| `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `60`                    |
 | `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/health`, and `/capabilities` API       | `0`                     |
 | `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
 | `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
-| `VALIDATOR_API_MINER_TIMEOUT_SECONDS` | Per-miner timeout for validator API search fanout                                 | `60`                    |
+| `VALIDATOR_API_MINER_TIMEOUT_SECONDS` | Per-miner timeout for validator API search fanout                                 | `50`                    |

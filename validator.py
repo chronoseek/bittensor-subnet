@@ -139,7 +139,11 @@ async def run_validator_loop(
 
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
-                task_gen, runtime.metagraph, runtime.wallet, async_client
+                task_gen,
+                runtime.metagraph,
+                runtime.wallet,
+                async_client,
+                miner_timeout_seconds=float(config.synthetic_miner_timeout_seconds),
             )
 
             # Update moving average scores
@@ -319,6 +323,12 @@ def get_config():
         help="Enable validator synthetic evaluation and on-chain weight updates.",
     )
     parser.add_argument(
+        "--synthetic-miner-timeout-seconds",
+        type=float,
+        default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "60")),
+        help="Per-miner timeout in seconds for synthetic validator evaluation requests.",
+    )
+    parser.add_argument(
         "--validator-api-host",
         type=str,
         default=os.getenv("VALIDATOR_API_HOST", "0.0.0.0"),
@@ -339,7 +349,7 @@ def get_config():
     parser.add_argument(
         "--validator-api-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("VALIDATOR_API_MINER_TIMEOUT_SECONDS", "60")),
+        default=float(os.getenv("VALIDATOR_API_MINER_TIMEOUT_SECONDS", "50")),
         help="Per-miner timeout in seconds for optional validator API search requests.",
     )
     parser.add_argument(

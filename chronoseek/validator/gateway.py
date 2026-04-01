@@ -128,6 +128,7 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
                 *[
                     query_miner(
                         client=client,
+                        uid=uid,
                         endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
                         request=payload,
                         wallet=runtime.wallet,
