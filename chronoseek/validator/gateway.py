@@ -84,6 +84,33 @@ def _dedupe_and_rank_results(results, top_k: int):
     return deduped
 
 
+def _derive_gateway_failure(failures):
+    protocol_codes = [
+        failure.protocol_code for failure in failures if failure and failure.protocol_code
+    ]
+    unique_protocol_codes = set(protocol_codes)
+
+    if len(unique_protocol_codes) == 1:
+        protocol_code = next(iter(unique_protocol_codes))
+        if protocol_code == "VIDEO_FETCH_FAILED":
+            return (
+                "VIDEO_FETCH_FAILED",
+                "The video URL could not be downloaded. Check that the URL is valid and publicly accessible.",
+                502,
+            )
+        if protocol_code == "VIDEO_UNREADABLE":
+            return (
+                "VIDEO_UNREADABLE",
+                "The video was fetched but could not be decoded. Try a different video URL or file format.",
+                422,
+            )
+
+    if failures and all(failure.kind == "timeout" for failure in failures):
+        return ("TIMEOUT", "All miner queries timed out.", 504)
+
+    return ("INTERNAL_ERROR", "No miner returned a usable search result.", 502)
+
+
 def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
     app = FastAPI()
 
@@ -167,18 +194,14 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
             for _, query_result in miner_results
             if query_result.failure
         ]
-        if failures and all(failure.kind == "timeout" for failure in failures):
-            error_code = "TIMEOUT"
-            error_message = "All miner queries timed out."
-            status_code = 504
-        elif ranked_uids:
-            error_code = "INTERNAL_ERROR"
-            error_message = "No miner returned a usable search result."
-            status_code = 502
+        if ranked_uids:
+            error_code, error_message, status_code = _derive_gateway_failure(failures)
         else:
-            error_code = "INVALID_REQUEST"
-            error_message = "No reachable miners are currently available."
-            status_code = 503
+            error_code, error_message, status_code = (
+                "INVALID_REQUEST",
+                "No reachable miners are currently available.",
+                503,
+            )
 
         bt.logging.warning(
             f"[ORGANIC] Gateway request {request_id} failed | code={error_code} | queried_uids={ranked_uids}"

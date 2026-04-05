@@ -147,3 +147,54 @@ def test_gateway_search_returns_structured_timeout_error(mock_query_miner):
     assert response.status_code == 504
     body = response.json()
     assert body["error"]["code"] == "TIMEOUT"
+
+
+@patch("chronoseek.validator.gateway.query_miner")
+def test_gateway_search_surfaces_video_fetch_failure(mock_query_miner):
+    runtime = ValidatorGatewayRuntime(
+        wallet=None,
+        metagraph=DummyMetagraph(),
+        scores=np.array([0.9, 0.1]),
+        score_lock=threading.Lock(),
+        max_miners_per_request=2,
+        miner_request_timeout_seconds=60.0,
+    )
+    mock_query_miner.side_effect = [
+        MinerQueryResult(
+            response=VideoSearchResponse(results=[]),
+            latency=0.0,
+            failure=MinerQueryFailure(
+                kind="http_status",
+                message="The video URL could not be fetched.",
+                status_code=502,
+                protocol_code="VIDEO_FETCH_FAILED",
+            ),
+        ),
+        MinerQueryResult(
+            response=VideoSearchResponse(results=[]),
+            latency=0.0,
+            failure=MinerQueryFailure(
+                kind="http_status",
+                message="The video URL could not be fetched.",
+                status_code=502,
+                protocol_code="VIDEO_FETCH_FAILED",
+            ),
+        ),
+    ]
+
+    client = TestClient(create_validator_gateway(runtime))
+    response = client.post(
+        "/search",
+        json={
+            "protocol_version": "2026-03-01",
+            "request_id": "req-3",
+            "query": "people fighting",
+            "top_k": 5,
+            "video": {"url": "https://example.com/video.mp4"},
+        },
+    )
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["error"]["code"] == "VIDEO_FETCH_FAILED"
+    assert "could not be downloaded" in body["error"]["message"]
