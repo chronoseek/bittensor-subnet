@@ -20,19 +20,56 @@ class VideoDownloader:
     Handles secure video downloading with retry logic.
     """
 
-    YOUTUBE_HOSTS = {
+    EXTRACTOR_PLATFORM_HOSTS = {
         "youtube.com",
         "www.youtube.com",
         "m.youtube.com",
         "youtu.be",
         "www.youtu.be",
+        "vimeo.com",
+        "www.vimeo.com",
+        "player.vimeo.com",
+        "dailymotion.com",
+        "www.dailymotion.com",
+        "dai.ly",
+        "tiktok.com",
+        "www.tiktok.com",
+        "vm.tiktok.com",
+        "x.com",
+        "www.x.com",
+        "twitter.com",
+        "www.twitter.com",
+        "instagram.com",
+        "www.instagram.com",
+        "facebook.com",
+        "www.facebook.com",
+    }
+    DIRECT_MEDIA_EXTENSIONS = {
+        ".mp4",
+        ".webm",
+        ".mov",
+        ".m4v",
+        ".avi",
+        ".mkv",
     }
 
     @classmethod
-    def is_youtube_url(cls, url: str) -> bool:
+    def is_extractor_platform_url(cls, url: str) -> bool:
         parsed = urlparse(url)
         host = (parsed.netloc or "").lower()
-        return host in cls.YOUTUBE_HOSTS
+        return host in cls.EXTRACTOR_PLATFORM_HOSTS
+
+    @classmethod
+    def is_direct_media_url(cls, url: str) -> bool:
+        parsed = urlparse(url)
+        path = (parsed.path or "").lower()
+        return any(path.endswith(ext) for ext in cls.DIRECT_MEDIA_EXTENSIONS)
+
+    @classmethod
+    def should_prefer_ytdlp(cls, url: str) -> bool:
+        if cls.is_extractor_platform_url(url):
+            return True
+        return not cls.is_direct_media_url(url)
 
     @staticmethod
     def _looks_like_video_file(path: str) -> bool:
@@ -125,19 +162,37 @@ class VideoDownloader:
         Download video to a temporary file.
         Returns: DownloadedVideo metadata or None on failure.
         """
-        try:
-            if VideoDownloader.is_youtube_url(url):
-                bt.logging.info("Detected YouTube URL. Downloading with yt-dlp.")
-                downloaded_video = VideoDownloader._download_with_ytdlp(url, timeout)
-            else:
-                downloaded_video = VideoDownloader._download_with_requests(url, timeout)
+        attempts = []
+        if VideoDownloader.should_prefer_ytdlp(url):
+            bt.logging.info("Downloader strategy: yt-dlp first, HTTP fallback.")
+            attempts = [
+                ("yt-dlp", VideoDownloader._download_with_ytdlp),
+                ("http", VideoDownloader._download_with_requests),
+            ]
+        else:
+            bt.logging.info("Downloader strategy: HTTP first, yt-dlp fallback.")
+            attempts = [
+                ("http", VideoDownloader._download_with_requests),
+                ("yt-dlp", VideoDownloader._download_with_ytdlp),
+            ]
 
-            if not VideoDownloader._looks_like_video_file(downloaded_video.path):
-                bt.logging.error(f"Downloaded file is missing or empty for URL: {url}")
+        last_error = None
+        for method_name, downloader in attempts:
+            downloaded_video = None
+            try:
+                downloaded_video = downloader(url, timeout)
+                if not VideoDownloader._looks_like_video_file(downloaded_video.path):
+                    raise RuntimeError("downloaded file is missing or empty")
+
+                bt.logging.info(f"Video download succeeded via {method_name}.")
+                return downloaded_video
+            except Exception as e:
+                last_error = e
+                bt.logging.warning(
+                    f"Video download attempt via {method_name} failed: {e}"
+                )
                 VideoDownloader.cleanup(downloaded_video)
-                return None
 
-            return downloaded_video
-        except Exception as e:
-            bt.logging.error(f"Failed to download video: {e}")
-            return None
+        if last_error is not None:
+            bt.logging.error(f"Failed to download video: {last_error}")
+        return None
