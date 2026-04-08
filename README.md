@@ -106,6 +106,58 @@ export HF_TOKEN=your_token_here
 
 _Or add it to your `.env` file._
 
+### 4. YouTube / yt-dlp Setup (Recommended for Miner)
+
+ChronoSeek miner uses `yt-dlp` for platform URLs (YouTube, Vimeo, etc.).  
+For YouTube reliability, install at least one JS runtime and optionally provide cookies from a logged-in browser.
+
+#### Runtime prerequisites
+
+- Node.js 22+ (recommended), or
+- Deno 2+
+
+Example install commands (Ubuntu):
+
+```bash
+# Node 22 via nvm
+nvm install 22
+nvm use 22
+
+# Deno (optional alternative)
+curl -fsSL https://deno.land/install.sh | sh
+```
+
+Then set runtime paths in `.env` (use whichever you installed):
+
+```bash
+CHRONOSEEK_YTDLP_NODE_PATH=/home/<user>/.nvm/versions/node/v22.x.x/bin/node
+CHRONOSEEK_YTDLP_DENO_PATH=/home/<user>/.deno/bin/deno
+```
+
+#### Cookies for bot/sign-in protected YouTube videos
+
+1. Export cookies from a browser session that can play the target video  
+   (Netscape format `cookies.txt`; extensions like "Get cookies.txt LOCALLY" work).
+2. Save it outside version control (for example: `/home/<user>/secrets/cookies.txt`).
+3. Point miner to the file:
+
+```bash
+CHRONOSEEK_YTDLP_COOKIES=/home/<user>/secrets/cookies.txt
+```
+
+Alternative (desktop/local only):
+
+```bash
+CHRONOSEEK_YTDLP_COOKIES_BROWSER=chrome
+# or: firefox:Default
+```
+
+Notes:
+
+- `CHRONOSEEK_YTDLP_COOKIES` takes precedence over `CHRONOSEEK_YTDLP_COOKIES_BROWSER`.
+- Never commit cookies files. `cookies.txt` is ignored by `.gitignore`.
+- Under PM2, start miner with `poetry run python ...` so the same virtualenv and dependencies are used.
+
 ## 🏃‍♂️ Running your nodes (Testnet: SN298, Mainnet: TBD)
 
 ### 1. Start the Miner
@@ -227,6 +279,10 @@ pm2 logs validator
 | `NETWORK`                             | Network (finney, test, local)                                                     | `test`                  |
 | `PORT`                                | Default value for `axon.port`                                                     | `8000`                  |
 | `MIN_VALIDATOR_STAKE`                 | Minimum validator stake required by the miner                                     | `10000`                 |
+| `CHRONOSEEK_YTDLP_COOKIES`            | Optional path to Netscape `cookies.txt` for YouTube auth                          | ``                      |
+| `CHRONOSEEK_YTDLP_COOKIES_BROWSER`    | Optional browser source for cookies (`chrome`, `firefox:Default`, etc.)           | ``                      |
+| `CHRONOSEEK_YTDLP_NODE_PATH`          | Optional Node.js runtime path used by yt-dlp EJS challenge solver                 | ``                      |
+| `CHRONOSEEK_YTDLP_DENO_PATH`          | Optional Deno runtime path used by yt-dlp EJS challenge solver                    | ``                      |
 | `LOG_LEVEL`                           | Logging verbosity                                                                 | `INFO`                  |
 | `HF_TOKEN`                            | Hugging Face Token                                                                | `None`                  |
 | `HF_HOME`                             | Hugging Face cache directory                                                      | `~/.cache/huggingface`  |

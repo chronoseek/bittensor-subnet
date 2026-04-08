@@ -13,6 +13,7 @@ wheels/
 .env
 .env.local
 .env.*.local
+cookies.txt
 
 # Docker volumes
 validator-data/
