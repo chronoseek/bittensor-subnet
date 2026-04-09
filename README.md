@@ -106,6 +106,58 @@ export HF_TOKEN=your_token_here
 
 _Or add it to your `.env` file._
 
+### 4. YouTube / yt-dlp Setup (Recommended for Miner)
+
+ChronoSeek miner uses `yt-dlp` for platform URLs (YouTube, Vimeo, etc.).  
+For YouTube reliability, install at least one JS runtime and optionally provide cookies from a logged-in browser.
+
+#### Runtime prerequisites
+
+- Node.js 22+ (recommended), or
+- Deno 2+
+
+Example install commands (Ubuntu):
+
+```bash
+# Node 22 via nvm
+nvm install 22
+nvm use 22
+
+# Deno (optional alternative)
+curl -fsSL https://deno.land/install.sh | sh
+```
+
+Then set runtime paths in `.env` (use whichever you installed):
+
+```bash
+CHRONOSEEK_YTDLP_NODE_PATH=/home/<user>/.nvm/versions/node/v22.x.x/bin/node
+CHRONOSEEK_YTDLP_DENO_PATH=/home/<user>/.deno/bin/deno
+```
+
+#### Cookies for bot/sign-in protected YouTube videos
+
+1. Export cookies from a browser session that can play the target video  
+   (Netscape format `cookies.txt`; extensions like "Get cookies.txt LOCALLY" work).
+2. Save it outside version control (for example: `/home/<user>/secrets/cookies.txt`).
+3. Point miner to the file:
+
+```bash
+CHRONOSEEK_YTDLP_COOKIES=/home/<user>/secrets/cookies.txt
+```
+
+Alternative (desktop/local only):
+
+```bash
+CHRONOSEEK_YTDLP_COOKIES_BROWSER=chrome
+# or: firefox:Default
+```
+
+Notes:
+
+- `CHRONOSEEK_YTDLP_COOKIES` takes precedence over `CHRONOSEEK_YTDLP_COOKIES_BROWSER`.
+- Never commit cookies files. `cookies.txt` is ignored by `.gitignore`.
+- Under PM2, start miner with `poetry run python ...` so the same virtualenv and dependencies are used.
+
 ## 🏃‍♂️ Running your nodes (Testnet: SN298, Mainnet: TBD)
 
 ### 1. Start the Miner
@@ -145,16 +197,19 @@ Supported endpoints:
 - `GET /health`
 - `GET /capabilities`
 - `POST /search`
+- `POST /search/stream`
 
-The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. When gateway-level failures occur, the validator returns structured protocol errors using the same `ProtocolError` envelope.
+The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. It waits for all queried miners to finish before aggregating and ranking the combined result set. This preserves the existing synchronous behavior for API consumers that want the fullest available aggregate.
+The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once miner queries are dispatched, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
 The `/capabilities` endpoint exposes gateway metadata such as the supported protocol versions so upstream platform services can verify compatibility at startup.
 
 Gateway behavior:
 
-- the validator queries several miners, ranked by the validator's current moving scores
-- it aggregates the returned windows across those miners
-- it returns the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
-- the response remains compatible with the shared protocol contract in the `git/protocol` repo
+- both search endpoints query several miners, ranked by the validator's current moving scores
+- `POST /search` aggregates the returned windows across all completed miner queries before responding
+- `POST /search/stream` keeps the connection open and yields incremental usable results as miner responses arrive
+- both return the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
+- the response remains compatible with the shared protocol contract [here](https://github.com/chronoseek/protocol)
 
 Example:
 
@@ -227,6 +282,10 @@ pm2 logs validator
 | `NETWORK`                             | Network (finney, test, local)                                                     | `test`                  |
 | `PORT`                                | Default value for `axon.port`                                                     | `8000`                  |
 | `MIN_VALIDATOR_STAKE`                 | Minimum validator stake required by the miner                                     | `10000`                 |
+| `CHRONOSEEK_YTDLP_COOKIES`            | Optional path to Netscape `cookies.txt` for YouTube auth                          | ``                      |
+| `CHRONOSEEK_YTDLP_COOKIES_BROWSER`    | Optional browser source for cookies (`chrome`, `firefox:Default`, etc.)           | ``                      |
+| `CHRONOSEEK_YTDLP_NODE_PATH`          | Optional Node.js runtime path used by yt-dlp EJS challenge solver                 | ``                      |
+| `CHRONOSEEK_YTDLP_DENO_PATH`          | Optional Deno runtime path used by yt-dlp EJS challenge solver                    | ``                      |
 | `LOG_LEVEL`                           | Logging verbosity                                                                 | `INFO`                  |
 | `HF_TOKEN`                            | Hugging Face Token                                                                | `None`                  |
 | `HF_HOME`                             | Hugging Face cache directory                                                      | `~/.cache/huggingface`  |
@@ -241,8 +300,9 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_CACHE_TTL_HOURS`  | TTL for cached video availability checks                                          | `24`                    |
 | `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
 | `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
+| `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `60`                    |
 | `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/health`, and `/capabilities` API       | `0`                     |
 | `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
 | `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
-| `VALIDATOR_API_MINER_TIMEOUT_SECONDS` | Per-miner timeout for validator API search fanout                                 | `60`                    |
+| `VALIDATOR_API_MINER_TIMEOUT_SECONDS` | Per-miner timeout for validator API search fanout                                 | `50`                    |
