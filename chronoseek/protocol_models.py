@@ -2,6 +2,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
+from chronoseek.config import PROTOCOL_VERSION
+
 
 class VideoSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -12,7 +14,7 @@ class VideoSource(BaseModel):
 class VideoSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal["2026-03-01"] = "2026-03-01"
+    protocol_version: Literal["2026-04-10"] = PROTOCOL_VERSION
     request_id: str | None = None
     video: VideoSource
     query: str = Field(min_length=1)
@@ -53,7 +55,7 @@ class VideoSearchResult(BaseModel):
 class VideoSearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal["2026-03-01"] = "2026-03-01"
+    protocol_version: Literal["2026-04-10"] = PROTOCOL_VERSION
     request_id: str | None = None
     status: Literal["accepted", "processing", "completed", "failed"] = "completed"
     results: list[VideoSearchResult] = Field(default_factory=list)
@@ -80,5 +82,5 @@ class ProtocolErrorPayload(BaseModel):
 class ProtocolError(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal["2026-03-01"] = "2026-03-01"
+    protocol_version: Literal["2026-04-10"] = PROTOCOL_VERSION
     error: ProtocolErrorPayload

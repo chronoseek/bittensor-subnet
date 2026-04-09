@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+from chronoseek.config import PROTOCOL_VERSION
 from chronoseek.protocol_models import (
     ProtocolError,
     VideoSearchRequest,
@@ -99,7 +100,7 @@ async def search(
             request_id=payload.request_id,
         )
 
-    if payload.protocol_version != "2026-03-01":
+    if payload.protocol_version != PROTOCOL_VERSION:
         return build_protocol_error(
             code="UNSUPPORTED_PROTOCOL_VERSION",
             message="The miner does not support this protocol version.",

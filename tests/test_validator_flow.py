@@ -231,7 +231,7 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
-            "protocol_version": "2026-03-01",
+            "protocol_version": "2026-04-10",
             "request_id": "req-1",
             "status": "completed",
             "results": [],

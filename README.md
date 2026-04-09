@@ -197,16 +197,19 @@ Supported endpoints:
 - `GET /health`
 - `GET /capabilities`
 - `POST /search`
+- `POST /search/stream`
 
-The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. When gateway-level failures occur, the validator returns structured protocol errors using the same `ProtocolError` envelope.
+The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. It waits for all queried miners to finish before aggregating and ranking the combined result set. This preserves the existing synchronous behavior for API consumers that want the fullest available aggregate.
+The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once miner queries are dispatched, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
 The `/capabilities` endpoint exposes gateway metadata such as the supported protocol versions so upstream platform services can verify compatibility at startup.
 
 Gateway behavior:
 
-- the validator queries several miners, ranked by the validator's current moving scores
-- it aggregates the returned windows across those miners
-- it returns the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
-- the response remains compatible with the shared protocol contract in the `git/protocol` repo
+- both search endpoints query several miners, ranked by the validator's current moving scores
+- `POST /search` aggregates the returned windows across all completed miner queries before responding
+- `POST /search/stream` keeps the connection open and yields incremental usable results as miner responses arrive
+- both return the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
+- the response remains compatible with the shared protocol contract [here](https://github.com/chronoseek/protocol)
 
 Example:
 
