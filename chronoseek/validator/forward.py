@@ -1,6 +1,5 @@
 import httpx
 import time
-import logging
 import asyncio
 import json
 from uuid import uuid4
@@ -15,7 +14,6 @@ from chronoseek.protocol_models import (
 from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
 
-logger = logging.getLogger(__name__)
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
 
@@ -37,6 +35,7 @@ class MinerQueryResult:
 async def query_miner(
     client: httpx.AsyncClient,
     uid: int,
+    hotkey: str,
     endpoint: str,
     request: VideoSearchRequest,
     wallet: bt.Wallet,
@@ -65,6 +64,7 @@ async def query_miner(
         )
         resp.raise_for_status()
         latency = time.time() - start_time
+        bt.logging.info(f"Query miner {uid} ({hotkey}, {endpoint}) response: {resp.json()}")
         return MinerQueryResult(
             response=VideoSearchResponse(**resp.json()), latency=latency
         )
@@ -82,8 +82,8 @@ async def query_miner(
         except (ValueError, json.JSONDecodeError, TypeError):
             pass
 
-        logger.warning(
-            f"Failed to query miner {uid} ({wallet.hotkey.ss58_address}, {endpoint}): {failure.message}"
+        bt.logging.warning(
+            f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
@@ -92,8 +92,8 @@ async def query_miner(
         )
     except httpx.TimeoutException as exc:
         failure = MinerQueryFailure(kind="timeout", message=str(exc))
-        logger.warning(
-            f"Failed to query miner {uid} {uid} ({wallet.hotkey.ss58_address}, {endpoint}): {failure.message}"
+        bt.logging.warning(
+            f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
@@ -102,8 +102,8 @@ async def query_miner(
         )
     except httpx.ConnectError as exc:
         failure = MinerQueryFailure(kind="connect_error", message=str(exc))
-        logger.warning(
-            f"Failed to query miner {uid} ({wallet.hotkey.ss58_address}, {endpoint}): {failure.message}"
+        bt.logging.warning(
+            f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
@@ -112,8 +112,8 @@ async def query_miner(
         )
     except Exception as exc:
         failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
-        logger.warning(
-            f"Failed to query miner {uid} ({wallet.hotkey.ss58_address}, {endpoint}): {failure.message}"
+        bt.logging.warning(
+            f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
             response=VideoSearchResponse(results=[]),
@@ -125,6 +125,7 @@ async def query_miner(
 async def query_uid(
     semaphore: asyncio.Semaphore,
     uid: int,
+    hotkey: str,
     endpoint: str,
     client: httpx.AsyncClient,
     request_model: VideoSearchRequest,
@@ -137,6 +138,7 @@ async def query_uid(
         result = await query_miner(
             client,
             uid,
+            hotkey,
             endpoint,
             request_model,
             wallet,
@@ -243,10 +245,12 @@ async def run_step(
             continue
 
         endpoint = f"http://{axon.ip}:{axon.port}"
+        hotkey = metagraph.hotkeys[uid]
         tasks.append(
             query_uid(
                 semaphore,
                 int(uid),
+                hotkey,
                 endpoint,
                 client,
                 request_model,
