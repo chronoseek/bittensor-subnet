@@ -23,7 +23,8 @@ class ValidatorGatewayRuntime:
     scores: np.ndarray
     score_lock: Lock
     max_miners_per_request: int
-    miner_request_timeout_seconds: float = 60.0
+    sync_miner_request_timeout_seconds: float = 60.0
+    stream_miner_request_timeout_seconds: float = 60.0
 
 
 def build_protocol_error(
@@ -159,12 +160,12 @@ async def _query_ranked_miners(
                 endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
                 request=payload,
                 wallet=runtime.wallet,
-                timeout_seconds=runtime.miner_request_timeout_seconds,
+                timeout_seconds=runtime.sync_miner_request_timeout_seconds,
             ),
         )
 
     async with httpx.AsyncClient(
-        timeout=runtime.miner_request_timeout_seconds
+        timeout=runtime.sync_miner_request_timeout_seconds
     ) as client:
         tasks = [
             asyncio.create_task(run_query(uid))
@@ -205,7 +206,7 @@ async def _stream_ranked_miners(runtime: ValidatorGatewayRuntime, payload: Video
         )
 
         async with httpx.AsyncClient(
-            timeout=runtime.miner_request_timeout_seconds
+            timeout=runtime.stream_miner_request_timeout_seconds
         ) as client:
             async def run_query(uid: int):
                 hotkeys = getattr(runtime.metagraph, "hotkeys", [])
@@ -218,7 +219,7 @@ async def _stream_ranked_miners(runtime: ValidatorGatewayRuntime, payload: Video
                         endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
                         request=payload,
                         wallet=runtime.wallet,
-                        timeout_seconds=runtime.miner_request_timeout_seconds,
+                        timeout_seconds=runtime.stream_miner_request_timeout_seconds,
                     ),
                 )
 

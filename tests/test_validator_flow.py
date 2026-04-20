@@ -79,7 +79,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 scores=seed_scores_from_metagraph(mock_metagraph),
                 score_lock=MagicMock(),
                 max_miners_per_request=3,
-                miner_request_timeout_seconds=60.0,
+                sync_miner_request_timeout_seconds=60.0,
+                stream_miner_request_timeout_seconds=60.0,
             )
             await run_validator_loop(
                 mock_subtensor,
@@ -181,7 +182,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 scores=seed_scores_from_metagraph(mock_metagraph),
                 score_lock=threading.Lock(),
                 max_miners_per_request=3,
-                miner_request_timeout_seconds=60.0,
+                sync_miner_request_timeout_seconds=60.0,
+                stream_miner_request_timeout_seconds=60.0,
             )
             await run_validator_loop(
                 mock_subtensor,
@@ -241,7 +243,14 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         client.post.return_value = mock_response
         mock_generate_header.return_value = {"X-Test": "1"}
 
-        await query_miner(client, 1, "127.0.0.1:8000", request, mock_wallet)
+        await query_miner(
+            client,
+            1,
+            "hk-1",
+            "127.0.0.1:8000",
+            request,
+            mock_wallet,
+        )
 
         header_body = mock_generate_header.call_args.args[1]
         self.assertEqual(header_body["video"]["url"], "https://example.com/video.mp4")

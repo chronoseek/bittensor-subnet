@@ -305,4 +305,5 @@ pm2 logs validator
 | `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
 | `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
-| `VALIDATOR_API_MINER_TIMEOUT_SECONDS` | Per-miner timeout for validator API search fanout                                 | `50`                    |
+| `VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS`   | Per-miner timeout for sync validator API search fanout                      | `50`                    |
+| `VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS` | Per-miner timeout for streaming validator API search fanout                 | `60`                    |

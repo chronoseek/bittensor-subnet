@@ -31,7 +31,8 @@ def test_gateway_health_endpoint():
         scores=np.zeros(2),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
-        miner_request_timeout_seconds=60.0,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
     )
 
     client = TestClient(create_validator_gateway(runtime))
@@ -48,7 +49,8 @@ def test_gateway_capabilities_endpoint():
         scores=np.zeros(2),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
-        miner_request_timeout_seconds=60.0,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
     )
 
     client = TestClient(create_validator_gateway(runtime))
@@ -70,7 +72,8 @@ def test_gateway_search_returns_protocol_response(mock_query_miner):
         scores=np.array([0.9, 0.1]),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
-        miner_request_timeout_seconds=60.0,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
     )
     mock_query_miner.side_effect = [
         MinerQueryResult(
@@ -127,7 +130,8 @@ def test_gateway_search_returns_structured_timeout_error(mock_query_miner):
         scores=np.array([0.9, 0.1]),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
-        miner_request_timeout_seconds=60.0,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
     )
     mock_query_miner.return_value = MinerQueryResult(
         response=VideoSearchResponse(results=[]),
@@ -160,7 +164,8 @@ def test_gateway_search_surfaces_video_fetch_failure(mock_query_miner):
         scores=np.array([0.9, 0.1]),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
-        miner_request_timeout_seconds=60.0,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
     )
     mock_query_miner.side_effect = [
         MinerQueryResult(
@@ -211,7 +216,8 @@ def test_gateway_stream_emits_incremental_results(mock_query_miner):
         scores=np.array([0.9, 0.1]),
         score_lock=threading.Lock(),
         max_miners_per_request=2,
-        miner_request_timeout_seconds=60.0,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
     )
 
     async def side_effect(**kwargs):

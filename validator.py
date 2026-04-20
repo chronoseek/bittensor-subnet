@@ -313,7 +313,7 @@ def get_config():
         "--enable-validator-api",
         action="store_true",
         default=os.getenv("ENABLE_VALIDATOR_API", "0") in {"1", "true", "True"},
-        help="Enable the optional public validator API with /search and /health endpoints.",
+        help="Enable the optional public validator API with /search, /search/stream, /health, and /capabilities endpoints.",
     )
     parser.add_argument(
         "--enable-synthetic-evaluation",
@@ -347,10 +347,16 @@ def get_config():
         help="Maximum number of miners the optional validator API will query per request.",
     )
     parser.add_argument(
-        "--validator-api-miner-timeout-seconds",
+        "--validator-api-sync-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("VALIDATOR_API_MINER_TIMEOUT_SECONDS", "50")),
-        help="Per-miner timeout in seconds for optional validator API search requests.",
+        default=float(os.getenv("VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS", "50")),
+        help="Per-miner timeout in seconds for sync validator API search requests.",
+    )
+    parser.add_argument(
+        "--validator-api-stream-miner-timeout-seconds",
+        type=float,
+        default=float(os.getenv("VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS", "60")),
+        help="Per-miner timeout in seconds for streaming validator API search requests.",
     )
     parser.add_argument(
         "--hf-cache-dir",
@@ -451,8 +457,11 @@ def main():
             scores=seed_scores_from_metagraph(metagraph),
             score_lock=threading.Lock(),
             max_miners_per_request=max(1, int(config.validator_api_max_miners)),
-            miner_request_timeout_seconds=max(
-                1.0, float(config.validator_api_miner_timeout_seconds)
+            sync_miner_request_timeout_seconds=max(
+                1.0, float(config.validator_api_sync_miner_timeout_seconds)
+            ),
+            stream_miner_request_timeout_seconds=max(
+                1.0, float(config.validator_api_stream_miner_timeout_seconds)
             ),
         )
 
