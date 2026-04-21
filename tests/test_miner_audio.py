@@ -53,7 +53,7 @@ def test_fuse_visual_audio_timeline_returns_vision_only_without_audio():
     assert fusion_mode == "vision_only"
 
 
-def test_fuse_visual_audio_timeline_blends_visual_and_audio_scores():
+def test_fuse_visual_audio_timeline_applies_audio_as_boost_only():
     logic = make_logic()
     visual_ts = (0.0, 1.0, 2.0)
     visual_scores = np.array([0.2, 0.4, 0.6], dtype=np.float32)
@@ -72,9 +72,9 @@ def test_fuse_visual_audio_timeline_blends_visual_and_audio_scores():
         fused_scores,
         np.array(
             [
-                0.6 * 0.2 + 0.4 * 1.0,
-                0.6 * 0.4 + 0.4 * 1.0,
-                0.6 * 0.6 + 0.4 * 0.0,
+                0.2 + 0.25 * (1.0 - 0.2),
+                0.4 + 0.25 * (1.0 - 0.4),
+                0.6,
             ],
             dtype=np.float32,
         ),

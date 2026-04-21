@@ -47,8 +47,7 @@ class MinerLogic:
     REFINE_SKIP_PEAK_MIN = 0.84
     REFINE_SKIP_MARGIN_MIN = 0.18
     REFINE_SKIP_P90_GAP_MIN = 0.15
-    VISION_WEIGHT_WITH_AUDIO = 0.6
-    AUDIO_WEIGHT = 0.4
+    AUDIO_BOOST_FACTOR = 0.25
 
     def __init__(self):
         # Initialize ML engine once at startup
@@ -258,7 +257,7 @@ class MinerLogic:
                     )
                     bt.logging.info(
                         "Fusion mode: vision_audio "
-                        f"(vision={self.VISION_WEIGHT_WITH_AUDIO:.1f}, audio={self.AUDIO_WEIGHT:.1f})"
+                        f"(vision primary, audio boost factor={self.AUDIO_BOOST_FACTOR:.2f})"
                     )
                 else:
                     bt.logging.info(
@@ -484,9 +483,10 @@ class MinerLogic:
             return visual_ts, visual_scores, "vision_only"
 
         fused_scores = (
-            self.VISION_WEIGHT_WITH_AUDIO * visual_interp
-            + self.AUDIO_WEIGHT * audio_scores
+            visual_interp
+            + self.AUDIO_BOOST_FACTOR * np.maximum(0.0, audio_scores - visual_interp)
         ).astype(np.float32)
+        fused_scores = np.clip(fused_scores, 0.0, 1.0).astype(np.float32)
         return tuple(float(t) for t in fused_ts_arr), fused_scores, "vision_audio"
 
     def _interval_iou(
