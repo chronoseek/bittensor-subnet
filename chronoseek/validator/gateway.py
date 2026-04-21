@@ -1,19 +1,19 @@
 import asyncio
 from dataclasses import dataclass
+import json
 from threading import Lock
 from typing import Any
 
 import httpx
 import numpy as np
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 import bittensor as bt
 
+from chronoseek.config import PROTOCOL_VERSION
 from chronoseek.protocol_models import ProtocolError, VideoSearchRequest, VideoSearchResponse
 from chronoseek.validator.forward import query_miner
-
-PROTOCOL_VERSION = "2026-03-01"
 
 
 @dataclass
@@ -23,7 +23,8 @@ class ValidatorGatewayRuntime:
     scores: np.ndarray
     score_lock: Lock
     max_miners_per_request: int
-    miner_request_timeout_seconds: float = 60.0
+    sync_miner_request_timeout_seconds: float = 60.0
+    stream_miner_request_timeout_seconds: float = 60.0
 
 
 def build_protocol_error(
@@ -84,6 +85,240 @@ def _dedupe_and_rank_results(results, top_k: int):
     return deduped
 
 
+def _derive_gateway_failure(failures):
+    protocol_codes = [
+        failure.protocol_code for failure in failures if failure and failure.protocol_code
+    ]
+    unique_protocol_codes = set(protocol_codes)
+
+    if len(unique_protocol_codes) == 1:
+        protocol_code = next(iter(unique_protocol_codes))
+        if protocol_code == "VIDEO_FETCH_FAILED":
+            return (
+                "VIDEO_FETCH_FAILED",
+                "The video URL could not be downloaded. Check that the URL is valid and publicly accessible.",
+                502,
+            )
+        if protocol_code == "VIDEO_UNREADABLE":
+            return (
+                "VIDEO_UNREADABLE",
+                "The video was fetched but could not be decoded. Try a different video URL or file format.",
+                422,
+            )
+
+    if failures and all(failure.kind == "timeout" for failure in failures):
+        return ("TIMEOUT", "All miner queries timed out.", 504)
+
+    return ("INTERNAL_ERROR", "No miner returned a usable search result.", 502)
+
+
+def _build_completed_response(
+    payload: VideoSearchRequest,
+    ranked_uids: list[int],
+    miner_results: list[tuple[int, Any]],
+) -> VideoSearchResponse | None:
+    aggregated_results = []
+    successful_uids = []
+    for uid, query_result in miner_results:
+        if query_result.response.results:
+            successful_uids.append(uid)
+            aggregated_results.extend(query_result.response.results)
+
+    if not aggregated_results:
+        return None
+
+    ranked_results = _dedupe_and_rank_results(aggregated_results, payload.top_k)
+    return VideoSearchResponse(
+        request_id=payload.request_id,
+        status="completed",
+        results=ranked_results,
+        miner_metadata={
+            "source": "validator-gateway",
+            "selected_uids": successful_uids,
+            "queried_uids": ranked_uids,
+        },
+    )
+
+
+def _format_sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _query_ranked_miners(
+    runtime: ValidatorGatewayRuntime,
+    payload: VideoSearchRequest,
+    ranked_uids: list[int],
+):
+    async def run_query(uid: int):
+        hotkeys = getattr(runtime.metagraph, "hotkeys", [])
+        return (
+            uid,
+            await query_miner(
+                client=client,
+                uid=uid,
+                hotkey=hotkeys[uid] if uid < len(hotkeys) else f"uid-{uid}",
+                endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
+                request=payload,
+                wallet=runtime.wallet,
+                timeout_seconds=runtime.sync_miner_request_timeout_seconds,
+            ),
+        )
+
+    async with httpx.AsyncClient(
+        timeout=runtime.sync_miner_request_timeout_seconds
+    ) as client:
+        tasks = [
+            asyncio.create_task(run_query(uid))
+            for uid in ranked_uids
+        ]
+
+        miner_results: dict[int, Any] = {}
+        try:
+            for completed in asyncio.as_completed(tasks):
+                uid, result = await completed
+                miner_results[uid] = result
+
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    return [
+        (completed_uid, miner_results[completed_uid])
+        for completed_uid in ranked_uids
+        if completed_uid in miner_results
+    ]
+
+
+async def _stream_ranked_miners(runtime: ValidatorGatewayRuntime, payload: VideoSearchRequest, ranked_uids: list[int]):
+    request_id = payload.request_id or "unknown-request"
+
+    async def event_stream():
+        yield _format_sse(
+            "accepted",
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": payload.request_id,
+                "status": "accepted",
+                "queried_uids": ranked_uids,
+            },
+        )
+
+        async with httpx.AsyncClient(
+            timeout=runtime.stream_miner_request_timeout_seconds
+        ) as client:
+            async def run_query(uid: int):
+                hotkeys = getattr(runtime.metagraph, "hotkeys", [])
+                return (
+                    uid,
+                    await query_miner(
+                        client=client,
+                        uid=uid,
+                        hotkey=hotkeys[uid] if uid < len(hotkeys) else f"uid-{uid}",
+                        endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
+                        request=payload,
+                        wallet=runtime.wallet,
+                        timeout_seconds=runtime.stream_miner_request_timeout_seconds,
+                    ),
+                )
+
+            tasks = [asyncio.create_task(run_query(uid)) for uid in ranked_uids]
+            miner_results: dict[int, Any] = {}
+            try:
+                for completed in asyncio.as_completed(tasks):
+                    uid, result = await completed
+                    miner_results[uid] = result
+
+                    if result.response.results:
+                        partial = _build_completed_response(
+                            payload,
+                            ranked_uids,
+                            [
+                                (completed_uid, miner_results[completed_uid])
+                                for completed_uid in ranked_uids
+                                if completed_uid in miner_results
+                            ],
+                        )
+                        if partial is not None:
+                            bt.logging.info(
+                                f"[ORGANIC] Gateway request {request_id} stream update | uid={uid} | result_count={len(partial.results)}"
+                            )
+                            yield _format_sse(
+                                "result",
+                                {
+                                    "protocol_version": PROTOCOL_VERSION,
+                                    "request_id": partial.request_id,
+                                    "status": "processing",
+                                    "results": partial.model_dump(mode="json")["results"],
+                                    "miner_metadata": partial.miner_metadata,
+                                    "source_uid": uid,
+                                },
+                            )
+
+                ordered_results = [
+                    (completed_uid, miner_results[completed_uid])
+                    for completed_uid in ranked_uids
+                    if completed_uid in miner_results
+                ]
+                completed_response = _build_completed_response(
+                    payload,
+                    ranked_uids,
+                    ordered_results,
+                )
+
+                if completed_response is not None:
+                    bt.logging.success(
+                        f"[ORGANIC] Gateway request {request_id} stream completed | successful_uids={completed_response.miner_metadata['selected_uids']} | returned_results={len(completed_response.results)}"
+                    )
+                    yield _format_sse(
+                        "done",
+                        completed_response.model_dump(mode="json"),
+                    )
+                    return
+
+                failures = [
+                    query_result.failure
+                    for _, query_result in ordered_results
+                    if query_result.failure
+                ]
+                error_code, error_message, status_code = _derive_gateway_failure(failures)
+                bt.logging.warning(
+                    f"[ORGANIC] Gateway request {request_id} stream failed | code={error_code} | queried_uids={ranked_uids}"
+                )
+                yield _format_sse(
+                    "error",
+                    {
+                        "protocol_version": PROTOCOL_VERSION,
+                        "request_id": payload.request_id,
+                        "status": "failed",
+                        "error": {
+                            "code": error_code,
+                            "message": error_message,
+                            "details": {
+                                "status_code": status_code,
+                                "queried_uids": ranked_uids,
+                            },
+                        },
+                    },
+                )
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
     app = FastAPI()
 
@@ -99,8 +334,7 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
             "protocol_versions": [PROTOCOL_VERSION],
         }
 
-    @app.post("/search", response_model=VideoSearchResponse)
-    async def search(payload: VideoSearchRequest):
+    async def handle_search(payload: VideoSearchRequest):
         request_id = payload.request_id or "unknown-request"
         bt.logging.info(
             f"[ORGANIC] Gateway request {request_id} | Query: {payload.query} | Video: {payload.video_url} | top_k={payload.top_k}"
@@ -121,22 +355,11 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
             f"[ORGANIC] Gateway request {request_id} | Candidate miners: {ranked_uids}"
         )
 
-        async with httpx.AsyncClient(
-            timeout=runtime.miner_request_timeout_seconds
-        ) as client:
-            results = await asyncio.gather(
-                *[
-                    query_miner(
-                        client=client,
-                        endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
-                        request=payload,
-                        wallet=runtime.wallet,
-                        timeout_seconds=runtime.miner_request_timeout_seconds,
-                    )
-                    for uid in ranked_uids
-                ]
-            )
-        miner_results = list(zip(ranked_uids, results))
+        miner_results = await _query_ranked_miners(
+            runtime,
+            payload,
+            ranked_uids,
+        )
 
         aggregated_results = []
         successful_uids = []
@@ -166,18 +389,14 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
             for _, query_result in miner_results
             if query_result.failure
         ]
-        if failures and all(failure.kind == "timeout" for failure in failures):
-            error_code = "TIMEOUT"
-            error_message = "All miner queries timed out."
-            status_code = 504
-        elif ranked_uids:
-            error_code = "INTERNAL_ERROR"
-            error_message = "No miner returned a usable search result."
-            status_code = 502
+        if ranked_uids:
+            error_code, error_message, status_code = _derive_gateway_failure(failures)
         else:
-            error_code = "INVALID_REQUEST"
-            error_message = "No reachable miners are currently available."
-            status_code = 503
+            error_code, error_message, status_code = (
+                "INVALID_REQUEST",
+                "No reachable miners are currently available.",
+                503,
+            )
 
         bt.logging.warning(
             f"[ORGANIC] Gateway request {request_id} failed | code={error_code} | queried_uids={ranked_uids}"
@@ -202,5 +421,29 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
                 ],
             },
         )
+
+    @app.post("/search", response_model=VideoSearchResponse)
+    async def search(payload: VideoSearchRequest):
+        return await handle_search(payload)
+
+    @app.post("/search/stream")
+    async def search_stream(payload: VideoSearchRequest):
+        request_id = payload.request_id or "unknown-request"
+        bt.logging.info(
+            f"[ORGANIC] Gateway stream request {request_id} | Query: {payload.query} | Video: {payload.video_url} | top_k={payload.top_k}"
+        )
+        ranked_uids = _rank_candidate_uids(runtime)
+        if not ranked_uids:
+            return build_protocol_error(
+                code="INTERNAL_ERROR",
+                message="No reachable miners are currently available.",
+                status_code=503,
+                request_id=payload.request_id,
+            )
+
+        bt.logging.info(
+            f"[ORGANIC] Gateway stream request {request_id} | Candidate miners: {ranked_uids}"
+        )
+        return await _stream_ranked_miners(runtime, payload, ranked_uids)
 
     return app

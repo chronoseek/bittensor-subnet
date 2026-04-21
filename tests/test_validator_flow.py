@@ -66,7 +66,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         # Iteration 1: Miner 0 scores 1.0
         # Iteration 2: Miner 1 scores 0.5
         # ...
-        async def run_step_side_effect(*args):
+        async def run_step_side_effect(*args, **kwargs):
             return [(0, 1.0), (1, 0.5)]
 
         mock_run_step.side_effect = run_step_side_effect
@@ -79,7 +79,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 scores=seed_scores_from_metagraph(mock_metagraph),
                 score_lock=MagicMock(),
                 max_miners_per_request=3,
-                miner_request_timeout_seconds=60.0,
+                sync_miner_request_timeout_seconds=60.0,
+                stream_miner_request_timeout_seconds=60.0,
             )
             await run_validator_loop(
                 mock_subtensor,
@@ -92,6 +93,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     task_split="validation",
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
+                    synthetic_miner_timeout_seconds=60.0,
                     video_availability_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
@@ -168,7 +170,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         mock_subtensor.get_current_block.side_effect = [0, 1]
         stop_event.is_set.side_effect = [False, True]
 
-        async def run_step_side_effect(*args):
+        async def run_step_side_effect(*args, **kwargs):
             return []
 
         mock_run_step.side_effect = run_step_side_effect
@@ -180,7 +182,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 scores=seed_scores_from_metagraph(mock_metagraph),
                 score_lock=threading.Lock(),
                 max_miners_per_request=3,
-                miner_request_timeout_seconds=60.0,
+                sync_miner_request_timeout_seconds=60.0,
+                stream_miner_request_timeout_seconds=60.0,
             )
             await run_validator_loop(
                 mock_subtensor,
@@ -193,6 +196,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     task_split="validation",
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
+                    synthetic_miner_timeout_seconds=60.0,
                     video_availability_cache_path="",
                     accessible_video_cache_path="",
                     inaccessible_video_cache_path="",
@@ -229,7 +233,7 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
-            "protocol_version": "2026-03-01",
+            "protocol_version": "2026-04-10",
             "request_id": "req-1",
             "status": "completed",
             "results": [],
@@ -239,7 +243,14 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         client.post.return_value = mock_response
         mock_generate_header.return_value = {"X-Test": "1"}
 
-        await query_miner(client, "127.0.0.1:8000", request, mock_wallet)
+        await query_miner(
+            client,
+            1,
+            "hk-1",
+            "127.0.0.1:8000",
+            request,
+            mock_wallet,
+        )
 
         header_body = mock_generate_header.call_args.args[1]
         self.assertEqual(header_body["video"]["url"], "https://example.com/video.mp4")

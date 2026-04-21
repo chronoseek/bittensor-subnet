@@ -75,7 +75,7 @@ def main() -> int:
 
     request_id = f"local-test-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     body = {
-        "protocol_version": "2026-03-01",
+        "protocol_version": "2026-04-10",
         "request_id": request_id,
         "video": {"url": args.video_url},
         "query": args.query,

@@ -7,7 +7,7 @@
   "properties": {
     "protocol_version": {
       "type": "string",
-      "const": "2026-03-01"
+      "const": "2026-04-10"
     },
     "request_id": {
       "type": "string",
