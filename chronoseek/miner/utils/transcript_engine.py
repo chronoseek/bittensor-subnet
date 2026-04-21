@@ -24,6 +24,7 @@ class TranscriptEngine:
         self.device = 0 if torch.cuda.is_available() else -1
         self._pipeline = None
         self._disabled = False
+        self._ensure_pipeline()
 
     def _ensure_pipeline(self):
         if self._disabled:
