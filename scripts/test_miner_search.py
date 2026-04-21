@@ -16,6 +16,8 @@ import requests
 
 from chronoseek.epistula import generate_header
 
+DEFAULT_SMOKE_VIDEO_URL = "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
+DEFAULT_SMOKE_QUERY = "a person is on screen"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -28,13 +30,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--video-url",
-        default="https://samplelib.com/lib/preview/mp4/sample-5s.mp4",
+        default=None,
         help="Public video URL for testing",
     )
     parser.add_argument(
         "--query",
-        default="a person is on screen",
+        default=None,
         help="Natural language search query",
+    )
+    parser.add_argument(
+        "--scenario",
+        choices=["smoke", "speech"],
+        default="smoke",
+        help="Use a built-in test scenario when --video-url/--query are not provided.",
     )
     parser.add_argument(
         "--top-k",
@@ -73,12 +81,25 @@ def main() -> int:
         print("Invalid --top-k value. Must be between 1 and 20.")
         return 2
 
+    if args.video_url and args.query:
+        video_url = args.video_url
+        query = args.query
+    elif args.scenario == "speech":
+        print(
+            "The 'speech' scenario requires an explicit --video-url and --query "
+            "for a video that actually contains speech."
+        )
+        return 2
+    else:
+        video_url = DEFAULT_SMOKE_VIDEO_URL
+        query = DEFAULT_SMOKE_QUERY
+
     request_id = f"local-test-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     body = {
         "protocol_version": "2026-04-10",
         "request_id": request_id,
-        "video": {"url": args.video_url},
-        "query": args.query,
+        "video": {"url": video_url},
+        "query": query,
         "top_k": args.top_k,
     }
 
@@ -90,7 +111,10 @@ def main() -> int:
     headers = generate_header(wallet.hotkey, body)
 
     print(f"Sending signed request to: {args.endpoint}")
+    print(f"Scenario:   {args.scenario}")
     print(f"request_id: {request_id}")
+    print(f"video_url:  {video_url}")
+    print(f"query:      {query}")
     response = requests.post(
         args.endpoint,
         json=body,
