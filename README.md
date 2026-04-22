@@ -162,7 +162,7 @@ Notes:
 
 ### 1. Start the Miner
 
-The miner listens for HTTP requests from validators.
+The miner listens for validator HTTP requests, including signed `/search` queries and `/health` liveness checks.
 
 ```bash
 # Starts miner on port 8000
@@ -200,12 +200,15 @@ Supported endpoints:
 - `POST /search/stream`
 
 The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. It waits for all queried miners to finish before aggregating and ranking the combined result set. This preserves the existing synchronous behavior for API consumers that want the fullest available aggregate.
-The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once miner queries are dispatched, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
+The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once the validator has selected currently healthy miners and dispatched the fanout, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
 The `/capabilities` endpoint exposes gateway metadata such as the supported protocol versions so upstream platform services can verify compatibility at startup.
+The `/health` endpoint is intentionally self-identifying. Miner health responses include `service: "miner"` and validator API health responses include `service: "validator-gateway"`, so validator liveness checks do not confuse one role for the other.
 
 Gateway behavior:
 
-- both search endpoints query several miners, ranked by the validator's current moving scores
+- validators maintain a miner liveness snapshot using periodic `/health` checks
+- both search endpoints query several currently healthy miners, ranked by the validator's current moving scores
+- synthetic validator scoring also targets only miners that are currently healthy at liveness sweep time
 - `POST /search` aggregates the returned windows across all completed miner queries before responding
 - `POST /search/stream` keeps the connection open and yields incremental usable results as miner responses arrive
 - both return the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
@@ -301,9 +304,11 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
 | `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
 | `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `60`                    |
-| `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/health`, and `/capabilities` API       | `0`                     |
+| `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/search/stream`, `/health`, and `/capabilities` API | `0`          |
 | `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
 | `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
 | `VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS`   | Per-miner timeout for sync validator API search fanout                      | `50`                    |
 | `VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS` | Per-miner timeout for streaming validator API search fanout                 | `60`                    |
+| `VALIDATOR_MINER_HEALTH_INTERVAL_SECONDS`    | Interval between validator liveness sweeps using miner `/health`            | `60`                    |
+| `VALIDATOR_MINER_HEALTH_TIMEOUT_SECONDS`     | Per-miner timeout for validator liveness checks via miner `/health`         | `5`                     |
