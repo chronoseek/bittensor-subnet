@@ -89,6 +89,47 @@ class CLIPProcessorEngine:
             bt.logging.error(f"Inference failed: {e}")
             return np.array([])
 
+    def compute_text_similarity(self, query: str, texts: List[str]) -> np.ndarray:
+        """
+        Compute cosine similarity scores between a query and a list of transcript texts.
+        Returns a 1D numpy array normalized to [0, 1].
+        """
+        if not texts:
+            return np.array([])
+
+        try:
+            query_features = self._encode_texts([query])
+            text_features = self._encode_texts(list(texts))
+            similarities = torch.matmul(text_features, query_features.T).squeeze(-1)
+            scores = similarities.cpu().numpy().astype(np.float32)
+            if scores.size == 0:
+                return np.array([])
+
+            score_min = float(np.min(scores))
+            score_max = float(np.max(scores))
+            if score_max - score_min < 1e-8:
+                return np.full_like(scores, 0.5, dtype=np.float32)
+
+            return (scores - score_min) / (score_max - score_min)
+        except Exception as e:
+            bt.logging.error(f"Transcript scoring failed: {e}")
+            return np.array([])
+
+    def _encode_texts(self, texts: List[str]) -> torch.Tensor:
+        inputs = self.processor(
+            text=texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+
+        with torch.no_grad():
+            text_features = self.model.get_text_features(**inputs)
+            if not isinstance(text_features, torch.Tensor):
+                text_features = self._extract_feature_tensor(text_features)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        return text_features
+
     @staticmethod
     def _extract_feature_tensor(output) -> torch.Tensor:
         """

@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from threading import Lock
 from typing import Any
@@ -23,8 +23,14 @@ class ValidatorGatewayRuntime:
     scores: np.ndarray
     score_lock: Lock
     max_miners_per_request: int
+    metagraph_lock: Lock = field(default_factory=Lock)
     sync_miner_request_timeout_seconds: float = 60.0
     stream_miner_request_timeout_seconds: float = 60.0
+    responsive_lock: Lock = field(default_factory=Lock)
+    responsive_uids: set[int] = field(default_factory=set)
+    responsive_initialized: bool = False
+    responsive_last_refresh_at: float | None = None
+    last_metagraph_sync_block: int | None = None
 
 
 def build_protocol_error(
@@ -51,17 +57,28 @@ def build_protocol_error(
     )
 
 
-def _rank_candidate_uids(runtime: ValidatorGatewayRuntime) -> list[int]:
+def _get_metagraph_snapshot(runtime: ValidatorGatewayRuntime):
+    with runtime.metagraph_lock:
+        return runtime.metagraph
+
+
+def _rank_candidate_uids(runtime: ValidatorGatewayRuntime, metagraph: bt.Metagraph) -> list[int]:
     with runtime.score_lock:
         current_scores = np.array(runtime.scores, copy=True)
+    with runtime.responsive_lock:
+        responsive_uids = set(runtime.responsive_uids)
+        responsive_initialized = runtime.responsive_initialized
 
     candidates: list[tuple[int, float]] = []
-    for uid in runtime.metagraph.uids:
-        axon = runtime.metagraph.axons[uid]
+    for uid in metagraph.uids:
+        uid = int(uid)
+        axon = metagraph.axons[uid]
         if axon.ip == "0.0.0.0":
             continue
-        score = float(current_scores[int(uid)]) if int(uid) < len(current_scores) else 0.0
-        candidates.append((int(uid), score))
+        if responsive_initialized and uid not in responsive_uids:
+            continue
+        score = float(current_scores[uid]) if uid < len(current_scores) else 0.0
+        candidates.append((uid, score))
 
     candidates.sort(key=lambda item: item[1], reverse=True)
     ranked_uids = [uid for uid, _ in candidates]
@@ -146,18 +163,19 @@ def _format_sse(event: str, data: dict[str, Any]) -> str:
 
 async def _query_ranked_miners(
     runtime: ValidatorGatewayRuntime,
+    metagraph: bt.Metagraph,
     payload: VideoSearchRequest,
     ranked_uids: list[int],
 ):
     async def run_query(uid: int):
-        hotkeys = getattr(runtime.metagraph, "hotkeys", [])
+        hotkeys = getattr(metagraph, "hotkeys", [])
         return (
             uid,
             await query_miner(
                 client=client,
                 uid=uid,
                 hotkey=hotkeys[uid] if uid < len(hotkeys) else f"uid-{uid}",
-                endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
+                endpoint=f"http://{metagraph.axons[uid].ip}:{metagraph.axons[uid].port}",
                 request=payload,
                 wallet=runtime.wallet,
                 timeout_seconds=runtime.sync_miner_request_timeout_seconds,
@@ -191,7 +209,12 @@ async def _query_ranked_miners(
     ]
 
 
-async def _stream_ranked_miners(runtime: ValidatorGatewayRuntime, payload: VideoSearchRequest, ranked_uids: list[int]):
+async def _stream_ranked_miners(
+    runtime: ValidatorGatewayRuntime,
+    metagraph: bt.Metagraph,
+    payload: VideoSearchRequest,
+    ranked_uids: list[int],
+):
     request_id = payload.request_id or "unknown-request"
 
     async def event_stream():
@@ -209,14 +232,14 @@ async def _stream_ranked_miners(runtime: ValidatorGatewayRuntime, payload: Video
             timeout=runtime.stream_miner_request_timeout_seconds
         ) as client:
             async def run_query(uid: int):
-                hotkeys = getattr(runtime.metagraph, "hotkeys", [])
+                hotkeys = getattr(metagraph, "hotkeys", [])
                 return (
                     uid,
                     await query_miner(
                         client=client,
                         uid=uid,
                         hotkey=hotkeys[uid] if uid < len(hotkeys) else f"uid-{uid}",
-                        endpoint=f"http://{runtime.metagraph.axons[uid].ip}:{runtime.metagraph.axons[uid].port}",
+                        endpoint=f"http://{metagraph.axons[uid].ip}:{metagraph.axons[uid].port}",
                         request=payload,
                         wallet=runtime.wallet,
                         timeout_seconds=runtime.stream_miner_request_timeout_seconds,
@@ -324,7 +347,12 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"ok": True}
+        return {
+            "ok": True,
+            "status": "ok",
+            "service": "validator-gateway",
+            "protocol_versions": [PROTOCOL_VERSION],
+        }
 
     @app.get("/capabilities")
     async def capabilities():
@@ -339,14 +367,15 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
         bt.logging.info(
             f"[ORGANIC] Gateway request {request_id} | Query: {payload.query} | Video: {payload.video_url} | top_k={payload.top_k}"
         )
-        ranked_uids = _rank_candidate_uids(runtime)
+        metagraph = _get_metagraph_snapshot(runtime)
+        ranked_uids = _rank_candidate_uids(runtime, metagraph)
         if not ranked_uids:
             bt.logging.warning(
-                f"[ORGANIC] Gateway request {request_id} failed before dispatch: no reachable miners"
+                f"[ORGANIC] Gateway request {request_id} failed before dispatch: no responsive miners"
             )
             return build_protocol_error(
                 code="INTERNAL_ERROR",
-                message="No reachable miners are currently available.",
+                message="No responsive miners are currently available.",
                 status_code=503,
                 request_id=payload.request_id,
             )
@@ -357,6 +386,7 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
 
         miner_results = await _query_ranked_miners(
             runtime,
+            metagraph,
             payload,
             ranked_uids,
         )
@@ -394,7 +424,7 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
         else:
             error_code, error_message, status_code = (
                 "INVALID_REQUEST",
-                "No reachable miners are currently available.",
+                "No responsive miners are currently available.",
                 503,
             )
 
@@ -432,11 +462,12 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
         bt.logging.info(
             f"[ORGANIC] Gateway stream request {request_id} | Query: {payload.query} | Video: {payload.video_url} | top_k={payload.top_k}"
         )
-        ranked_uids = _rank_candidate_uids(runtime)
+        metagraph = _get_metagraph_snapshot(runtime)
+        ranked_uids = _rank_candidate_uids(runtime, metagraph)
         if not ranked_uids:
             return build_protocol_error(
                 code="INTERNAL_ERROR",
-                message="No reachable miners are currently available.",
+                message="No responsive miners are currently available.",
                 status_code=503,
                 request_id=payload.request_id,
             )
@@ -444,6 +475,6 @@ def create_validator_gateway(runtime: ValidatorGatewayRuntime) -> FastAPI:
         bt.logging.info(
             f"[ORGANIC] Gateway stream request {request_id} | Candidate miners: {ranked_uids}"
         )
-        return await _stream_ranked_miners(runtime, payload, ranked_uids)
+        return await _stream_ranked_miners(runtime, metagraph, payload, ranked_uids)
 
     return app

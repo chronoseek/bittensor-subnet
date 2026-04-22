@@ -32,6 +32,19 @@ class MinerQueryResult:
     failure: MinerQueryFailure | None = None
 
 
+@dataclass
+class MinerHealthcheckResult:
+    ok: bool
+    latency: float
+    failure: MinerQueryFailure | None = None
+
+
+def _normalize_endpoint(endpoint: str) -> str:
+    if endpoint.startswith("http"):
+        return endpoint
+    return f"http://{endpoint}"
+
+
 async def query_miner(
     client: httpx.AsyncClient,
     uid: int,
@@ -48,10 +61,7 @@ async def query_miner(
     start_time = time.time()
     try:
         request_payload = request.model_dump(mode="json")
-
-        # Ensure endpoint has scheme
-        if not endpoint.startswith("http"):
-            endpoint = f"http://{endpoint}"
+        endpoint = _normalize_endpoint(endpoint)
 
         # Generate Epistula headers
         headers = generate_header(wallet.hotkey, request_payload)
@@ -122,6 +132,67 @@ async def query_miner(
         )
 
 
+async def check_miner_health(
+    client: httpx.AsyncClient,
+    uid: int,
+    hotkey: str,
+    endpoint: str,
+    timeout_seconds: float = 5.0,
+) -> MinerHealthcheckResult:
+    start_time = time.time()
+    try:
+        endpoint = _normalize_endpoint(endpoint)
+        resp = await client.get(
+            f"{endpoint}/health",
+            timeout=timeout_seconds,
+        )
+        resp.raise_for_status()
+        latency = time.time() - start_time
+        payload = resp.json()
+        if (
+            not isinstance(payload, dict)
+            or payload.get("status") != "ok"
+            or payload.get("service") != "miner"
+        ):
+            raise ValueError("unexpected health response")
+        bt.logging.debug(
+            f"Health check miner {uid} ({hotkey}, {endpoint}) response: {payload}"
+        )
+        return MinerHealthcheckResult(
+            ok=True,
+            latency=latency,
+        )
+
+    except httpx.HTTPStatusError as exc:
+        failure = MinerQueryFailure(
+            kind="http_status",
+            message=str(exc),
+            status_code=exc.response.status_code,
+        )
+        bt.logging.warning(
+            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
+        )
+        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
+    except httpx.TimeoutException as exc:
+        failure = MinerQueryFailure(kind="timeout", message=str(exc))
+        bt.logging.warning(
+            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
+        )
+        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
+    except httpx.ConnectError as exc:
+        failure = MinerQueryFailure(kind="connect_error", message=str(exc))
+        bt.logging.warning(
+            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
+        )
+        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
+    except Exception as exc:
+        failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
+        bt.logging.warning(
+            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
+        )
+        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
+
+
 async def query_uid(
     semaphore: asyncio.Semaphore,
     uid: int,
@@ -178,6 +249,7 @@ async def run_step(
     wallet: bt.Wallet,
     client: httpx.AsyncClient,
     miner_timeout_seconds: float = 60.0,
+    candidate_uids: List[int] | None = None,
 ) -> List[Tuple[int, float]]:
     """
     Run a single validation step:
@@ -238,8 +310,12 @@ async def run_step(
 
     tasks = []
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MINER_REQUESTS)
+    uids_to_query = candidate_uids if candidate_uids is not None else metagraph.uids
 
-    for uid in metagraph.uids:
+    for uid in uids_to_query:
+        uid = int(uid)
+        if uid < 0 or uid >= len(metagraph.axons):
+            continue
         axon = metagraph.axons[uid]
         if axon.ip == "0.0.0.0":
             continue
@@ -260,8 +336,12 @@ async def run_step(
             )
         )
 
-    if tasks:
-        scores.extend(await asyncio.gather(*tasks))
+    if not tasks:
+        bt.logging.warning("No eligible miners were selected for this validation step.")
+        bt.logging.info("=" * 50)
+        return []
+
+    scores.extend(await asyncio.gather(*tasks))
 
     bt.logging.info("=" * 50)
     return scores

@@ -6,9 +6,11 @@ from chronoseek.protocol_models import VideoSearchResult
 import bittensor as bt
 
 # Modular components
+from chronoseek.miner.utils.audio_extractor import AudioExtractor
 from chronoseek.miner.utils.video_downloader import VideoDownloader
 from chronoseek.miner.utils.frame_extractor import FrameExtractor
 from chronoseek.miner.utils.clip_engine import CLIPProcessorEngine
+from chronoseek.miner.utils.transcript_engine import TranscriptEngine, TranscriptSegment
 
 
 class SearchPipelineError(Exception):
@@ -45,10 +47,12 @@ class MinerLogic:
     REFINE_SKIP_PEAK_MIN = 0.84
     REFINE_SKIP_MARGIN_MIN = 0.18
     REFINE_SKIP_P90_GAP_MIN = 0.15
+    AUDIO_BOOST_FACTOR = 0.25
 
     def __init__(self):
         # Initialize ML engine once at startup
         self.ml_engine = CLIPProcessorEngine(model_id="openai/clip-vit-base-patch32")
+        self.transcript_engine = TranscriptEngine(model_id="openai/whisper-tiny")
 
     def search(
         self, video_url: str, query: str, top_k: int = 5
@@ -70,6 +74,8 @@ class MinerLogic:
         coarse_infer_sec = 0.0
         fine_extract_sec = 0.0
         fine_infer_sec = 0.0
+        audio_extract_sec = 0.0
+        transcript_sec = 0.0
         heuristic_sec = 0.0
 
         bt.logging.info(f">>> Step 1: Downloading Video")
@@ -209,11 +215,61 @@ class MinerLogic:
                 else:
                     bt.logging.warning("Fine extraction empty; using coarse only.")
 
-            # 5. Search Heuristics (Thresholding & Merging)
-            bt.logging.info(">>> Step 4: Applying search heuristics")
+            # 5. Audio extraction + transcript scoring
+            bt.logging.info(">>> Step 4: Extracting audio")
+            t0 = time.perf_counter()
+            extracted_audio = AudioExtractor.extract_audio(video_path)
+            audio_extract_sec = time.perf_counter() - t0
+
+            fused_ts = merged_ts
+            fused_probs = merged_probs
+            fusion_mode = "vision_only"
+
+            if extracted_audio is None:
+                bt.logging.info(
+                    f"Audio unavailable; using vision-only scoring (audio_extract: {audio_extract_sec:.2f}s)"
+                )
+            else:
+                bt.logging.info(
+                    f"Audio extracted to {extracted_audio.path} "
+                    f"(duration: {extracted_audio.duration_sec:.1f}s, extract: {audio_extract_sec:.2f}s)"
+                )
+                bt.logging.info(">>> Step 5: Generating transcript")
+                t0 = time.perf_counter()
+                transcript_segments = self.transcript_engine.transcribe(
+                    extracted_audio.path,
+                    audio_duration_sec=extracted_audio.duration_sec,
+                )
+                transcript_sec = time.perf_counter() - t0
+                scored_audio_segments = self._score_transcript_segments(
+                    query, transcript_segments
+                )
+                if scored_audio_segments:
+                    fused_ts, fused_probs, fusion_mode = self._fuse_visual_audio_timeline(
+                        merged_ts,
+                        merged_probs,
+                        scored_audio_segments,
+                    )
+                    max_audio_score = max(score for _, _, score, _ in scored_audio_segments)
+                    bt.logging.info(
+                        f"Transcript segments: {len(transcript_segments)} "
+                        f"(transcribe: {transcript_sec:.2f}s, max_audio_score: {max_audio_score:.4f})"
+                    )
+                    bt.logging.info(
+                        "Fusion mode: vision_audio "
+                        f"(vision primary, audio boost factor={self.AUDIO_BOOST_FACTOR:.2f})"
+                    )
+                else:
+                    bt.logging.info(
+                        f"No usable audio-derived timeline; using vision-only scoring "
+                        f"(transcribe: {transcript_sec:.2f}s)"
+                    )
+
+            # 6. Search Heuristics (Thresholding & Merging)
+            bt.logging.info(">>> Step 6: Applying search heuristics")
             t0 = time.perf_counter()
             results = self._find_best_segment(
-                merged_probs, merged_ts, top_k=top_k
+                fused_probs, fused_ts, top_k=top_k
             )
             heuristic_sec = time.perf_counter() - t0
             
@@ -228,6 +284,8 @@ class MinerLogic:
                 f"coarse_infer={coarse_infer_sec:.2f}s, "
                 f"fine_extract={fine_extract_sec:.2f}s, "
                 f"fine_infer={fine_infer_sec:.2f}s, "
+                f"audio_extract={audio_extract_sec:.2f}s, "
+                f"transcript={transcript_sec:.2f}s, "
                 f"heuristics={heuristic_sec:.2f}s, "
                 f"total={total_sec:.2f}s"
             )
@@ -244,6 +302,9 @@ class MinerLogic:
                 {"video_url": video_url},
             ) from e
         finally:
+            AudioExtractor.cleanup(
+                extracted_audio if "extracted_audio" in locals() else None
+            )
             VideoDownloader.cleanup(
                 downloaded_video if "downloaded_video" in locals() else None
             )
@@ -336,6 +397,97 @@ class MinerLogic:
 
         ts, ps = zip(*merged)
         return tuple(ts), np.array(ps, dtype=np.float32)
+
+    def _score_transcript_segments(
+        self,
+        query: str,
+        transcript_segments: Sequence[TranscriptSegment],
+    ) -> List[Tuple[float, float, float, str]]:
+        if not transcript_segments:
+            return []
+
+        texts = [segment.text for segment in transcript_segments if segment.text.strip()]
+        if not texts:
+            return []
+
+        scores = self.ml_engine.compute_text_similarity(query, texts)
+        if len(scores) == 0:
+            return []
+
+        scored_segments: List[Tuple[float, float, float, str]] = []
+        text_index = 0
+        for segment in transcript_segments:
+            text = segment.text.strip()
+            if not text:
+                continue
+            if text_index >= len(scores):
+                break
+            scored_segments.append(
+                (
+                    float(segment.start),
+                    float(segment.end),
+                    float(scores[text_index]),
+                    text,
+                )
+            )
+            text_index += 1
+        return scored_segments
+
+    @staticmethod
+    def _interpolate_scores(
+        source_ts: Tuple[float, ...],
+        source_scores: np.ndarray,
+        target_ts: np.ndarray,
+    ) -> np.ndarray:
+        if len(source_ts) == 0:
+            return np.zeros(len(target_ts), dtype=np.float32)
+        if len(source_ts) == 1:
+            return np.full(len(target_ts), float(source_scores[0]), dtype=np.float32)
+        source_ts_arr = np.asarray(source_ts, dtype=np.float64)
+        source_scores_arr = np.asarray(source_scores, dtype=np.float32)
+        return np.interp(
+            target_ts,
+            source_ts_arr,
+            source_scores_arr,
+            left=float(source_scores_arr[0]),
+            right=float(source_scores_arr[-1]),
+        ).astype(np.float32)
+
+    def _fuse_visual_audio_timeline(
+        self,
+        visual_ts: Tuple[float, ...],
+        visual_scores: np.ndarray,
+        scored_audio_segments: Sequence[Tuple[float, float, float, str]],
+    ) -> Tuple[Tuple[float, ...], np.ndarray, str]:
+        if not scored_audio_segments:
+            return visual_ts, visual_scores, "vision_only"
+
+        timeline_points = set(float(t) for t in visual_ts)
+        for start, end, _, _ in scored_audio_segments:
+            timeline_points.add(float(start))
+            timeline_points.add(float(end))
+        fused_ts_arr = np.array(sorted(timeline_points), dtype=np.float64)
+
+        visual_interp = self._interpolate_scores(visual_ts, visual_scores, fused_ts_arr)
+        audio_scores = np.zeros(len(fused_ts_arr), dtype=np.float32)
+        for index, timestamp in enumerate(fused_ts_arr):
+            active_scores = [
+                float(score)
+                for start, end, score, _ in scored_audio_segments
+                if float(start) <= float(timestamp) <= float(end)
+            ]
+            if active_scores:
+                audio_scores[index] = max(active_scores)
+
+        if not np.any(audio_scores > 0):
+            return visual_ts, visual_scores, "vision_only"
+
+        fused_scores = (
+            visual_interp
+            + self.AUDIO_BOOST_FACTOR * np.maximum(0.0, audio_scores - visual_interp)
+        ).astype(np.float32)
+        fused_scores = np.clip(fused_scores, 0.0, 1.0).astype(np.float32)
+        return tuple(float(t) for t in fused_ts_arr), fused_scores, "vision_audio"
 
     def _interval_iou(
         self, left: tuple[float, float], right: tuple[float, float]

@@ -9,7 +9,7 @@ import sys, os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from validator import run_validator_loop, seed_scores_from_metagraph
+from validator import run_runtime_sync_loop, run_validator_loop, seed_scores_from_metagraph
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
 from chronoseek.validator.gateway import ValidatorGatewayRuntime
@@ -72,7 +72,10 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         mock_run_step.side_effect = run_step_side_effect
 
         # Mock sleep to be instant
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("asyncio.sleep", new_callable=AsyncMock), patch(
+            "validator.refresh_responsive_miners", new_callable=AsyncMock
+        ) as mock_refresh_responsive_miners:
+            mock_refresh_responsive_miners.return_value = {0, 1, 2}
             runtime = ValidatorGatewayRuntime(
                 wallet=mock_wallet,
                 metagraph=mock_metagraph,
@@ -95,8 +98,12 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     task_max_sampling_attempts=10,
                     synthetic_miner_timeout_seconds=60.0,
                     video_availability_cache_path="",
+                    accessible_video_cache_path="",
+                    inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
+                    validator_miner_health_interval_seconds=15.0,
+                    validator_miner_health_timeout_seconds=3.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
                 ),
@@ -145,11 +152,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         print("✅ Validator Flow Test Passed: Weights set correctly based on scores.")
 
-    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
-    @patch("chronoseek.validator.forward.run_step")
-    async def test_metagraph_growth_seeds_new_scores_from_incentives(
-        self, mock_run_step, mock_task_gen
-    ):
+    async def test_metagraph_growth_seeds_new_scores_from_incentives(self):
         mock_subtensor = MagicMock()
         mock_wallet = MagicMock()
         mock_metagraph = MagicMock()
@@ -159,23 +162,28 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         mock_metagraph.hotkeys = ["h1", "h2"]
         mock_metagraph.I = [0.4, 0.6]
 
-        def sync_side_effect(*args, **kwargs):
-            mock_metagraph.n = 3
-            mock_metagraph.hotkeys = ["h1", "h2", "h3"]
-            mock_metagraph.I = [0.4, 0.6, 0.9]
-
-        mock_metagraph.sync.side_effect = sync_side_effect
+        synced_metagraph = MagicMock()
+        synced_metagraph.n = 3
+        synced_metagraph.hotkeys = ["h1", "h2", "h3"]
+        synced_metagraph.I = [0.4, 0.6, 0.9]
+        synced_metagraph.uids = [0, 1, 2]
 
         mock_subtensor.get_subnet_hyperparameters.return_value.tempo = 100
         mock_subtensor.get_current_block.side_effect = [0, 1]
         stop_event.is_set.side_effect = [False, True]
 
-        async def run_step_side_effect(*args, **kwargs):
-            return []
+        with patch("asyncio.sleep", new_callable=AsyncMock), patch(
+            "validator.sync_runtime_metagraph"
+        ) as mock_sync_runtime_metagraph, patch(
+            "validator.refresh_responsive_miners", new_callable=AsyncMock
+        ) as mock_refresh_responsive_miners:
+            def sync_runtime_metagraph_side_effect(subtensor, runtime, netuid):
+                runtime.metagraph = synced_metagraph
+                runtime.scores = np.array([0.4, 0.6, 0.9])
+                return synced_metagraph
 
-        mock_run_step.side_effect = run_step_side_effect
-
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+            mock_sync_runtime_metagraph.side_effect = sync_runtime_metagraph_side_effect
+            mock_refresh_responsive_miners.return_value = {0, 1, 2}
             runtime = ValidatorGatewayRuntime(
                 wallet=mock_wallet,
                 metagraph=mock_metagraph,
@@ -185,7 +193,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                 sync_miner_request_timeout_seconds=60.0,
                 stream_miner_request_timeout_seconds=60.0,
             )
-            await run_validator_loop(
+            await run_runtime_sync_loop(
                 mock_subtensor,
                 runtime,
                 netuid=1,
@@ -202,6 +210,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
+                    validator_miner_health_interval_seconds=15.0,
+                    validator_miner_health_timeout_seconds=3.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
                 ),
