@@ -509,7 +509,7 @@ def get_config():
     parser.add_argument(
         "--synthetic-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "60")),
+        default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "150")),
         help="Per-miner timeout in seconds for synthetic validator evaluation requests.",
     )
     parser.add_argument(
@@ -533,13 +533,13 @@ def get_config():
     parser.add_argument(
         "--validator-api-sync-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS", "50")),
+        default=float(os.getenv("VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS", "135")),
         help="Per-miner timeout in seconds for sync validator API search requests.",
     )
     parser.add_argument(
         "--validator-api-stream-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS", "60")),
+        default=float(os.getenv("VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS", "135")),
         help="Per-miner timeout in seconds for streaming validator API search requests.",
     )
     parser.add_argument(
