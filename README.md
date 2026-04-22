@@ -6,25 +6,26 @@
 
 ---
 
-## ⚠️ MVP Disclaimer (Hackathon)
+## Current Scope (1.0)
 
-**Current Status:** Proof of Concept (MVP)
+**Current Status:** Fully functioning on testnet with a released developer-facing gateway.
 
-This repository represents the initial **Minimum Viable Product (MVP)** implementation of the ChronoSeek protocol.
+This repository implements the ChronoSeek 1.0 subnet currently running on testnet.
 
-**MVP Scope Limitations:**
+**1.0 Capabilities:**
 
-- **Model:** Miners currently use a baseline **CLIP (ViT-B/32)** sliding window approach. This is computationally expensive and not optimized for long-form video.
-- **Dataset:** Validators evaluate against **ActivityNet Captions** annotations. For local verification and smoke tests, the repo also includes a small curated fixture with directly downloadable sample videos.
-- **Scoring:** Validators score miners by best-match Intersection-over-Union (IoU) in `[0, 1]` and maintain moving averages for weight setting. A strict IoU threshold of `0.5` is still used in local verification scripts when you want pass/fail semantics.
-- **Inference:** All inference happens locally on the miner.
+- **Multimodal baseline:** Miners perform visual retrieval plus transcript-based speech understanding. Vision remains the primary signal, and speech-derived scoring acts as an additional boost when audio is available and usable.
+- **Deterministic evaluation:** Validators evaluate against **ActivityNet Captions** annotations loaded from Hugging Face or a local manifest, with accessible/inaccessible video caching to keep synthetic validation usable on testnet.
+- **Scoring:** Validators score miners by best-match Intersection-over-Union (IoU) in `[0, 1]`, maintain moving averages for weight setting, and normalize weights on-chain. A strict IoU threshold of `0.5` remains only for local pass/fail verification scripts.
+- **Gateway/API:** Validators can expose a protocol-compatible gateway for application and developer traffic, and that developer-facing surface is already released.
+- **Deployment status:** Miner search, validator scoring, and gateway request flows are all functioning on testnet.
 
-**Future Enhancements (Roadmap):**
+**Roadmap (2.0+):**
 
-1.  **Modular Inference:** Integration with **Chutes (SN64)** for serverless, verifiable model execution.
-2.  **SOTA Models:** Transition to temporal-aware architectures like **Moment-DETR** or **VideoLlama**.
-3.  **Synthetic Tasks:** Implementation of a VLM-based Oracle (using GPT-4o or Gemini) to generate infinite synthetic training tasks from any video URL.
-4.  **Vector Caching:** Miners will implement vector databases (Milvus/Chroma) to cache video embeddings, enabling millisecond-level retrieval for repeated queries.
+1.  **Full multimodality:** Extend from vision + speech transcript matching to vision + speech + non-speech sound understanding.
+2.  **Stronger retrieval models:** Transition from the current CLIP-based baseline toward more temporal-aware architectures like **Moment-DETR** or **VideoLlama**-class systems.
+3.  **Richer evaluation and incentives:** Expand beyond the current deterministic dataset loop once more advanced generation and scoring are trustworthy.
+4.  **Caching and modular inference:** Add stronger caching and optional delegated inference backends where they improve real testnet performance.
 
 ---
 
@@ -36,21 +37,22 @@ This project is organized into the following key documents:
   _Why this subnet exists, the "dark data" problem, and the limitations of current search tools._
 
 - **[System Design](docs/DESIGN.md)**  
-  _Technical architecture, including Miner/Validator logic, Synthetic Task Generation, and SOTA research references (CLIP, LLMs)._
+  _Technical architecture, including the deployed Miner/Validator logic, validator gateway behavior, and longer-term multimodal roadmap._
 
 - **[Business Logic & Market Rationale](docs/BUSINESS_LOGIC.md)**  
   _Market size ($94B+), commercialization strategy, and competitive advantage against centralized giants._
 
 ---
 
-## 🚀 Quick Start (Hackathon)
+## 🚀 Quick Start
 
 ### 1. The Core Concept
 
 We are building a decentralized protocol where:
 
 - **Miners** use AI models (CLIP, Transformers) to "watch" videos and find specific moments.
-- **Validators** generate synthetic queries to grade miners and serve organic requests.
+- **Validators** run deterministic ActivityNet evaluation to grade miners and serve organic/developer requests.
+- **Miners** currently combine visual search with transcript-based speech understanding.
 - **Users** get precise timestamps (e.g., "04:12 - 04:18") for natural language queries.
 
 ### 2. Architecture Overview
@@ -59,13 +61,13 @@ We are building a decentralized protocol where:
 User / Client
    │
    ▼
-Validator (Gateway)
-   ├─ Synthetic evaluation (scoring & weights)
-   └─ Organic query routing
+Validator (Scoring + Gateway)
+   ├─ Deterministic evaluation (scoring & weights)
+   └─ Organic / developer query routing
    │
    ▼
 Miners
-   └─ Semantic video analysis (CLIP / SOTA Models)
+   └─ Semantic video analysis (vision + speech transcript scoring)
 ```
 
 ## 📦 Installation & Setup
