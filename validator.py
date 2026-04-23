@@ -62,6 +62,160 @@ def heartbeat_monitor(last_heartbeat, stop_event):
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
+def get_responsive_uids_snapshot(
+    runtime: ValidatorGatewayRuntime,
+) -> tuple[list[int], bool]:
+    with runtime.responsive_lock:
+        responsive_uids = sorted(runtime.responsive_uids)
+        responsive_initialized = runtime.responsive_initialized
+    return responsive_uids, responsive_initialized
+
+
+def get_metagraph_snapshot(runtime: ValidatorGatewayRuntime):
+    with runtime.metagraph_lock:
+        return runtime.metagraph
+
+
+def resize_scores_for_metagraph(
+    current_scores: np.ndarray,
+    metagraph: bt.Metagraph,
+) -> np.ndarray:
+    scores = np.array(current_scores, copy=True)
+    metagraph_size = int(metagraph.n)
+    if len(scores) < metagraph_size:
+        new_scores = seed_scores_from_metagraph(metagraph)
+        new_scores[: len(scores)] = scores
+        return new_scores
+    if len(scores) > metagraph_size:
+        return scores[:metagraph_size]
+    return scores
+
+
+def replace_runtime_metagraph(
+    runtime: ValidatorGatewayRuntime,
+    metagraph: bt.Metagraph,
+):
+    with runtime.metagraph_lock:
+        runtime.metagraph = metagraph
+
+
+def sync_runtime_metagraph(
+    subtensor: bt.Subtensor,
+    runtime: ValidatorGatewayRuntime,
+    netuid: int,
+) -> bt.Metagraph:
+    next_metagraph = bt.Metagraph(
+        netuid=netuid,
+        network=subtensor.network,
+        sync=False,
+    )
+    next_metagraph.sync(subtensor=subtensor)
+
+    with runtime.score_lock:
+        current_scores = np.array(runtime.scores, copy=True)
+    resized_scores = resize_scores_for_metagraph(current_scores, next_metagraph)
+
+    replace_runtime_metagraph(runtime, next_metagraph)
+    with runtime.score_lock:
+        runtime.scores = np.array(resized_scores, copy=True)
+
+    return next_metagraph
+
+
+def responsive_refresh_due(
+    runtime: ValidatorGatewayRuntime,
+    interval_seconds: float,
+) -> bool:
+    with runtime.responsive_lock:
+        if not runtime.responsive_initialized or runtime.responsive_last_refresh_at is None:
+            return True
+        last_refresh_at = runtime.responsive_last_refresh_at
+
+    return (time.time() - last_refresh_at) >= max(1.0, float(interval_seconds))
+
+
+async def refresh_responsive_miners(
+    runtime: ValidatorGatewayRuntime,
+    health_timeout_seconds: float,
+) -> set[int]:
+    health_timeout_seconds = max(0.5, float(health_timeout_seconds))
+    candidate_uids: list[int] = []
+    metagraph = get_metagraph_snapshot(runtime)
+
+    for uid in metagraph.uids:
+        uid = int(uid)
+        if uid < 0 or uid >= len(metagraph.axons):
+            continue
+        axon = metagraph.axons[uid]
+        if axon.ip == "0.0.0.0":
+            continue
+        candidate_uids.append(uid)
+
+    refreshed_at = time.time()
+    if not candidate_uids:
+        with runtime.responsive_lock:
+            runtime.responsive_uids = set()
+            runtime.responsive_initialized = True
+            runtime.responsive_last_refresh_at = refreshed_at
+        bt.logging.warning(
+            "Responsive miner refresh found no miners with advertised endpoints."
+        )
+        return set()
+
+    responsive_uids: set[int] = set()
+    semaphore = asyncio.Semaphore(forward_module.MAX_CONCURRENT_MINER_REQUESTS)
+
+    async with httpx.AsyncClient(timeout=health_timeout_seconds) as client:
+        async def ping_uid(uid: int):
+            async with semaphore:
+                axon = metagraph.axons[uid]
+                hotkeys = getattr(metagraph, "hotkeys", [])
+                hotkey = hotkeys[uid] if uid < len(hotkeys) else f"uid-{uid}"
+                endpoint = f"http://{axon.ip}:{axon.port}"
+                result = await forward_module.check_miner_health(
+                    client=client,
+                    uid=uid,
+                    hotkey=hotkey,
+                    endpoint=endpoint,
+                    timeout_seconds=health_timeout_seconds,
+                )
+                return uid, result
+
+        tasks = [asyncio.create_task(ping_uid(uid)) for uid in candidate_uids]
+        try:
+            for completed in asyncio.as_completed(tasks):
+                uid, result = await completed
+                if result.ok:
+                    responsive_uids.add(uid)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    with runtime.responsive_lock:
+        runtime.responsive_uids = set(responsive_uids)
+        runtime.responsive_initialized = True
+        runtime.responsive_last_refresh_at = refreshed_at
+
+    bt.logging.info(
+        f"Responsive miner refresh completed | responsive={len(responsive_uids)}/{len(candidate_uids)} | uids={sorted(responsive_uids)}"
+    )
+    return responsive_uids
+
+
+def apply_responsive_miner_filter(
+    scores: np.ndarray,
+    responsive_uids: list[int],
+) -> np.ndarray:
+    responsive_set = {int(uid) for uid in responsive_uids}
+    filtered_scores = np.array(scores, copy=True)
+    for uid in range(len(filtered_scores)):
+        if uid not in responsive_set:
+            filtered_scores[uid] = 0.0
+    return filtered_scores
+
+
 async def run_validator_loop(
     subtensor: bt.Subtensor,
     runtime: ValidatorGatewayRuntime,
@@ -71,16 +225,17 @@ async def run_validator_loop(
     config: bt.Config,
 ):
     """
-    Async validator loop.
+    Async synthetic validator loop.
     """
-    # Initialize components
     cache_root = Path.home() / ".cache" / "chronoseek"
     accessible_video_cache_path = config.accessible_video_cache_path
     if not accessible_video_cache_path:
         if config.video_availability_cache_path:
             base_path = Path(config.video_availability_cache_path).expanduser()
             accessible_video_cache_path = str(
-                base_path.with_name(f"{base_path.stem}_accessible{base_path.suffix or '.json'}")
+                base_path.with_name(
+                    f"{base_path.stem}_accessible{base_path.suffix or '.json'}"
+                )
             )
         else:
             accessible_video_cache_path = str(cache_root / "accessible_videos.json")
@@ -90,7 +245,9 @@ async def run_validator_loop(
         if config.video_availability_cache_path:
             base_path = Path(config.video_availability_cache_path).expanduser()
             inaccessible_video_cache_path = str(
-                base_path.with_name(f"{base_path.stem}_inaccessible{base_path.suffix or '.json'}")
+                base_path.with_name(
+                    f"{base_path.stem}_inaccessible{base_path.suffix or '.json'}"
+                )
             )
         else:
             inaccessible_video_cache_path = str(
@@ -113,37 +270,38 @@ async def run_validator_loop(
         max_sampling_attempts=config.task_max_sampling_attempts,
     )
     async_client = httpx.AsyncClient(timeout=30.0)
-
-    # Get tempo
     tempo = subtensor.get_subnet_hyperparameters(netuid).tempo
     bt.logging.info(f"Subnet tempo: {tempo} blocks")
-
     last_weight_block = 0
-    scores = np.array(runtime.scores, copy=True)
 
     try:
         while not stop_event.is_set():
             current_block = subtensor.get_current_block()
             last_heartbeat[0] = time.time()
+            metagraph = get_metagraph_snapshot(runtime)
+            with runtime.score_lock:
+                scores = resize_scores_for_metagraph(runtime.scores, metagraph)
+            responsive_uids, responsive_initialized = get_responsive_uids_snapshot(
+                runtime
+            )
+            if responsive_initialized:
+                scores = apply_responsive_miner_filter(scores, responsive_uids)
 
-            # Sync metagraph (periodically)
-            if current_block % 100 == 0:
-                runtime.metagraph.sync(subtensor=subtensor)
-                # Resize scores if metagraph grew
-                if len(scores) < runtime.metagraph.n:
-                    new_scores = seed_scores_from_metagraph(runtime.metagraph)
-                    new_scores[: len(scores)] = scores
-                    scores = new_scores
-                elif len(scores) > runtime.metagraph.n:
-                    scores = scores[: runtime.metagraph.n]
+            if responsive_initialized and not responsive_uids:
+                bt.logging.warning(
+                    "Skipping validation step because no responsive miners are currently available."
+                )
+                await asyncio.sleep(12)
+                continue
 
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
                 task_gen,
-                runtime.metagraph,
+                metagraph,
                 runtime.wallet,
                 async_client,
                 miner_timeout_seconds=float(config.synthetic_miner_timeout_seconds),
+                candidate_uids=responsive_uids if responsive_initialized else None,
             )
 
             # Update moving average scores
@@ -215,22 +373,48 @@ async def run_validator_loop(
             await asyncio.sleep(12)
 
     finally:
-        await async_client.aclose()
+        if async_client is not None:
+            await async_client.aclose()
 
 
-async def run_gateway_only_loop(
+async def run_runtime_sync_loop(
     subtensor: bt.Subtensor,
     runtime: ValidatorGatewayRuntime,
+    netuid: int,
     stop_event: threading.Event,
     last_heartbeat: List[float],
+    config: bt.Config,
 ):
-    bt.logging.info("Synthetic evaluation disabled; validator will serve gateway traffic only.")
+    bt.logging.info("Validator runtime sync loop started.")
     while not stop_event.is_set():
         current_block = subtensor.get_current_block()
         last_heartbeat[0] = time.time()
+        should_refresh_responsive = responsive_refresh_due(
+            runtime,
+            float(config.validator_miner_health_interval_seconds),
+        )
 
-        if current_block % 100 == 0:
-            runtime.metagraph.sync(subtensor=subtensor)
+        if current_block % 100 == 0 and runtime.last_metagraph_sync_block != current_block:
+            sync_runtime_metagraph(subtensor, runtime, netuid)
+            runtime.last_metagraph_sync_block = current_block
+            should_refresh_responsive = True
+
+        if should_refresh_responsive:
+            await refresh_responsive_miners(
+                runtime,
+                health_timeout_seconds=float(
+                    config.validator_miner_health_timeout_seconds
+                ),
+            )
+            responsive_uids, responsive_initialized = get_responsive_uids_snapshot(
+                runtime
+            )
+            if responsive_initialized:
+                with runtime.score_lock:
+                    runtime.scores = apply_responsive_miner_filter(
+                        runtime.scores,
+                        responsive_uids,
+                    )
 
         await asyncio.sleep(12)
 
@@ -325,7 +509,7 @@ def get_config():
     parser.add_argument(
         "--synthetic-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "60")),
+        default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "150")),
         help="Per-miner timeout in seconds for synthetic validator evaluation requests.",
     )
     parser.add_argument(
@@ -349,14 +533,26 @@ def get_config():
     parser.add_argument(
         "--validator-api-sync-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS", "50")),
+        default=float(os.getenv("VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS", "135")),
         help="Per-miner timeout in seconds for sync validator API search requests.",
     )
     parser.add_argument(
         "--validator-api-stream-miner-timeout-seconds",
         type=float,
-        default=float(os.getenv("VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS", "60")),
+        default=float(os.getenv("VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS", "135")),
         help="Per-miner timeout in seconds for streaming validator API search requests.",
+    )
+    parser.add_argument(
+        "--validator-miner-health-interval-seconds",
+        type=float,
+        default=float(os.getenv("VALIDATOR_MINER_HEALTH_INTERVAL_SECONDS", "60")),
+        help="Interval in seconds between validator liveness health sweeps across miner endpoints.",
+    )
+    parser.add_argument(
+        "--validator-miner-health-timeout-seconds",
+        type=float,
+        default=float(os.getenv("VALIDATOR_MINER_HEALTH_TIMEOUT_SECONDS", "5")),
+        help="Per-miner timeout in seconds for validator liveness health checks.",
     )
     parser.add_argument(
         "--hf-cache-dir",
@@ -465,6 +661,31 @@ def main():
             ),
         )
 
+        if not config.enable_synthetic_evaluation and not config.enable_validator_api:
+            bt.logging.error(
+                "Both synthetic evaluation and validator API are disabled. Nothing to run."
+            )
+            stop_event.set()
+            return
+
+        sync_runtime_metagraph(subtensor, runtime, config.netuid)
+        initial_responsive_uids = asyncio.run(
+            refresh_responsive_miners(
+                runtime,
+                health_timeout_seconds=float(
+                    config.validator_miner_health_timeout_seconds
+                ),
+            )
+        )
+        runtime.scores = apply_responsive_miner_filter(
+            runtime.scores,
+            sorted(initial_responsive_uids),
+        )
+        bt.logging.info(
+            f"Initialized responsive miner snapshot with {len(initial_responsive_uids)} miners."
+        )
+
+        api_thread = None
         if config.enable_validator_api:
             import uvicorn
 
@@ -477,27 +698,75 @@ def main():
                     port=config.validator_api_port,
                 )
 
-            api_thread = threading.Thread(target=run_gateway, daemon=True)
+            api_thread = threading.Thread(
+                target=run_gateway,
+                daemon=True,
+                name="validator-api",
+            )
             api_thread.start()
             bt.logging.info(
                 f"Validator API enabled on {config.validator_api_host}:{config.validator_api_port}"
             )
 
-        if config.enable_synthetic_evaluation:
-            bt.logging.info("Starting validator loop...")
-            asyncio.run(
-                run_validator_loop(
-                    subtensor,
-                    runtime,
-                    config.netuid,
-                    stop_event,
-                    last_heartbeat,
-                    config,
+        def run_runtime_sync():
+            try:
+                asyncio.run(
+                    run_runtime_sync_loop(
+                        subtensor,
+                        runtime,
+                        config.netuid,
+                        stop_event,
+                        last_heartbeat,
+                        config,
+                    )
                 )
+            except Exception as exc:
+                bt.logging.error(f"Validator runtime sync loop crashed: {exc}")
+                stop_event.set()
+                raise
+
+        runtime_sync_thread = threading.Thread(
+            target=run_runtime_sync,
+            daemon=True,
+            name="validator-runtime-sync",
+        )
+        runtime_sync_thread.start()
+        bt.logging.info(
+            "Validator runtime sync loop started."
+        )
+
+        synthetic_thread = None
+        if config.enable_synthetic_evaluation:
+            def run_synthetic_loop():
+                try:
+                    asyncio.run(
+                        run_validator_loop(
+                            subtensor,
+                            runtime,
+                            config.netuid,
+                            stop_event,
+                            last_heartbeat,
+                            config,
+                        )
+                    )
+                except Exception as exc:
+                    bt.logging.error(f"Synthetic validator loop crashed: {exc}")
+                    stop_event.set()
+                    raise
+
+            synthetic_thread = threading.Thread(
+                target=run_synthetic_loop,
+                daemon=True,
+                name="validator-synthetic",
             )
+            synthetic_thread.start()
+            bt.logging.info("Synthetic validator loop started.")
         else:
-            bt.logging.info("Starting validator in gateway-only mode...")
-            asyncio.run(run_gateway_only_loop(subtensor, runtime, stop_event, last_heartbeat))
+            bt.logging.info("Synthetic evaluation is disabled.")
+
+        runtime_sync_thread.join()
+        if synthetic_thread is not None:
+            synthetic_thread.join(timeout=1)
 
     except KeyboardInterrupt:
         bt.logging.info("Validator stopped by user")

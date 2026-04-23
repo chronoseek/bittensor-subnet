@@ -165,7 +165,12 @@ async def search(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "ok": True,
+        "status": "ok",
+        "service": "miner",
+        "protocol_versions": [PROTOCOL_VERSION],
+    }
 
 
 def get_config():

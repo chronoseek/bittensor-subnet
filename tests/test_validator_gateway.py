@@ -39,7 +39,12 @@ def test_gateway_health_endpoint():
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.json() == {
+        "ok": True,
+        "status": "ok",
+        "service": "validator-gateway",
+        "protocol_versions": ["2026-04-10"],
+    }
 
 
 def test_gateway_capabilities_endpoint():
@@ -120,6 +125,48 @@ def test_gateway_search_returns_protocol_response(mock_query_miner):
     assert body["results"][1]["start"] == 1.0
     assert body["miner_metadata"]["source"] == "validator-gateway"
     assert body["miner_metadata"]["selected_uids"] == [0, 1]
+
+
+@patch("chronoseek.validator.gateway.query_miner")
+def test_gateway_search_only_queries_responsive_miners(mock_query_miner):
+    runtime = ValidatorGatewayRuntime(
+        wallet=None,
+        metagraph=DummyMetagraph(),
+        scores=np.array([0.9, 0.1]),
+        score_lock=threading.Lock(),
+        max_miners_per_request=2,
+        sync_miner_request_timeout_seconds=60.0,
+        stream_miner_request_timeout_seconds=60.0,
+        responsive_uids={1},
+        responsive_initialized=True,
+    )
+    mock_query_miner.return_value = MinerQueryResult(
+        response=VideoSearchResponse(
+            request_id="req-1",
+            status="completed",
+            results=[
+                {"start": 2.0, "end": 4.0, "confidence": 0.95},
+            ],
+        ),
+        latency=0.2,
+    )
+
+    client = TestClient(create_validator_gateway(runtime))
+    response = client.post(
+        "/search",
+        json={
+            "protocol_version": "2026-04-10",
+            "request_id": "req-1",
+            "query": "people fighting",
+            "top_k": 5,
+            "video": {"url": "https://example.com/video.mp4"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert mock_query_miner.call_count == 1
+    assert mock_query_miner.call_args.kwargs["uid"] == 1
+    assert response.json()["miner_metadata"]["selected_uids"] == [1]
 
 
 @patch("chronoseek.validator.gateway.query_miner")

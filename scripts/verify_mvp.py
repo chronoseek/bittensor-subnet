@@ -57,6 +57,23 @@ def parse_args():
         action="store_true",
         help=f"Fail unless the final score passes the strict IoU threshold ({STRICT_IOU_THRESHOLD:.2f}).",
     )
+    parser.add_argument(
+        "--video-url",
+        type=str,
+        default="",
+        help="Optional custom video URL for direct end-to-end miner verification.",
+    )
+    parser.add_argument(
+        "--query",
+        type=str,
+        default="",
+        help="Optional custom query used with --video-url.",
+    )
+    parser.add_argument(
+        "--skip-quality-check",
+        action="store_true",
+        help="Skip IoU quality checks. Useful when running a custom video/query without ground truth.",
+    )
     return parser.parse_args()
 
 
@@ -104,9 +121,21 @@ def verify_protocol_response(request_id: str, results) -> VideoSearchResponse:
 
 
 def run_single_attempt(
-    task_gen: ActivityNetTaskGenerator, miner: MinerLogic, task_number: int
+    task_gen: ActivityNetTaskGenerator | None,
+    miner: MinerLogic,
+    task_number: int,
+    custom_video_url: str = "",
+    custom_query: str = "",
+    skip_quality_check: bool = False,
 ):
-    video_url, query, ground_truths = task_gen.generate_task()
+    if custom_video_url:
+        video_url = custom_video_url
+        query = custom_query
+        ground_truths = []
+    else:
+        if task_gen is None:
+            raise RuntimeError("Task generator is required when no custom video URL is provided.")
+        video_url, query, ground_truths = task_gen.generate_task()
 
     print_header("Task Generation")
     print_task(task_number, video_url, query, ground_truths)
@@ -119,6 +148,20 @@ def run_single_attempt(
 
     if not response.results:
         raise RuntimeError("Miner returned an empty result list.")
+
+    if skip_quality_check:
+        print_header("Pipeline Check")
+        best = response.results[0]
+        print(f"Top result: {best.start:.2f}s -> {best.end:.2f}s")
+        print(f"Confidence: {best.confidence:.4f}")
+        print("Quality check skipped.")
+        return {
+            "request": request,
+            "response": response,
+            "ground_truths": ground_truths,
+            "raw_iou": None,
+            "score": None,
+        }
 
     print_header("Quality Check")
     best = response.results[0]
@@ -150,13 +193,24 @@ def main():
     bt.logging.set_info(True)
     print("ChronoSeek MVP Verification")
     print(f"Split: {args.split}")
-    print(f"Dataset path: {args.dataset_path}")
+    if args.video_url:
+        print("Mode: custom video/query")
+        print(f"Video URL: {args.video_url}")
+        print(f"Query: {args.query}")
+    else:
+        print(f"Dataset path: {args.dataset_path}")
 
-    try:
-        task_gen = build_task_generator(args)
-    except Exception as exc:
+    task_gen = None
+    if not args.video_url:
+        try:
+            task_gen = build_task_generator(args)
+        except Exception as exc:
+            print_header("Setup Failure")
+            print(str(exc))
+            return 1
+    elif not args.query:
         print_header("Setup Failure")
-        print(str(exc))
+        print("--query is required when --video-url is provided.")
         return 1
 
     try:
@@ -169,14 +223,28 @@ def main():
     last_error = None
     for attempt_number in range(1, args.attempts + 1):
         try:
-            result = run_single_attempt(task_gen, miner, attempt_number)
-            passed = passes_strict_iou(result["score"])
+            result = run_single_attempt(
+                task_gen,
+                miner,
+                attempt_number,
+                custom_video_url=args.video_url,
+                custom_query=args.query,
+                skip_quality_check=args.skip_quality_check or bool(args.video_url),
+            )
+            passed = (
+                True
+                if result["score"] is None
+                else passes_strict_iou(result["score"])
+            )
 
             print_header("Verification Summary")
             print("End-to-end flow: ok")
-            print(f"Strict IoU pass: {'yes' if passed else 'no'}")
+            print(
+                "Strict IoU pass: "
+                + ("skipped" if result["score"] is None else ("yes" if passed else "no"))
+            )
 
-            if args.require_pass and not passed:
+            if args.require_pass and result["score"] is not None and not passed:
                 print("Verification failed: strict IoU pass was required.")
                 return 1
 

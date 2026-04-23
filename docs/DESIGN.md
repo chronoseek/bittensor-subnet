@@ -2,7 +2,15 @@
 
 ## 1. Introduction
 
-ChronoSeek aims to provide a decentralized service for retrieving specific video moments based on natural language queries. This document outlines the system architecture, including the miner and validator logic, leveraging state-of-the-art (SOTA) research in Temporal Video Grounding (TVG) and Video Moment Retrieval (VMR).
+ChronoSeek provides a decentralized service for retrieving specific video moments based on natural language queries. This document outlines the current deployed subnet architecture and the next-step roadmap toward fuller multimodal understanding.
+
+## 1.1. Current Network Status
+
+- The subnet is functioning on testnet end to end.
+- Validators run deterministic ActivityNet-based evaluation for scoring and on-chain weight updates.
+- Miners currently support visual retrieval plus transcript-based speech understanding.
+- Validators can also expose a public protocol-compatible gateway for application and developer traffic.
+- The next major milestone is full multimodality: vision + speech + non-speech sound understanding.
 
 ## 2. Core Problem Definition
 
@@ -19,103 +27,101 @@ The subnet operates as a competitive market for semantic video understanding.
 
 ### 3.1. High-Level Data Flow
 
-1.  **Task Generation (Validator):** The Validator selects a video and generates a synthetic query (a "Ground Truth" moment) using a secure Oracle VLM.
-2.  **Broadcast:** The query (video URL + text description) is sent to all Miners.
-3.  **Inference (Miner):** Miners download the video (or features), process it with their models, and return ranked timestamp intervals.
-4.  **Scoring (Validator):** The Validator compares the Miner's returned intervals with the Ground Truth interval using IoU (Intersection over Union).
-5.  **Weight Setting:** Scores are aggregated over an epoch to set on-chain weights.
+1.  **Task Generation (Validator):** The validator samples a task from ActivityNet Captions, preserving the human-written caption and one or more ground-truth intervals.
+2.  **Availability Filtering:** When configured, the validator skips inaccessible source videos, records availability in cache, and can fall back to previously confirmed accessible videos.
+3.  **Broadcast:** The query (video URL + text description) is sent to selected responsive miners over signed HTTP requests.
+4.  **Inference (Miner):** Miners download the video, run visual retrieval, optionally extract and transcribe speech, and return ranked timestamp intervals.
+5.  **Scoring (Validator):** The validator compares miner intervals with the ground truths using best-match IoU.
+6.  **Weight Setting:** Step scores are folded into moving averages and normalized into on-chain weights.
+7.  **Gateway Serving:** The validator gateway can also aggregate miner responses for organic and developer-facing search traffic.
 
 ### 3.2. Component Interaction Diagram
 
 ```mermaid
 sequenceDiagram
-    participant O as Oracle VLM (Validator)
     participant V as Validator
     participant M as Miner
     participant C as Chain (Bittensor)
+    participant U as User / Developer
 
-    Note over V: 1. Select Video & Clip
-    V->>O: Send Clip (Video Segment)
-    O-->>V: Return Description (Query)
-    V->>V: Store {Query, Start, End} as GT
+    Note over V: 1. Sample ActivityNet task
+    V->>V: Store {Video URL, Query, Ground Truths}
 
-    V->>M: Synapse: {Video_URL, Query}
-    Note over M: 2. Download & Process
-    Note over M: 3. Search for Query in Video
-    M-->>V: Response: [{Start, End, Score}...]
+    V->>M: Signed /search: {Video_URL, Query}
+    Note over M: 2. Download, retrieve, transcribe if available
+    M-->>V: Response: [{Start, End, Confidence}...]
 
-    Note over V: 4. Calculate IoU(Response, GT)
-    V->>C: 5. Set Weights
+    Note over V: 3. Calculate best IoU(Response, GTs)
+    V->>C: 4. Set Weights
+
+    U->>V: Organic / developer search request
+    V->>M: Fanout to ranked miners
+    M-->>V: Ranked windows
+    V-->>U: Aggregated response
 ```
 
 ## 4. Incentive Design
 
-The incentive mechanism is the core driver of the subnet. It must reward **accuracy**, **precision**, and **speed** while punishing hallucination and spam.
+The incentive mechanism is the core driver of the subnet. In the current deployed version, it primarily rewards retrieval accuracy measured by IoU.
 
 ### 4.1. Scoring Function
 
-For a single query $q$, a miner returns a list of predicted intervals $P = \{p_1, p_2, ...\}$. The Ground Truth is interval $g$.
+For a single query $q$, a miner returns a list of predicted intervals $P = \{p_1, p_2, ...\}$. The Ground Truth is a set of one or more valid intervals $G = \{g_1, g_2, ...\}$.
 
-The score $S$ for a query is calculated based on the **Intersection over Union (IoU)** of the best matching prediction.
+The score $S$ for a query is calculated as the best **Intersection over Union (IoU)** across all prediction / ground-truth pairs.
 
 $$ \text{IoU}(p, g) = \frac{\text{intersection}(p, g)}{\text{union}(p, g)} $$
 
-We define a reward function $R$ that prioritizes high-overlap matches:
+We define the current reward function as:
 
-$$ R(P, g) = \max_{p \in P} \left( \text{IoU}(p, g) \right) $$
+$$ R(P, G) = \max_{p \in P, g \in G} \left( \text{IoU}(p, g) \right) $$
 
-**Latency Penalty:**
-To encourage real-time performance, we apply a decay factor based on response time $t$:
+This returns a continuous score in `[0, 1]`.
 
-$$ S_{final} = R(P, g) \times e^{-\lambda t} $$
-
-(Where $\lambda$ is a tunable parameter, e.g., $0.1$ for seconds).
+**Latency today:**
+Latency is tracked operationally and exposed in validator logs, but it is not currently part of the on-chain scoring formula.
 
 ### 4.2. Aggregation & Weights
-- Scores are moving averages over the last $N$ queries (e.g., 500).
-- **Punishment:** If a miner consistently returns $IoU < 0.1$ (spamming), their weight is set to 0.
+- Scores are maintained as moving averages over repeated validation steps.
+- Validators seed scores from the metagraph incentives when possible, then update them with each new step score.
+- Weight setting is based on normalized moving scores.
 
 ## 5. Validator Design
 
-Validators are the "gatekeepers" of quality. They must generate tasks that are **indistinguishable** from organic user queries but have a known ground truth.
+Validators are the quality and routing layer. They generate scored evaluation tasks, track miner responsiveness, and optionally expose a public gateway.
 
-### 5.1. Synthetic Task Generation Pipeline (The "Oracle")
+### 5.1. Synthetic Task Generation Pipeline
 
-Since we cannot rely on human labelers, we use a **Video-Language Model (VLM)** pipeline:
+The deployed validator uses a deterministic ActivityNet-based task pipeline:
 
-1.  **Video Source:** Maintain a rolling buffer of Creative Commons videos (YouTube, Vimeo) to prevent miners from overfitting on a static dataset.
-2.  **Clip Sampling:**
-    - Randomly sample a duration $d \in [5s, 60s]$.
-    - Randomly sample a start time $t_{start}$.
-    - Extract clip $C = V[t_{start} : t_{start} + d]$.
-3.  **Caption Generation:**
-    - Feed clip $C$ to a VLM (e.g., GPT-4o, Gemini Pro Vision, or open-source LLaVA-Video).
-    - Prompt: *"Describe the main action or event in this video clip in one specific sentence. Do not mention visual cuts or camera angles."*
-4.  **Relevance Check (Anti-Ambiguity):**
-    - The generated caption must *uniquely* identify the clip.
-    - Run a lightweight check (e.g., CLIP similarity) against the *rest* of the video. If similarity is too high elsewhere, discard the task (it's too ambiguous).
+1.  **Dataset Source:** Load ActivityNet Captions from Hugging Face or a local manifest.
+2.  **Task Selection:** Randomly select a row from the configured split and preserve its caption plus one or more valid timestamp intervals.
+3.  **Video Availability Check:** Optionally verify that the source video is currently accessible and cache both accessible and inaccessible URLs.
+4.  **Fallback Strategy:** If newly sampled videos are inaccessible, fall back to a cached accessible video so validator loops can continue operating on testnet.
 
 ### 5.2. Organic Traffic Routing
-- Validators expose an HTTP API endpoint.
-- Organic requests are forwarded to top-performing miners.
-- Results are aggregated (e.g., majority vote or weighted average) and returned to the user.
+- Validators can expose `/health`, `/capabilities`, `/search`, and `/search/stream`.
+- Organic and developer requests are forwarded to top-ranked responsive miners.
+- Results are aggregated, deduplicated, ranked by confidence, and returned in the shared ChronoSeek protocol shape.
 
 ## 6. Miner Design
 
 Miners are free to implement *any* architecture. However, we provide reference implementations to bootstrap the network.
 
-### 6.1. Tier 1: Baseline (CLIP-based Sliding Window)
-*Low compute, moderate accuracy.*
-1.  **Frame Extraction:** 1 fps.
-2.  **Encoding:** CLIP (ViT-L/14) for frames and text.
-3.  **Search:** Calculate Cosine Similarity between Query Vector and Frame Vectors.
-4.  **Localization:** Apply a threshold (e.g., > 0.25) and merge consecutive frames into intervals.
+### 6.1. Version 1.0 Baseline: Vision + Speech Transcript Retrieval
+*Deployed on testnet today.*
+1.  **Video Download:** Fetch the source video locally on the miner.
+2.  **Visual Retrieval:** Run a CLIP-based coarse-to-fine search over extracted frames to produce candidate temporal windows.
+3.  **Speech Extraction:** Extract audio, transcribe speech, and score transcript segments against the query.
+4.  **Fusion:** Keep vision as the primary signal and apply transcript-derived audio as a secondary boost when it improves confidence.
+5.  **Localization:** Return ranked timestamp intervals with confidence scores.
 
-### 6.2. Tier 2: Advanced (Temporal Transformers)
-*High compute, high accuracy.*
-- **Backbone:** Use a video backbone (e.g., SlowFast, TimeSformer) to capture motion.
-- **Reasoning:** Use a cross-modal transformer (like Moment-DETR or UMT) that takes a sequence of video features and the text query.
-- **Direct Prediction:** The model outputs `(center, width)` coordinates directly, avoiding the need for sliding windows.
+### 6.2. Version 2.0 Direction: Full Multimodality
+*Current active direction.*
+- **Vision:** Keep improving temporal localization beyond the current CLIP baseline.
+- **Speech:** Move from transcript-only use toward stronger spoken-language understanding.
+- **Non-speech audio:** Add event-level sound understanding so queries can match applause, crashes, music cues, animal sounds, engine noise, and similar signals that transcripts miss.
+- **Fusion:** Move toward a true multimodal scoring stack instead of the current vision-primary, transcript-boost approach.
 
 ### 6.3. Tier 3: LLM Agents (Future)
 - Miners run a VLM (like Video-LLaMA) that "watches" the video and reasons: *"I see a car here, but it's blue. The user asked for a red truck. I will skip."*
@@ -124,20 +130,20 @@ Miners are free to implement *any* architecture. However, we provide reference i
 
 Chutes (Subnet 64) serves as the scalable inference layer for ChronoSeek.
 
-#### Phase 1: Miner-Side Inference
-In the initial phase, miners use Chutes as a serverless backend to run their own models.
+#### Version 1.0: Miner-Side Inference
+In the 1.0 architecture, miners use Chutes as a serverless backend to run their own models.
 1.  **Deploy:** Miner deploys their custom model image (e.g., Moment-DETR) to Chutes.
 2.  **Call:** Miner's Synapse `forward` function calls the Chutes API.
 3.  **Benefit:** Miners don't need to rent idle H100s; they pay per inference via SN64.
 
-#### Phase 2: Decentralized Inference (Validator Verification)
-In future versions, we move to a "Proof of Model" approach where Validators can directly verify the model running on Chutes.
+#### Version 2.0: Decentralized Inference (Validator Verification)
+In 2.0 and later, we move to a "Proof of Model" approach where Validators can directly verify the model running on Chutes.
 1.  **Commitment:** Miner uploads their model to Chutes and commits the `chute_id` and `miner_hotkey` metadata to the Bittensor chain.
 2.  **Verification:** Validators read the metadata and can send inference requests *directly* to the Miner's Chute to verify latency and accuracy, bypassing the Miner's local proxy.
 3.  **Efficiency:** This reduces hop latency and ensures the code running is exactly what was promised.
 
 ```python
-# Example Miner Forward Logic using Chutes (Phase 1)
+# Example Miner Forward Logic using Chutes (Version 1.0)
 import requests
 
 def forward(self, synapse: VideoSearchSynapse) -> VideoSearchSynapse:
@@ -203,4 +209,3 @@ Recent research (2024-2025) highlights several key directions:
 ### 8.4. Bias Mitigation
 - **Concept:** Datasets often have temporal biases (e.g., moments often at the beginning). SOTA methods use causal inference to de-bias.
 - **Relevance:** Validators must ensure synthetic queries do not favor trivial baselines (e.g., "always guess the middle").
-

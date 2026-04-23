@@ -6,25 +6,26 @@
 
 ---
 
-## ⚠️ MVP Disclaimer (Hackathon)
+## Current Scope (1.0)
 
-**Current Status:** Proof of Concept (MVP)
+**Current Status:** Fully functioning on testnet with a released developer-facing gateway.
 
-This repository represents the initial **Minimum Viable Product (MVP)** implementation of the ChronoSeek protocol.
+This repository implements the ChronoSeek 1.0 subnet currently running on testnet.
 
-**MVP Scope Limitations:**
+**1.0 Capabilities:**
 
-- **Model:** Miners currently use a baseline **CLIP (ViT-B/32)** sliding window approach. This is computationally expensive and not optimized for long-form video.
-- **Dataset:** Validators evaluate against **ActivityNet Captions** annotations. For local verification and smoke tests, the repo also includes a small curated fixture with directly downloadable sample videos.
-- **Scoring:** Validators score miners by best-match Intersection-over-Union (IoU) in `[0, 1]` and maintain moving averages for weight setting. A strict IoU threshold of `0.5` is still used in local verification scripts when you want pass/fail semantics.
-- **Inference:** All inference happens locally on the miner.
+- **Multimodal baseline:** Miners perform visual retrieval plus transcript-based speech understanding. Vision remains the primary signal, and speech-derived scoring acts as an additional boost when audio is available and usable.
+- **Deterministic evaluation:** Validators evaluate against **ActivityNet Captions** annotations loaded from Hugging Face or a local manifest, with accessible/inaccessible video caching to keep synthetic validation usable on testnet.
+- **Scoring:** Validators score miners by best-match Intersection-over-Union (IoU) in `[0, 1]`, maintain moving averages for weight setting, and normalize weights on-chain. A strict IoU threshold of `0.5` remains only for local pass/fail verification scripts.
+- **Gateway/API:** Validators can expose a protocol-compatible gateway for application and developer traffic, and that developer-facing surface is already released.
+- **Deployment status:** Miner search, validator scoring, and gateway request flows are all functioning on testnet.
 
-**Future Enhancements (Roadmap):**
+**Roadmap (2.0+):**
 
-1.  **Modular Inference:** Integration with **Chutes (SN64)** for serverless, verifiable model execution.
-2.  **SOTA Models:** Transition to temporal-aware architectures like **Moment-DETR** or **VideoLlama**.
-3.  **Synthetic Tasks:** Implementation of a VLM-based Oracle (using GPT-4o or Gemini) to generate infinite synthetic training tasks from any video URL.
-4.  **Vector Caching:** Miners will implement vector databases (Milvus/Chroma) to cache video embeddings, enabling millisecond-level retrieval for repeated queries.
+1.  **Full multimodality:** Extend from vision + speech transcript matching to vision + speech + non-speech sound understanding.
+2.  **Stronger retrieval models:** Transition from the current CLIP-based baseline toward more temporal-aware architectures like **Moment-DETR** or **VideoLlama**-class systems.
+3.  **Richer evaluation and incentives:** Expand beyond the current deterministic dataset loop once more advanced generation and scoring are trustworthy.
+4.  **Caching and modular inference:** Add stronger caching and optional delegated inference backends where they improve real testnet performance.
 
 ---
 
@@ -36,21 +37,22 @@ This project is organized into the following key documents:
   _Why this subnet exists, the "dark data" problem, and the limitations of current search tools._
 
 - **[System Design](docs/DESIGN.md)**  
-  _Technical architecture, including Miner/Validator logic, Synthetic Task Generation, and SOTA research references (CLIP, LLMs)._
+  _Technical architecture, including the deployed Miner/Validator logic, validator gateway behavior, and longer-term multimodal roadmap._
 
 - **[Business Logic & Market Rationale](docs/BUSINESS_LOGIC.md)**  
   _Market size ($94B+), commercialization strategy, and competitive advantage against centralized giants._
 
 ---
 
-## 🚀 Quick Start (Hackathon)
+## 🚀 Quick Start
 
 ### 1. The Core Concept
 
 We are building a decentralized protocol where:
 
 - **Miners** use AI models (CLIP, Transformers) to "watch" videos and find specific moments.
-- **Validators** generate synthetic queries to grade miners and serve organic requests.
+- **Validators** run deterministic ActivityNet evaluation to grade miners and serve organic/developer requests.
+- **Miners** currently combine visual search with transcript-based speech understanding.
 - **Users** get precise timestamps (e.g., "04:12 - 04:18") for natural language queries.
 
 ### 2. Architecture Overview
@@ -59,13 +61,13 @@ We are building a decentralized protocol where:
 User / Client
    │
    ▼
-Validator (Gateway)
-   ├─ Synthetic evaluation (scoring & weights)
-   └─ Organic query routing
+Validator (Scoring + Gateway)
+   ├─ Deterministic evaluation (scoring & weights)
+   └─ Organic / developer query routing
    │
    ▼
 Miners
-   └─ Semantic video analysis (CLIP / SOTA Models)
+   └─ Semantic video analysis (vision + speech transcript scoring)
 ```
 
 ## 📦 Installation & Setup
@@ -162,7 +164,7 @@ Notes:
 
 ### 1. Start the Miner
 
-The miner listens for HTTP requests from validators.
+The miner listens for validator HTTP requests, including signed `/search` queries and `/health` liveness checks.
 
 ```bash
 # Starts miner on port 8000
@@ -200,12 +202,15 @@ Supported endpoints:
 - `POST /search/stream`
 
 The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. It waits for all queried miners to finish before aggregating and ranking the combined result set. This preserves the existing synchronous behavior for API consumers that want the fullest available aggregate.
-The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once miner queries are dispatched, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
+The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once the validator has selected currently healthy miners and dispatched the fanout, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
 The `/capabilities` endpoint exposes gateway metadata such as the supported protocol versions so upstream platform services can verify compatibility at startup.
+The `/health` endpoint is intentionally self-identifying. Miner health responses include `service: "miner"` and validator API health responses include `service: "validator-gateway"`, so validator liveness checks do not confuse one role for the other.
 
 Gateway behavior:
 
-- both search endpoints query several miners, ranked by the validator's current moving scores
+- validators maintain a miner liveness snapshot using periodic `/health` checks
+- both search endpoints query several currently healthy miners, ranked by the validator's current moving scores
+- synthetic validator scoring also targets only miners that are currently healthy at liveness sweep time
 - `POST /search` aggregates the returned windows across all completed miner queries before responding
 - `POST /search/stream` keeps the connection open and yields incremental usable results as miner responses arrive
 - both return the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
@@ -300,10 +305,12 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_CACHE_TTL_HOURS`  | TTL for cached video availability checks                                          | `24`                    |
 | `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
 | `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
-| `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `60`                    |
-| `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/health`, and `/capabilities` API       | `0`                     |
+| `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `150`                   |
+| `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/search/stream`, `/health`, and `/capabilities` API | `0`          |
 | `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
 | `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
-| `VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS`   | Per-miner timeout for sync validator API search fanout                      | `50`                    |
-| `VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS` | Per-miner timeout for streaming validator API search fanout                 | `60`                    |
+| `VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS`   | Per-miner timeout for sync validator API search fanout                      | `135`                   |
+| `VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS` | Per-miner timeout for streaming validator API search fanout                 | `135`                   |
+| `VALIDATOR_MINER_HEALTH_INTERVAL_SECONDS`    | Interval between validator liveness sweeps using miner `/health`            | `60`                    |
+| `VALIDATOR_MINER_HEALTH_TIMEOUT_SECONDS`     | Per-miner timeout for validator liveness checks via miner `/health`         | `5`                     |
