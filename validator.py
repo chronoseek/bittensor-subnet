@@ -216,6 +216,45 @@ def apply_responsive_miner_filter(
     return filtered_scores
 
 
+def build_emission_weights(
+    scores: np.ndarray,
+    miner_emission_burn_percent: float,
+    burn_uid: int = 0,
+) -> np.ndarray:
+    """
+    Reserve a fixed emission share for `burn_uid` and distribute the remaining
+    share across all other miners by score.
+    """
+    weights = np.zeros_like(np.asarray(scores, dtype=float))
+    if len(weights) == 0:
+        return weights
+
+    burn_percent = normalize_miner_emission_burn_percent(
+        miner_emission_burn_percent
+    )
+    burn_fraction = burn_percent / 100.0
+    if 0 <= burn_uid < len(weights):
+        weights[burn_uid] = burn_fraction
+
+    distributable_scores = np.array(scores, dtype=float, copy=True)
+    if 0 <= burn_uid < len(distributable_scores):
+        distributable_scores[burn_uid] = 0.0
+    distributable_scores = np.where(distributable_scores > 0, distributable_scores, 0.0)
+    distributable_total = float(np.sum(distributable_scores))
+    remaining_fraction = max(0.0, 1.0 - burn_fraction)
+
+    if distributable_total > 0 and remaining_fraction > 0:
+        weights += (distributable_scores / distributable_total) * remaining_fraction
+    elif remaining_fraction > 0 and 0 <= burn_uid < len(weights):
+        weights[burn_uid] = 1.0
+
+    return weights
+
+
+def normalize_miner_emission_burn_percent(value: float) -> float:
+    return max(0.0, min(float(value), 100.0))
+
+
 async def run_validator_loop(
     subtensor: bt.Subtensor,
     runtime: ValidatorGatewayRuntime,
@@ -343,11 +382,19 @@ async def run_validator_loop(
                     f"Block {current_block}: Setting weights (tempo={tempo})"
                 )
 
-                # Normalize scores to weights
-                if np.sum(scores) > 0:
-                    weights = scores / np.sum(scores)
-                else:
-                    weights = np.zeros_like(scores)
+                burn_percent = normalize_miner_emission_burn_percent(
+                    config.miner_emission_burn_percent
+                )
+                weights = build_emission_weights(
+                    scores,
+                    miner_emission_burn_percent=burn_percent,
+                    burn_uid=0,
+                )
+                bt.logging.info(
+                    "Emission weights prepared | "
+                    f"burn_uid=0 | burn_percent={burn_percent:.2f} | "
+                    f"distributed_percent={100.0 - burn_percent:.2f}"
+                )
 
                 # Convert to lists
                 uids_list = list(range(len(weights)))
@@ -511,6 +558,12 @@ def get_config():
         type=float,
         default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "150")),
         help="Per-miner timeout in seconds for synthetic validator evaluation requests.",
+    )
+    parser.add_argument(
+        "--miner-emission-burn-percent",
+        type=float,
+        default=float(os.getenv("MINER_EMISSION_BURN_PERCENT", "0")),
+        help="Percent of miner emissions to burn by assigning that weight share to UID 0. The remaining share is distributed to UID 1+ by score.",
     )
     parser.add_argument(
         "--validator-api-host",

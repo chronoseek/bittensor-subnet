@@ -9,13 +9,42 @@ import sys, os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from validator import run_runtime_sync_loop, run_validator_loop, seed_scores_from_metagraph
+from validator import (
+    build_emission_weights,
+    run_runtime_sync_loop,
+    run_validator_loop,
+    seed_scores_from_metagraph,
+)
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
 from chronoseek.validator.gateway import ValidatorGatewayRuntime
 
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
+
+    def test_build_emission_weights_reserves_burn_uid_and_distributes_rest(self):
+        scores = np.array([100.0, 2.0, 6.0])
+
+        weights = build_emission_weights(scores, miner_emission_burn_percent=25.0)
+
+        np.testing.assert_allclose(weights, np.array([0.25, 0.1875, 0.5625]))
+        self.assertAlmostEqual(float(np.sum(weights)), 1.0)
+
+    def test_build_emission_weights_excludes_uid_zero_when_burn_is_zero(self):
+        scores = np.array([100.0, 2.0, 6.0])
+
+        weights = build_emission_weights(scores, miner_emission_burn_percent=0.0)
+
+        np.testing.assert_allclose(weights, np.array([0.0, 0.25, 0.75]))
+        self.assertAlmostEqual(float(np.sum(weights)), 1.0)
+
+    def test_build_emission_weights_burns_all_when_no_rest_scores_exist(self):
+        scores = np.array([0.0, 0.0, 0.0])
+
+        weights = build_emission_weights(scores, miner_emission_burn_percent=30.0)
+
+        np.testing.assert_allclose(weights, np.array([1.0, 0.0, 0.0]))
+        self.assertAlmostEqual(float(np.sum(weights)), 1.0)
 
     def test_seed_scores_from_metagraph_uses_incentives(self):
         metagraph = MagicMock()
@@ -97,6 +126,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
                     synthetic_miner_timeout_seconds=60.0,
+                    miner_emission_burn_percent=0.0,
                     video_availability_cache_path="",
                     accessible_video_cache_path="",
                     inaccessible_video_cache_path="",

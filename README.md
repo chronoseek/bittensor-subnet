@@ -306,6 +306,7 @@ pm2 logs validator
 | `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
 | `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
 | `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `150`                   |
+| `MINER_EMISSION_BURN_PERCENT`         | Percent of miner emissions to burn by assigning that weight share to UID 0       | `0`                     |
 | `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/search/stream`, `/health`, and `/capabilities` API | `0`          |
 | `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
 | `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
