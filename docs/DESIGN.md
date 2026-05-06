@@ -1,211 +1,250 @@
 # Design Document: ChronoSeek
 
-## 1. Introduction
+## 1. Purpose
 
-ChronoSeek provides a decentralized service for retrieving specific video moments based on natural language queries. This document outlines the current deployed subnet architecture and the next-step roadmap toward fuller multimodal understanding.
+This document describes:
 
-## 1.1. Current Network Status
+- the currently deployed `v1.x` testnet architecture
+- the target `v2.0` architecture built around the `Eval/Serve Split`
 
-- The subnet is functioning on testnet end to end.
-- Validators run deterministic ActivityNet-based evaluation for scoring and on-chain weight updates.
-- Miners currently support visual retrieval plus transcript-based speech understanding.
-- Validators can also expose a public protocol-compatible gateway for application and developer traffic.
-- The next major milestone is full multimodality: vision + speech + non-speech sound understanding.
+`Eval/Serve Split` is the engineering name for the new mechanism:
 
-## 2. Core Problem Definition
+- `eval plane`: synthetic validator evaluation and on-chain weight setting
+- `serve plane`: owner-controlled public API for organic traffic
 
-**Input:**
-- Untrimmed Video $V$ (or video features)
-- Natural Language Query $Q$
+The full v2.0 source of truth is [ChronoSeek v2.0 Eval/Serve Split](./CHRONOSEEK_V2_EVAL_SERVE_SPLIT.md).
 
-**Output:**
-- A set of temporal intervals $\{ (s_i, e_i, score_i) \}$ where $s_i$ is the start time, $e_i$ is the end time, and $score_i$ represents the confidence that the segment matches the query $Q$.
+## 2. Version Summary
 
-## 3. Overall Subnet Architecture
+### `v1.x` current architecture
 
-The subnet operates as a competitive market for semantic video understanding.
+- validators generate ActivityNet-based synthetic tasks
+- validators query live miner endpoints directly
+- validators score miner responses and set weights
+- validators may also expose a public gateway that forwards organic traffic to ranked responsive miners
 
-### 3.1. High-Level Data Flow
+### `v2.0` target architecture
 
-1.  **Task Generation (Validator):** The validator samples a task from ActivityNet Captions, preserving the human-written caption and one or more ground-truth intervals.
-2.  **Availability Filtering:** When configured, the validator skips inaccessible source videos, records availability in cache, and can fall back to previously confirmed accessible videos.
-3.  **Broadcast:** The query (video URL + text description) is sent to selected responsive miners over signed HTTP requests.
-4.  **Inference (Miner):** Miners download the video, run visual retrieval, optionally extract and transcribe speech, and return ranked timestamp intervals.
-5.  **Scoring (Validator):** The validator compares miner intervals with the ground truths using best-match IoU.
-6.  **Weight Setting:** Step scores are folded into moving averages and normalized into on-chain weights.
-7.  **Gateway Serving:** The validator gateway can also aggregate miner responses for organic and developer-facing search traffic.
+- miners deploy full retrieval runtimes to private Chutes
+- miners commit structured deployment metadata on-chain
+- validators resolve the latest valid miner submission from chain state
+- validators query private miner Chutes for synthetic evaluation only
+- the owner-run API serves organic traffic from promoted immutable Chutes clones
+- promoted clones are locked to the exact Docker image that was running at clone time
 
-### 3.2. Component Interaction Diagram
+## 3. Core Problem Definition
+
+**Input**
+
+- untrimmed video or accessible video URL
+- natural-language query
+
+**Output**
+
+- one or more temporal intervals with confidence scores
+
+The core retrieval problem is unchanged across versions.
+
+## 4. `v1.x` Deployed Data Flow
+
+1. Validator samples a synthetic task from ActivityNet Captions.
+2. Validator filters inaccessible source videos if configured.
+3. Validator sends signed `/search` requests to selected miner endpoints.
+4. Miner downloads the video, runs retrieval, optionally extracts and scores speech transcripts, and returns ranked windows.
+5. Validator computes best-match IoU and updates moving scores.
+6. Validator sets on-chain weights.
+7. Optional validator gateway fans out organic traffic to currently responsive miners.
+
+## 5. `v2.0` Target Data Flow
+
+### 5.1. Synthetic evaluation plane
+
+1. Miner trains or improves a retrieval runtime.
+2. Miner deploys that runtime to a private Chutes deployment.
+3. Miner commits structured deployment metadata on-chain, keyed by hotkey.
+4. Validator samples a synthetic task.
+5. Validator resolves the latest valid miner submission from chain state.
+6. Validator queries the miner's private Chutes deployment.
+7. Validator scores the result with the existing synthetic scoring loop.
+8. Validator updates weights.
+
+### 5.2. Organic serving plane
+
+1. Subnet owner selects a winning or approved miner submission.
+2. Chutes clones the private deployment into an immutable public deployment.
+3. The promoted clone is locked to the exact Docker image that was running at clone time.
+4. The owner-run API routes organic traffic only to promoted Chutes clones under operator control.
+5. Product auth, billing, rate limiting, uptime, and rollback stay outside the subnet.
+
+## 6. High-Level Diagrams
+
+### `v1.x`
 
 ```mermaid
 sequenceDiagram
     participant V as Validator
     participant M as Miner
-    participant C as Chain (Bittensor)
-    participant U as User / Developer
+    participant C as Chain
+    participant U as User
 
-    Note over V: 1. Sample ActivityNet task
-    V->>V: Store {Video URL, Query, Ground Truths}
+    V->>M: Synthetic signed /search
+    M-->>V: Ranked windows
+    V->>C: Set weights
 
-    V->>M: Signed /search: {Video_URL, Query}
-    Note over M: 2. Download, retrieve, transcribe if available
-    M-->>V: Response: [{Start, End, Confidence}...]
-
-    Note over V: 3. Calculate best IoU(Response, GTs)
-    V->>C: 4. Set Weights
-
-    U->>V: Organic / developer search request
-    V->>M: Fanout to ranked miners
+    U->>V: Organic request
+    V->>M: Gateway fanout
     M-->>V: Ranked windows
     V-->>U: Aggregated response
 ```
 
-## 4. Incentive Design
+### `v2.0`
 
-The incentive mechanism is the core driver of the subnet. In the current deployed version, it primarily rewards retrieval accuracy measured by IoU.
+```mermaid
+sequenceDiagram
+    participant M as Miner
+    participant C as Chain
+    participant V as Validator
+    participant O as Owner API
+    participant P as Promoted Chute
+    participant U as User
 
-### 4.1. Scoring Function
+    M->>C: Commit latest Chutes submission metadata
+    V->>C: Resolve miner submission by hotkey
+    V->>M: Synthetic eval via private Chute
+    V->>C: Set weights
 
-For a single query $q$, a miner returns a list of predicted intervals $P = \{p_1, p_2, ...\}$. The Ground Truth is a set of one or more valid intervals $G = \{g_1, g_2, ...\}$.
-
-The score $S$ for a query is calculated as the best **Intersection over Union (IoU)** across all prediction / ground-truth pairs.
-
-$$ \text{IoU}(p, g) = \frac{\text{intersection}(p, g)}{\text{union}(p, g)} $$
-
-We define the current reward function as:
-
-$$ R(P, G) = \max_{p \in P, g \in G} \left( \text{IoU}(p, g) \right) $$
-
-This returns a continuous score in `[0, 1]`.
-
-**Latency today:**
-Latency is tracked operationally and exposed in validator logs, but it is not currently part of the on-chain scoring formula.
-
-### 4.2. Aggregation & Weights
-- Scores are maintained as moving averages over repeated validation steps.
-- Validators seed scores from the metagraph incentives when possible, then update them with each new step score.
-- Weight setting is based on normalized moving scores.
-
-## 5. Validator Design
-
-Validators are the quality and routing layer. They generate scored evaluation tasks, track miner responsiveness, and optionally expose a public gateway.
-
-### 5.1. Synthetic Task Generation Pipeline
-
-The deployed validator uses a deterministic ActivityNet-based task pipeline:
-
-1.  **Dataset Source:** Load ActivityNet Captions from Hugging Face or a local manifest.
-2.  **Task Selection:** Randomly select a row from the configured split and preserve its caption plus one or more valid timestamp intervals.
-3.  **Video Availability Check:** Optionally verify that the source video is currently accessible and cache both accessible and inaccessible URLs.
-4.  **Fallback Strategy:** If newly sampled videos are inaccessible, fall back to a cached accessible video so validator loops can continue operating on testnet.
-
-### 5.2. Organic Traffic Routing
-- Validators can expose `/health`, `/capabilities`, `/search`, and `/search/stream`.
-- Organic and developer requests are forwarded to top-ranked responsive miners.
-- Results are aggregated, deduplicated, ranked by confidence, and returned in the shared ChronoSeek protocol shape.
-
-## 6. Miner Design
-
-Miners are free to implement *any* architecture. However, we provide reference implementations to bootstrap the network.
-
-### 6.1. Version 1.0 Baseline: Vision + Speech Transcript Retrieval
-*Deployed on testnet today.*
-1.  **Video Download:** Fetch the source video locally on the miner.
-2.  **Visual Retrieval:** Run a CLIP-based coarse-to-fine search over extracted frames to produce candidate temporal windows.
-3.  **Speech Extraction:** Extract audio, transcribe speech, and score transcript segments against the query.
-4.  **Fusion:** Keep vision as the primary signal and apply transcript-derived audio as a secondary boost when it improves confidence.
-5.  **Localization:** Return ranked timestamp intervals with confidence scores.
-
-### 6.2. Version 2.0 Direction: Full Multimodality
-*Current active direction.*
-- **Vision:** Keep improving temporal localization beyond the current CLIP baseline.
-- **Speech:** Move from transcript-only use toward stronger spoken-language understanding.
-- **Non-speech audio:** Add event-level sound understanding so queries can match applause, crashes, music cues, animal sounds, engine noise, and similar signals that transcripts miss.
-- **Fusion:** Move toward a true multimodal scoring stack instead of the current vision-primary, transcript-boost approach.
-
-### 6.3. Tier 3: LLM Agents (Future)
-- Miners run a VLM (like Video-LLaMA) that "watches" the video and reasons: *"I see a car here, but it's blue. The user asked for a red truck. I will skip."*
-
-### 6.4. Chutes (SN64) Integration
-
-Chutes (Subnet 64) serves as the scalable inference layer for ChronoSeek.
-
-#### Version 1.0: Miner-Side Inference
-In the 1.0 architecture, miners use Chutes as a serverless backend to run their own models.
-1.  **Deploy:** Miner deploys their custom model image (e.g., Moment-DETR) to Chutes.
-2.  **Call:** Miner's Synapse `forward` function calls the Chutes API.
-3.  **Benefit:** Miners don't need to rent idle H100s; they pay per inference via SN64.
-
-#### Version 2.0: Decentralized Inference (Validator Verification)
-In 2.0 and later, we move to a "Proof of Model" approach where Validators can directly verify the model running on Chutes.
-1.  **Commitment:** Miner uploads their model to Chutes and commits the `chute_id` and `miner_hotkey` metadata to the Bittensor chain.
-2.  **Verification:** Validators read the metadata and can send inference requests *directly* to the Miner's Chute to verify latency and accuracy, bypassing the Miner's local proxy.
-3.  **Efficiency:** This reduces hop latency and ensures the code running is exactly what was promised.
-
-```python
-# Example Miner Forward Logic using Chutes (Version 1.0)
-import requests
-
-def forward(self, synapse: VideoSearchSynapse) -> VideoSearchSynapse:
-    payload = {
-        "video_url": synapse.video_url,
-        "query": synapse.query
-    }
-    # Call the deployed Chute
-    response = requests.post(
-        "https://api.chutes.ai/miner/my-moment-detr",
-        json=payload,
-        headers={"Authorization": f"Bearer {self.chutes_api_key}"}
-    )
-    synapse.results = response.json()['results']
-    return synapse
+    O->>P: Route organic traffic to Docker-image-locked clone
+    U->>O: Public API request
+    P-->>O: Stable retrieval response
+    O-->>U: Product response
 ```
 
-## 7. Request/Response Protocol
+## 7. Validator Design
 
-### 7.1. Synapse Definition (Pydantic)
+### 7.1. `v1.x`
 
-```python
-import bittensor as bt
-from typing import List, Optional
-from pydantic import BaseModel
+Validators are both:
 
-class VideoSearchResult(BaseModel):
-    start: float
-    end: float
-    confidence: float
+- the scoring layer
+- an optional public gateway layer
 
-class VideoSearchSynapse(bt.Synapse):
-    # Input
-    video_url: str
-    query: str
-    
-    # Output
-    results: List[VideoSearchResult] = []
-    
-    # Optional: Metadata for debugging
-    miner_metadata: Optional[dict] = {}
-```
+They currently:
 
-## 8. Research & SOTA Approaches
+- generate synthetic tasks
+- track miner responsiveness
+- query miner endpoints directly
+- aggregate gateway traffic
 
-Recent research (2024-2025) highlights several key directions:
+### 7.2. `v2.0`
 
-### 8.1. Large Language Model (LLM) Enhanced Retrieval
-- **Concept:** Use LLMs to bridge the gap between complex natural language queries and visual features.
-- **Papers:** ["Context-Enhanced Video Moment Retrieval with Large Language Models"](https://arxiv.org/abs/2405.12540) (Weijia Liu., 2024).
-- **Application:** Miners can use LLMs to expand queries or reason about the video content before retrieval.
+Validators remain only the scoring and chain-update layer.
 
-### 8.2. Contrastive Learning & CLIP-based Approaches
-- **Concept:** Leverage pre-trained Vision-Language Models (VLMs) like CLIP to align video frames/segments with text queries.
-- **Papers:** ["Video Corpus Moment Retrieval with Contrastive Learning"](https://arxiv.org/abs/2105.06247) (Hao Zhang., 2021).
-- **Application:** A strong baseline for miners is to extract frame embeddings using CLIP and compute cosine similarity with the query embedding across a sliding window.
+They should:
 
-### 8.3. Proposal-Free / Regression Approaches
-- **Concept:** Instead of ranking pre-defined proposals (sliding windows), directly predict start/end timestamps.
-- **Papers:** ["Moment-DETR"](https://arxiv.org/abs/2107.09609) (Jie Lei., 2021), ["Time-R1"](https://arxiv.org/abs/2503.13377) (Boshen Xu., 2025).
-- **Application:** More efficient for long videos but requires more specialized model training.
+- generate synthetic tasks exactly as today
+- stop treating miners as the production serving path
+- resolve miner deployment metadata from chain state
+- query private Chutes directly for evaluation
+- keep scoring, weight aggregation, and incentives unchanged unless later revised explicitly
 
-### 8.4. Bias Mitigation
-- **Concept:** Datasets often have temporal biases (e.g., moments often at the beginning). SOTA methods use causal inference to de-bias.
-- **Relevance:** Validators must ensure synthetic queries do not favor trivial baselines (e.g., "always guess the middle").
+## 8. Miner Design
+
+### 8.1. `v1.x` current miner runtime
+
+The reference miner currently performs:
+
+1. video download
+2. CLIP-based visual retrieval
+3. transcript extraction and scoring
+4. simple fusion
+5. ranked interval output
+
+### 8.2. `v2.0` miner submission unit
+
+The important design change is that miners are no longer treated as only live HTTP servers.
+
+The miner submission unit becomes a hosted retrieval runtime. That runtime can include:
+
+- video acquisition logic
+- preprocessing
+- frame and clip traversal
+- transcript extraction
+- retrieval logic
+- ranking and protocol formatting
+
+This is intentionally broader than "just a model."
+
+Because the Chutes promotion flow locks the exact Docker image running at clone time, a winning full runtime can become the owner-operated public-serving artifact.
+
+## 9. Chutes Integration
+
+### 9.1. `v1.x` informal Chutes usage
+
+Chutes may be used by miners as an internal inference backend, but the validator still reasons about miners primarily as live endpoints.
+
+### 9.2. `v2.0` formal Chutes-backed design
+
+Chutes becomes part of the canonical miner submission and promotion flow:
+
+1. miners deploy private Chutes
+2. validators evaluate private Chutes
+3. subnet admins can promote selected deployments
+4. promoted Chutes clones become immutable public serving artifacts
+5. promoted artifacts are locked to the exact Docker image that was running at clone time
+
+This solves the main reliability issue with organic traffic:
+
+- miners remain decentralized and replaceable
+- the public API stops depending on live miner fanout
+
+## 10. On-Chain Submission Metadata
+
+`v2.0` should commit structured metadata, not only a raw endpoint URL.
+
+Recommended fields:
+
+- `protocol_version`
+- `submission_type`
+- `hotkey`
+- canonical Chutes identifier such as `chute_id`
+- resolved endpoint slug if safe to include
+- `artifact_id`
+- `artifact_revision`
+- `artifact_digest`
+- `capabilities`
+- `created_at_block`
+
+This allows validators to:
+
+- discover the latest valid submission per miner
+- distinguish mutable endpoint references from immutable runtime identity
+- reject malformed or stale submissions deterministically
+
+## 11. Public API Design Implication
+
+### `v1.x`
+
+The developer API ultimately depends on validator gateway fanout to miners.
+
+### `v2.0`
+
+The public API becomes a product service, not a subnet routing trick.
+
+It should:
+
+- authenticate users and API keys
+- meter credits and usage
+- route only to owner-controlled promoted Chutes clones
+- route organic traffic to the selected Docker-image-locked clone
+- support rollback and champion/challenger promotion logic
+
+## 12. What Stays The Same
+
+The following can remain unchanged in the first `v2.0` implementation step:
+
+- synthetic task generation approach
+- scoring function
+- moving-average weight aggregation
+- protocol request and response shape where possible
+
+The main change is not the reward function. It is the serving and deployment boundary.
