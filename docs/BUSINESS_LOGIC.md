@@ -36,13 +36,13 @@ That third point is now important. A subnet can be decentralized without forcing
 
 ## 4. Business Logic By Version
 
-### 4.1. `v1.x` current testnet model
+### 4.1. Historical `v1.x` testnet model
 
-- miners provide live retrieval services
-- validators rank miners with synthetic tasks
-- validators may also expose a public gateway for organic traffic
+- miners provided live retrieval services
+- validators ranked miners with synthetic tasks
+- validators could also relay organic traffic
 
-This is acceptable for early testing, but weak for a production developer API.
+This was acceptable for early testing, but weak for a production developer API.
 
 ### 4.2. `v2.0` target model: `Eval/Serve Split`
 
@@ -83,7 +83,7 @@ This is a better commercialization boundary than asking customers to trust live 
 
 ## 6. Why The New Design Makes More Sense
 
-The old gateway-first design had a mismatch:
+The old validator-relay design had a mismatch:
 
 - synthetic evaluation wants decentralization and miner diversity
 - product serving wants stability, rollback, observability, and ownership
@@ -145,4 +145,4 @@ The business logic is now cleaner:
 - Chutes is the runtime substrate for private submissions and Docker-image-locked promotion
 - the owner-run API is the monetized product surface
 
-That is a stronger design than using a validator gateway as the long-term public API.
+That is a stronger design than routing product traffic through validator-owned infrastructure.

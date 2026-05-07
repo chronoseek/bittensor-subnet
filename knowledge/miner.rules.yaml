@@ -15,11 +15,6 @@ development:
       - constrained_attack_surface
 
 communication:
-  deprecated:
-    - axon
-    - dendrite
-    - synapse
-  
   recommended:
     protocol: http_rest
     signing: epistula

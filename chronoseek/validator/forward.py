@@ -1,11 +1,13 @@
-import httpx
-import time
 import asyncio
 import json
-from uuid import uuid4
-import bittensor as bt
+import time
 from dataclasses import dataclass
 from typing import List, Tuple
+from uuid import uuid4
+
+import bittensor as bt
+import httpx
+
 from chronoseek.protocol_models import (
     ProtocolError,
     VideoSearchRequest,
@@ -13,6 +15,11 @@ from chronoseek.protocol_models import (
 )
 from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
+from chronoseek.validator.submissions import (
+    MinerEvaluationEndpoint,
+    MinerSubmission,
+    build_evaluation_endpoints,
+)
 
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
@@ -32,13 +39,6 @@ class MinerQueryResult:
     failure: MinerQueryFailure | None = None
 
 
-@dataclass
-class MinerHealthcheckResult:
-    ok: bool
-    latency: float
-    failure: MinerQueryFailure | None = None
-
-
 def _normalize_endpoint(endpoint: str) -> str:
     if endpoint.startswith("http"):
         return endpoint
@@ -53,18 +53,21 @@ async def query_miner(
     request: VideoSearchRequest,
     wallet: bt.Wallet,
     timeout_seconds: float = 60.0,
+    extra_headers: dict[str, str] | None = None,
 ) -> MinerQueryResult:
     """
-    Query a single miner with Epistula signing.
-    Returns (Response, Latency).
+    Query one resolved miner runtime with Epistula signing.
     """
     start_time = time.time()
     try:
         request_payload = request.model_dump(mode="json")
         endpoint = _normalize_endpoint(endpoint)
 
-        # Generate Epistula headers
-        headers = generate_header(wallet.hotkey, request_payload)
+        # Generate Epistula headers. Provider auth stays additive.
+        headers = {
+            **(extra_headers or {}),
+            **generate_header(wallet.hotkey, request_payload),
+        }
 
         resp = await client.post(
             f"{endpoint}/search",
@@ -132,88 +135,30 @@ async def query_miner(
         )
 
 
-async def check_miner_health(
-    client: httpx.AsyncClient,
-    uid: int,
-    hotkey: str,
-    endpoint: str,
-    timeout_seconds: float = 5.0,
-) -> MinerHealthcheckResult:
-    start_time = time.time()
-    try:
-        endpoint = _normalize_endpoint(endpoint)
-        resp = await client.get(
-            f"{endpoint}/health",
-            timeout=timeout_seconds,
-        )
-        resp.raise_for_status()
-        latency = time.time() - start_time
-        payload = resp.json()
-        if (
-            not isinstance(payload, dict)
-            or payload.get("status") != "ok"
-            or payload.get("service") != "miner"
-        ):
-            raise ValueError("unexpected health response")
-        bt.logging.debug(
-            f"Health check miner {uid} ({hotkey}, {endpoint}) response: {payload}"
-        )
-        return MinerHealthcheckResult(
-            ok=True,
-            latency=latency,
-        )
-
-    except httpx.HTTPStatusError as exc:
-        failure = MinerQueryFailure(
-            kind="http_status",
-            message=str(exc),
-            status_code=exc.response.status_code,
-        )
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-    except httpx.TimeoutException as exc:
-        failure = MinerQueryFailure(kind="timeout", message=str(exc))
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-    except httpx.ConnectError as exc:
-        failure = MinerQueryFailure(kind="connect_error", message=str(exc))
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-    except Exception as exc:
-        failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-
-
 async def query_uid(
     semaphore: asyncio.Semaphore,
-    uid: int,
-    hotkey: str,
-    endpoint: str,
+    miner_endpoint: MinerEvaluationEndpoint,
     client: httpx.AsyncClient,
     request_model: VideoSearchRequest,
     wallet: bt.Wallet,
     ground_truths: List[Tuple[float, float]],
     timeout_seconds: float,
+    extra_headers: dict[str, str] | None = None,
 ) -> Tuple[int, float]:
     async with semaphore:
-        bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
+        uid = miner_endpoint.uid
+        bt.logging.debug(
+            f"Querying miner {uid} runtime from chain submission at {miner_endpoint.endpoint}..."
+        )
         result = await query_miner(
             client,
             uid,
-            hotkey,
-            endpoint,
+            miner_endpoint.hotkey,
+            miner_endpoint.endpoint,
             request_model,
             wallet,
             timeout_seconds=timeout_seconds,
+            extra_headers=extra_headers,
         )
         resp = result.response
         latency = result.latency
@@ -250,12 +195,15 @@ async def run_step(
     client: httpx.AsyncClient,
     miner_timeout_seconds: float = 60.0,
     candidate_uids: List[int] | None = None,
+    miner_submissions: dict[str, MinerSubmission] | None = None,
+    chutes_base_domain: str = "chutes.ai",
+    provider_headers: dict[str, str] | None = None,
 ) -> List[Tuple[int, float]]:
     """
     Run a single validation step:
     1. Generate task (ActivityNet)
-    2. Query all miners via HTTP + Epistula
-    3. Score responses (Strict IoU)
+    2. Query selected responsive runtime endpoints via HTTP + Epistula
+    3. Score responses with continuous IoU
 
     Returns: List of (uid, score)
     """
@@ -304,35 +252,32 @@ async def run_step(
 
     scores = []
 
-    # MVP: Loop over metagraph to query miners
-    # We skip UIDs with no IP (0.0.0.0) or private IPs if not local dev
-    bt.logging.info(f"\n>>> Phase 2: Querying Miners ({len(metagraph.uids)} total)")
+    miner_endpoints = build_evaluation_endpoints(
+        metagraph=metagraph,
+        candidate_uids=candidate_uids,
+        submissions_by_hotkey=miner_submissions,
+        chutes_base_domain=chutes_base_domain,
+    )
+    bt.logging.info(
+        "\n>>> Phase 2: Querying Miners "
+        f"({len(metagraph.uids)} total | selected={len(miner_endpoints)} | "
+        f"routing=chain | submissions={len(miner_endpoints)})"
+    )
 
     tasks = []
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MINER_REQUESTS)
-    uids_to_query = candidate_uids if candidate_uids is not None else metagraph.uids
 
-    for uid in uids_to_query:
-        uid = int(uid)
-        if uid < 0 or uid >= len(metagraph.axons):
-            continue
-        axon = metagraph.axons[uid]
-        if axon.ip == "0.0.0.0":
-            continue
-
-        endpoint = f"http://{axon.ip}:{axon.port}"
-        hotkey = metagraph.hotkeys[uid]
+    for miner_endpoint in miner_endpoints:
         tasks.append(
             query_uid(
                 semaphore,
-                int(uid),
-                hotkey,
-                endpoint,
+                miner_endpoint,
                 client,
                 request_model,
                 wallet,
                 ground_truths,
                 miner_timeout_seconds,
+                extra_headers=provider_headers,
             )
         )
 

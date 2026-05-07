@@ -20,11 +20,6 @@ responsibilities:
     - hide_implementation_from_validators
 
 communication:
-  deprecated:
-    - axon
-    - dendrite
-    - synapse
-  
   patterns:
     http_api:
       recommended: true

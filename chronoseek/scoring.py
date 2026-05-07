@@ -56,7 +56,7 @@ def best_iou(
 def score_response(
     predictions: List[VideoSearchResult],
     ground_truth: GroundTruthInterval | GroundTruthIntervals,
-    latency: float,  # Kept for API compatibility, ignored in MVP
+    latency: float,  # Kept for API compatibility; current scoring is IoU-only.
 ) -> float:
     """
     Score a miner's response using the best IoU across predictions and ground truths.

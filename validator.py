@@ -1,6 +1,6 @@
 """
 ChronoSeek Validator.
-Implements the synthetic task generation, miner querying (HTTP+Epistula), and IoU scoring loop.
+Implements synthetic task generation, runtime querying, IoU scoring, and weight updates.
 """
 
 import os
@@ -19,10 +19,15 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Use ActivityNetTaskGenerator for MVP
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
-from chronoseek.validator.gateway import ValidatorGatewayRuntime, create_validator_gateway
+from chronoseek.validator.state import ValidatorRuntimeState
+from chronoseek.validator.submissions import (
+    MinerSubmission,
+    MinerSubmissionResolver,
+    build_submission_endpoint_map,
+    chutes_auth_headers_from_env,
+)
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 HEARTBEAT_TIMEOUT = 600  # seconds
@@ -63,7 +68,7 @@ def heartbeat_monitor(last_heartbeat, stop_event):
 
 
 def get_responsive_uids_snapshot(
-    runtime: ValidatorGatewayRuntime,
+    runtime: ValidatorRuntimeState,
 ) -> tuple[list[int], bool]:
     with runtime.responsive_lock:
         responsive_uids = sorted(runtime.responsive_uids)
@@ -71,7 +76,7 @@ def get_responsive_uids_snapshot(
     return responsive_uids, responsive_initialized
 
 
-def get_metagraph_snapshot(runtime: ValidatorGatewayRuntime):
+def get_metagraph_snapshot(runtime: ValidatorRuntimeState):
     with runtime.metagraph_lock:
         return runtime.metagraph
 
@@ -92,7 +97,7 @@ def resize_scores_for_metagraph(
 
 
 def replace_runtime_metagraph(
-    runtime: ValidatorGatewayRuntime,
+    runtime: ValidatorRuntimeState,
     metagraph: bt.Metagraph,
 ):
     with runtime.metagraph_lock:
@@ -101,7 +106,7 @@ def replace_runtime_metagraph(
 
 def sync_runtime_metagraph(
     subtensor: bt.Subtensor,
-    runtime: ValidatorGatewayRuntime,
+    runtime: ValidatorRuntimeState,
     netuid: int,
 ) -> bt.Metagraph:
     next_metagraph = bt.Metagraph(
@@ -123,7 +128,7 @@ def sync_runtime_metagraph(
 
 
 def responsive_refresh_due(
-    runtime: ValidatorGatewayRuntime,
+    runtime: ValidatorRuntimeState,
     interval_seconds: float,
 ) -> bool:
     with runtime.responsive_lock:
@@ -134,72 +139,81 @@ def responsive_refresh_due(
     return (time.time() - last_refresh_at) >= max(1.0, float(interval_seconds))
 
 
-async def refresh_responsive_miners(
-    runtime: ValidatorGatewayRuntime,
+async def refresh_responsive_miners_from_submissions(
+    runtime: ValidatorRuntimeState,
+    subtensor: bt.Subtensor,
+    netuid: int,
+    submission_resolver: MinerSubmissionResolver,
+    chutes_base_domain: str,
     health_timeout_seconds: float,
+    provider_headers: dict[str, str] | None = None,
 ) -> set[int]:
+    """
+    "Responsive" means:
+    1. the registered metagraph hotkey has valid committed runtime metadata
+    2. the resolved runtime endpoint currently passes /health
+    """
     health_timeout_seconds = max(0.5, float(health_timeout_seconds))
-    candidate_uids: list[int] = []
     metagraph = get_metagraph_snapshot(runtime)
+    submissions = await submission_resolver.get_submissions(
+        subtensor=subtensor,
+        netuid=netuid,
+        metagraph=metagraph,
+    )
+    endpoint_map = build_submission_endpoint_map(
+        metagraph=metagraph,
+        submissions_by_hotkey=submissions,
+        chutes_base_domain=chutes_base_domain,
+    )
+    healthy_endpoint_map: dict[int, str] = {}
 
-    for uid in metagraph.uids:
-        uid = int(uid)
-        if uid < 0 or uid >= len(metagraph.axons):
-            continue
-        axon = metagraph.axons[uid]
-        if axon.ip == "0.0.0.0":
-            continue
-        candidate_uids.append(uid)
-
-    refreshed_at = time.time()
-    if not candidate_uids:
-        with runtime.responsive_lock:
-            runtime.responsive_uids = set()
-            runtime.responsive_initialized = True
-            runtime.responsive_last_refresh_at = refreshed_at
-        bt.logging.warning(
-            "Responsive miner refresh found no miners with advertised endpoints."
-        )
-        return set()
-
-    responsive_uids: set[int] = set()
-    semaphore = asyncio.Semaphore(forward_module.MAX_CONCURRENT_MINER_REQUESTS)
-
-    async with httpx.AsyncClient(timeout=health_timeout_seconds) as client:
-        async def ping_uid(uid: int):
-            async with semaphore:
-                axon = metagraph.axons[uid]
-                hotkeys = getattr(metagraph, "hotkeys", [])
-                hotkey = hotkeys[uid] if uid < len(hotkeys) else f"uid-{uid}"
-                endpoint = f"http://{axon.ip}:{axon.port}"
-                result = await forward_module.check_miner_health(
-                    client=client,
-                    uid=uid,
-                    hotkey=hotkey,
-                    endpoint=endpoint,
-                    timeout_seconds=health_timeout_seconds,
-                )
-                return uid, result
-
-        tasks = [asyncio.create_task(ping_uid(uid)) for uid in candidate_uids]
+    async def check_health(
+        client: httpx.AsyncClient,
+        uid: int,
+        endpoint: str,
+    ) -> None:
         try:
-            for completed in asyncio.as_completed(tasks):
-                uid, result = await completed
-                if result.ok:
-                    responsive_uids.add(uid)
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            response = await client.get(
+                f"{endpoint.rstrip('/')}/health",
+                headers=provider_headers or {},
+                timeout=health_timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("ok") is not True:
+                bt.logging.debug(
+                    f"Miner UID {uid} health check returned unexpected payload: {payload}"
+                )
+                return
+            healthy_endpoint_map[uid] = endpoint
+        except Exception as exc:
+            bt.logging.debug(
+                f"Miner UID {uid} has committed metadata but failed /health at {endpoint}: {exc}"
+            )
+
+    if endpoint_map:
+        async with httpx.AsyncClient(timeout=health_timeout_seconds) as client:
+            await asyncio.gather(
+                *(
+                    check_health(client, int(uid), endpoint)
+                    for uid, endpoint in endpoint_map.items()
+                )
+            )
+
+    responsive_uids = set(healthy_endpoint_map)
+    refreshed_at = time.time()
 
     with runtime.responsive_lock:
         runtime.responsive_uids = set(responsive_uids)
+        runtime.miner_endpoints = dict(healthy_endpoint_map)
         runtime.responsive_initialized = True
         runtime.responsive_last_refresh_at = refreshed_at
 
     bt.logging.info(
-        f"Responsive miner refresh completed | responsive={len(responsive_uids)}/{len(candidate_uids)} | uids={sorted(responsive_uids)}"
+        "Submission metadata refresh completed | "
+        f"metadata={len(endpoint_map)}/{len(getattr(metagraph, 'hotkeys', []))} | "
+        f"responsive={len(responsive_uids)}/{len(getattr(metagraph, 'hotkeys', []))} | "
+        f"uids={sorted(responsive_uids)}"
     )
     return responsive_uids
 
@@ -214,6 +228,32 @@ def apply_responsive_miner_filter(
         if uid not in responsive_set:
             filtered_scores[uid] = 0.0
     return filtered_scores
+
+
+def build_responsive_submission_snapshot(
+    *,
+    metagraph: bt.Metagraph,
+    endpoint_map: dict[int, str],
+    candidate_uids: list[int],
+) -> dict[str, MinerSubmission]:
+    """Build routable submissions from the health-checked runtime snapshot."""
+
+    hotkeys = getattr(metagraph, "hotkeys", [])
+    submissions: dict[str, MinerSubmission] = {}
+    for uid in candidate_uids:
+        uid = int(uid)
+        if uid < 0 or uid >= len(hotkeys):
+            continue
+        endpoint = endpoint_map.get(uid)
+        if not endpoint:
+            continue
+        hotkey = hotkeys[uid]
+        submissions[hotkey] = MinerSubmission(
+            hotkey=hotkey,
+            uid=uid,
+            endpoint=endpoint,
+        )
+    return submissions
 
 
 def build_emission_weights(
@@ -255,9 +295,22 @@ def normalize_miner_emission_burn_percent(value: float) -> float:
     return max(0.0, min(float(value), 100.0))
 
 
+def get_config_float(config: bt.Config, name: str, default: float) -> float:
+    value = getattr(config, name, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def get_config_str(config: bt.Config, name: str, default: str = "") -> str:
+    value = getattr(config, name, default)
+    return value if isinstance(value, str) else default
+
+
 async def run_validator_loop(
     subtensor: bt.Subtensor,
-    runtime: ValidatorGatewayRuntime,
+    runtime: ValidatorRuntimeState,
     netuid: int,
     stop_event: threading.Event,
     last_heartbeat: List[float],
@@ -308,6 +361,20 @@ async def run_validator_loop(
         availability_checker=availability_checker,
         max_sampling_attempts=config.task_max_sampling_attempts,
     )
+    chutes_base_domain = get_config_str(config, "chutes_base_domain", "chutes.ai")
+    submission_resolver = MinerSubmissionResolver(
+        cache_ttl_seconds=get_config_float(
+            config,
+            "miner_submission_cache_ttl_seconds",
+            300.0,
+        ),
+    )
+    provider_headers = chutes_auth_headers_from_env()
+    if provider_headers:
+        bt.logging.info(
+            "Chutes/provider authorization header is configured for v2 evaluation requests."
+        )
+    bt.logging.info("Synthetic evaluation routing configured | mode=chain")
     async_client = httpx.AsyncClient(timeout=30.0)
     tempo = subtensor.get_subnet_hyperparameters(netuid).tempo
     bt.logging.info(f"Subnet tempo: {tempo} blocks")
@@ -317,22 +384,54 @@ async def run_validator_loop(
         while not stop_event.is_set():
             current_block = subtensor.get_current_block()
             last_heartbeat[0] = time.time()
+            if current_block % 100 == 0 and runtime.last_metagraph_sync_block != current_block:
+                sync_runtime_metagraph(subtensor, runtime, netuid)
+                runtime.last_metagraph_sync_block = current_block
+
             metagraph = get_metagraph_snapshot(runtime)
             with runtime.score_lock:
                 scores = resize_scores_for_metagraph(runtime.scores, metagraph)
-            responsive_uids, responsive_initialized = get_responsive_uids_snapshot(
-                runtime
-            )
-            if responsive_initialized:
-                scores = apply_responsive_miner_filter(scores, responsive_uids)
 
-            if responsive_initialized and not responsive_uids:
+            if responsive_refresh_due(
+                runtime,
+                float(config.miner_submission_refresh_interval_seconds),
+            ):
+                await refresh_responsive_miners_from_submissions(
+                    runtime=runtime,
+                    subtensor=subtensor,
+                    netuid=netuid,
+                    submission_resolver=submission_resolver,
+                    chutes_base_domain=chutes_base_domain,
+                    health_timeout_seconds=get_config_float(
+                        config,
+                        "miner_submission_health_timeout_seconds",
+                        10.0,
+                    ),
+                    provider_headers=provider_headers,
+                )
+
+            metagraph = get_metagraph_snapshot(runtime)
+            with runtime.score_lock:
+                scores = resize_scores_for_metagraph(runtime.scores, metagraph)
+            with runtime.responsive_lock:
+                endpoint_map = dict(runtime.miner_endpoints)
+                candidate_uids = sorted(
+                    uid for uid in runtime.responsive_uids if uid in endpoint_map
+                )
+
+            miner_submissions = build_responsive_submission_snapshot(
+                metagraph=metagraph,
+                endpoint_map=endpoint_map,
+                candidate_uids=candidate_uids,
+            )
+            scores = apply_responsive_miner_filter(scores, candidate_uids)
+
+            if not candidate_uids:
                 bt.logging.warning(
-                    "Skipping validation step because no responsive miners are currently available."
+                    "Skipping validation step because no responsive miners have valid committed metadata and healthy runtimes."
                 )
                 await asyncio.sleep(12)
                 continue
-
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
                 task_gen,
@@ -340,7 +439,10 @@ async def run_validator_loop(
                 runtime.wallet,
                 async_client,
                 miner_timeout_seconds=float(config.synthetic_miner_timeout_seconds),
-                candidate_uids=responsive_uids if responsive_initialized else None,
+                candidate_uids=candidate_uids,
+                miner_submissions=miner_submissions,
+                chutes_base_domain=chutes_base_domain,
+                provider_headers=provider_headers,
             )
 
             # Update moving average scores
@@ -424,48 +526,6 @@ async def run_validator_loop(
             await async_client.aclose()
 
 
-async def run_runtime_sync_loop(
-    subtensor: bt.Subtensor,
-    runtime: ValidatorGatewayRuntime,
-    netuid: int,
-    stop_event: threading.Event,
-    last_heartbeat: List[float],
-    config: bt.Config,
-):
-    bt.logging.info("Validator runtime sync loop started.")
-    while not stop_event.is_set():
-        current_block = subtensor.get_current_block()
-        last_heartbeat[0] = time.time()
-        should_refresh_responsive = responsive_refresh_due(
-            runtime,
-            float(config.validator_miner_health_interval_seconds),
-        )
-
-        if current_block % 100 == 0 and runtime.last_metagraph_sync_block != current_block:
-            sync_runtime_metagraph(subtensor, runtime, netuid)
-            runtime.last_metagraph_sync_block = current_block
-            should_refresh_responsive = True
-
-        if should_refresh_responsive:
-            await refresh_responsive_miners(
-                runtime,
-                health_timeout_seconds=float(
-                    config.validator_miner_health_timeout_seconds
-                ),
-            )
-            responsive_uids, responsive_initialized = get_responsive_uids_snapshot(
-                runtime
-            )
-            if responsive_initialized:
-                with runtime.score_lock:
-                    runtime.scores = apply_responsive_miner_filter(
-                        runtime.scores,
-                        responsive_uids,
-                    )
-
-        await asyncio.sleep(12)
-
-
 def get_config():
     """
     Parse arguments and return configuration.
@@ -541,12 +601,6 @@ def get_config():
         help="Timeout in seconds for validator-side video availability checks.",
     )
     parser.add_argument(
-        "--enable-validator-api",
-        action="store_true",
-        default=os.getenv("ENABLE_VALIDATOR_API", "0") in {"1", "true", "True"},
-        help="Enable the optional public validator API with /search, /search/stream, /health, and /capabilities endpoints.",
-    )
-    parser.add_argument(
         "--enable-synthetic-evaluation",
         action=argparse.BooleanOptionalAction,
         default=os.getenv("ENABLE_SYNTHETIC_EVALUATION", "1")
@@ -560,52 +614,34 @@ def get_config():
         help="Per-miner timeout in seconds for synthetic validator evaluation requests.",
     )
     parser.add_argument(
+        "--miner-submission-cache-ttl-seconds",
+        type=float,
+        default=float(os.getenv("MINER_SUBMISSION_CACHE_TTL_SECONDS", "300")),
+        help="TTL for cached v2 miner submissions loaded from chain.",
+    )
+    parser.add_argument(
+        "--miner-submission-refresh-interval-seconds",
+        type=float,
+        default=float(os.getenv("MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS", "60")),
+        help="Interval in seconds between validator refreshes of miner submission metadata.",
+    )
+    parser.add_argument(
+        "--miner-submission-health-timeout-seconds",
+        type=float,
+        default=float(os.getenv("MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS", "10")),
+        help="Per-runtime timeout for /health checks during responsive miner refresh.",
+    )
+    parser.add_argument(
+        "--chutes-base-domain",
+        type=str,
+        default=os.getenv("CHUTES_BASE_DOMAIN", "chutes.ai"),
+        help="Base Chutes domain used to resolve chute_slug submissions into HTTPS endpoints.",
+    )
+    parser.add_argument(
         "--miner-emission-burn-percent",
         type=float,
         default=float(os.getenv("MINER_EMISSION_BURN_PERCENT", "0")),
         help="Percent of miner emissions to burn by assigning that weight share to UID 0. The remaining share is distributed to UID 1+ by score.",
-    )
-    parser.add_argument(
-        "--validator-api-host",
-        type=str,
-        default=os.getenv("VALIDATOR_API_HOST", "0.0.0.0"),
-        help="Host for the optional validator API.",
-    )
-    parser.add_argument(
-        "--validator-api-port",
-        type=int,
-        default=int(os.getenv("VALIDATOR_API_PORT", "8010")),
-        help="Port for the optional validator API.",
-    )
-    parser.add_argument(
-        "--validator-api-max-miners",
-        type=int,
-        default=int(os.getenv("VALIDATOR_API_MAX_MINERS", "3")),
-        help="Maximum number of miners the optional validator API will query per request.",
-    )
-    parser.add_argument(
-        "--validator-api-sync-miner-timeout-seconds",
-        type=float,
-        default=float(os.getenv("VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS", "135")),
-        help="Per-miner timeout in seconds for sync validator API search requests.",
-    )
-    parser.add_argument(
-        "--validator-api-stream-miner-timeout-seconds",
-        type=float,
-        default=float(os.getenv("VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS", "135")),
-        help="Per-miner timeout in seconds for streaming validator API search requests.",
-    )
-    parser.add_argument(
-        "--validator-miner-health-interval-seconds",
-        type=float,
-        default=float(os.getenv("VALIDATOR_MINER_HEALTH_INTERVAL_SECONDS", "60")),
-        help="Interval in seconds between validator liveness health sweeps across miner endpoints.",
-    )
-    parser.add_argument(
-        "--validator-miner-health-timeout-seconds",
-        type=float,
-        default=float(os.getenv("VALIDATOR_MINER_HEALTH_TIMEOUT_SECONDS", "5")),
-        help="Per-miner timeout in seconds for validator liveness health checks.",
     )
     parser.add_argument(
         "--hf-cache-dir",
@@ -700,34 +736,42 @@ def main():
             f"Validator registered with UID: {metagraph.hotkeys.index(wallet.hotkey.ss58_address)}"
         )
 
-        runtime = ValidatorGatewayRuntime(
+        chutes_base_domain = get_config_str(config, "chutes_base_domain", "chutes.ai")
+        provider_headers = chutes_auth_headers_from_env()
+        runtime = ValidatorRuntimeState(
             wallet=wallet,
             metagraph=metagraph,
             scores=seed_scores_from_metagraph(metagraph),
             score_lock=threading.Lock(),
-            max_miners_per_request=max(1, int(config.validator_api_max_miners)),
-            sync_miner_request_timeout_seconds=max(
-                1.0, float(config.validator_api_sync_miner_timeout_seconds)
-            ),
-            stream_miner_request_timeout_seconds=max(
-                1.0, float(config.validator_api_stream_miner_timeout_seconds)
-            ),
+            provider_headers=provider_headers,
         )
 
-        if not config.enable_synthetic_evaluation and not config.enable_validator_api:
-            bt.logging.error(
-                "Both synthetic evaluation and validator API are disabled. Nothing to run."
-            )
+        if not config.enable_synthetic_evaluation:
+            bt.logging.error("Synthetic evaluation is disabled. Nothing to run.")
             stop_event.set()
             return
 
         sync_runtime_metagraph(subtensor, runtime, config.netuid)
+        submission_resolver = MinerSubmissionResolver(
+            cache_ttl_seconds=get_config_float(
+                config,
+                "miner_submission_cache_ttl_seconds",
+                300.0,
+            )
+        )
         initial_responsive_uids = asyncio.run(
-            refresh_responsive_miners(
-                runtime,
-                health_timeout_seconds=float(
-                    config.validator_miner_health_timeout_seconds
+            refresh_responsive_miners_from_submissions(
+                runtime=runtime,
+                subtensor=subtensor,
+                netuid=config.netuid,
+                submission_resolver=submission_resolver,
+                chutes_base_domain=chutes_base_domain,
+                health_timeout_seconds=get_config_float(
+                    config,
+                    "miner_submission_health_timeout_seconds",
+                    10.0,
                 ),
+                provider_headers=provider_headers,
             )
         )
         runtime.scores = apply_responsive_miner_filter(
@@ -738,88 +782,16 @@ def main():
             f"Initialized responsive miner snapshot with {len(initial_responsive_uids)} miners."
         )
 
-        api_thread = None
-        if config.enable_validator_api:
-            import uvicorn
-
-            gateway_app = create_validator_gateway(runtime)
-
-            def run_gateway():
-                uvicorn.run(
-                    gateway_app,
-                    host=config.validator_api_host,
-                    port=config.validator_api_port,
-                )
-
-            api_thread = threading.Thread(
-                target=run_gateway,
-                daemon=True,
-                name="validator-api",
+        asyncio.run(
+            run_validator_loop(
+                subtensor,
+                runtime,
+                config.netuid,
+                stop_event,
+                last_heartbeat,
+                config,
             )
-            api_thread.start()
-            bt.logging.info(
-                f"Validator API enabled on {config.validator_api_host}:{config.validator_api_port}"
-            )
-
-        def run_runtime_sync():
-            try:
-                asyncio.run(
-                    run_runtime_sync_loop(
-                        subtensor,
-                        runtime,
-                        config.netuid,
-                        stop_event,
-                        last_heartbeat,
-                        config,
-                    )
-                )
-            except Exception as exc:
-                bt.logging.error(f"Validator runtime sync loop crashed: {exc}")
-                stop_event.set()
-                raise
-
-        runtime_sync_thread = threading.Thread(
-            target=run_runtime_sync,
-            daemon=True,
-            name="validator-runtime-sync",
         )
-        runtime_sync_thread.start()
-        bt.logging.info(
-            "Validator runtime sync loop started."
-        )
-
-        synthetic_thread = None
-        if config.enable_synthetic_evaluation:
-            def run_synthetic_loop():
-                try:
-                    asyncio.run(
-                        run_validator_loop(
-                            subtensor,
-                            runtime,
-                            config.netuid,
-                            stop_event,
-                            last_heartbeat,
-                            config,
-                        )
-                    )
-                except Exception as exc:
-                    bt.logging.error(f"Synthetic validator loop crashed: {exc}")
-                    stop_event.set()
-                    raise
-
-            synthetic_thread = threading.Thread(
-                target=run_synthetic_loop,
-                daemon=True,
-                name="validator-synthetic",
-            )
-            synthetic_thread.start()
-            bt.logging.info("Synthetic validator loop started.")
-        else:
-            bt.logging.info("Synthetic evaluation is disabled.")
-
-        runtime_sync_thread.join()
-        if synthetic_thread is not None:
-            synthetic_thread.join(timeout=1)
 
     except KeyboardInterrupt:
         bt.logging.info("Validator stopped by user")

@@ -47,7 +47,6 @@ design_philosophy:
       excludes:
         - miner_implementation
         - reference_solutions
-        - shared_synapse_definitions
 
 core_loop:
   steps:
@@ -59,11 +58,6 @@ core_loop:
     6_wait: "sleep until next cycle"
 
 communication:
-  deprecated:
-    - axon
-    - dendrite
-    - synapse
-  
   recommended:
     protocol: "HTTP/REST"
     signing: epistula

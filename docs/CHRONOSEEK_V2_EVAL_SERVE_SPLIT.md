@@ -31,14 +31,14 @@ Meaning:
 
 ### `v1.x`
 
-Current testnet behavior:
+Earlier testnet behavior:
 
-- miners expose live search services
-- validators generate synthetic tasks and query miner endpoints
-- validators score responses and set weights
-- validators may optionally expose a gateway that forwards organic requests to responsive miners
+- miners ran live search services
+- validators generated synthetic tasks and queried miner endpoints
+- validators scored responses and set weights
+- validators could optionally relay organic requests to responsive miners
 
-This is useful for testnet, but it is not the target production API model.
+This was useful for testnet, but it is not the production API model.
 
 ### `v2.0`
 
@@ -49,6 +49,7 @@ Target implementation:
 - validators resolve the latest valid submission per hotkey from chain state
 - validators query private miner Chutes for synthetic evaluation only
 - the public API is owner-run and serves organic traffic from promoted immutable Chutes clones
+- miners and validators do not publish ports through subnet metadata
 - promoted clones are locked to the exact Docker image that was running when cloned
 
 ## Core Design
@@ -87,7 +88,7 @@ Because Chutes promotion locks the exact Docker image, the full custom runtime c
 
 ## Recommended On-Chain Manifest
 
-Validators should not rely on raw IPs, axon routing, or mutable miner-hosted URLs for v2 evaluation. Miners should commit a structured manifest.
+Validators should not rely on raw IPs or mutable miner-hosted URLs for v2 evaluation. Miners should commit a structured manifest.
 
 Recommended minimal manifest:
 
@@ -95,8 +96,10 @@ Recommended minimal manifest:
 {
   "version": "2.0",
   "runtime": "chutes",
-  "chute_id": "chute-deployment-id",
   "protocol": "chronoseek-runtime-v2",
+  "hotkey": "miner-hotkey-ss58",
+  "chute_id": "chute-deployment-id",
+  "chute_slug": "chronoseek-runtime",
   "created_at_block": 123456
 }
 ```
@@ -113,6 +116,19 @@ Optional fields:
 ```
 
 The implementation should prefer a canonical Chutes identifier such as `chute_id`. Validators can then resolve the serving slug or endpoint from Chutes metadata.
+
+Current subnet implementation uses latest revealed chain commitments by miner hotkey. There is no local metadata-file fallback, including for testing.
+
+For now, validators resolve an explicit `endpoint` first, then `chute_slug` as `https://{chute_slug}.${CHUTES_BASE_DOMAIN}`. Responsive miner selection requires both valid revealed metadata for a registered metagraph hotkey and a successful `/health` response from the resolved runtime. A `chute_id` remains part of the canonical identity, but a validator needs either a direct endpoint, a slug, or future Chutes metadata lookup to dispatch a request.
+
+Miners can commit a submission with:
+
+```bash
+poetry run python miner.py \
+  --chute-id chute-deployment-id \
+  --chute-slug chronoseek-runtime \
+  --artifact-revision immutable-revision
+```
 
 ## Validator Responsibilities
 
@@ -145,7 +161,7 @@ The public API should:
 The public API should not:
 
 - forward organic traffic to live miner endpoints
-- expose private miner Chute endpoints
+- reveal private miner Chute endpoints
 - require customers to understand subnet routing
 
 ## Promotion Flow
@@ -163,14 +179,15 @@ The public API should not:
 
 ## Implementation Order
 
-1. Define the v2 manifest parser and validator.
-2. Add chain read logic for latest revealed commitments by hotkey.
-3. Resolve `chute_id` to Chutes endpoint metadata.
-4. Add synthetic validator routing to Chutes endpoints.
-5. Keep scoring and task generation unchanged.
-6. Mark validator gateway as diagnostic/testnet-only.
-7. Add platform configuration for promoted serving backend selection.
-8. Add owner-admin promotion records and rollback selection.
+1. Define the v2 manifest parser and validator. `Implemented`
+2. Add chain read logic for latest revealed commitments by hotkey. `Implemented`
+3. Resolve direct endpoints and `chute_slug` values to Chutes endpoints. `Implemented`
+4. Resolve `chute_id` through Chutes metadata when provider lookup is available. `Pending`
+5. Add synthetic validator routing to Chutes endpoints. `Implemented`
+6. Keep scoring and task generation unchanged. `Implemented`
+7. Remove local validator serving and local miner serving paths. `Implemented`
+8. Add platform configuration for promoted serving backend selection.
+9. Add owner-admin promotion records and rollback selection.
 
 ## Non-Goals For First v2.0 Cut
 
@@ -178,7 +195,7 @@ The public API should not:
 - changing the public search request/response protocol
 - making organic traffic affect scores
 - building a marketplace of public deployments
-- requiring miners to expose stable public APIs themselves
+- requiring miners to publish stable public APIs themselves
 
 ## Design Rationale
 

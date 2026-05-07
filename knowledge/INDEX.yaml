@@ -163,7 +163,7 @@ task_routing:
 critical_doctrines:
   - "Validator-only development: ONLY write validator.py, NEVER miner code"
   - "'What am I measuring?' must answer in ONE sentence"
-  - "Axon/Dendrite/Synapse: DEPRECATED, use HTTP + Epistula"
+  - "HTTP + Epistula is the subnet transport boundary"
   - "Open source > black box mechanisms"
   - "Validators NOT trusted individually"
   - "Secret eval sets WILL leak"

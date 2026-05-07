@@ -15,7 +15,7 @@ from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 class ActivityNetTaskGenerator(BaseTaskGenerator):
     """
-    Generates tasks based on the ActivityNet Captions dataset (MVP Scope).
+    Generates synthetic evaluation tasks from ActivityNet Captions.
     """
 
     def __init__(

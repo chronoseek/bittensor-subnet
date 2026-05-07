@@ -4,8 +4,8 @@
 
 This document describes:
 
-- the currently deployed `v1.x` testnet architecture
-- the target `v2.0` architecture built around the `Eval/Serve Split`
+- the historical `v1.x` testnet architecture
+- the active `v2.0` architecture built around the `Eval/Serve Split`
 
 `Eval/Serve Split` is the engineering name for the new mechanism:
 
@@ -16,20 +16,21 @@ The full v2.0 source of truth is [ChronoSeek v2.0 Eval/Serve Split](./CHRONOSEEK
 
 ## 2. Version Summary
 
-### `v1.x` current architecture
+### Historical `v1.x` architecture
 
 - validators generate ActivityNet-based synthetic tasks
-- validators query live miner endpoints directly
+- validators queried live miner endpoints directly
 - validators score miner responses and set weights
-- validators may also expose a public gateway that forwards organic traffic to ranked responsive miners
+- validators could optionally relay organic traffic to ranked responsive miners
 
-### `v2.0` target architecture
+### Active `v2.0` architecture
 
 - miners deploy full retrieval runtimes to private Chutes
 - miners commit structured deployment metadata on-chain
 - validators resolve the latest valid miner submission from chain state
 - validators query private miner Chutes for synthetic evaluation only
 - the owner-run API serves organic traffic from promoted immutable Chutes clones
+- miners and validators do not publish ports through subnet metadata
 - promoted clones are locked to the exact Docker image that was running at clone time
 
 ## 3. Core Problem Definition
@@ -45,7 +46,7 @@ The full v2.0 source of truth is [ChronoSeek v2.0 Eval/Serve Split](./CHRONOSEEK
 
 The core retrieval problem is unchanged across versions.
 
-## 4. `v1.x` Deployed Data Flow
+## 4. Historical `v1.x` Data Flow
 
 1. Validator samples a synthetic task from ActivityNet Captions.
 2. Validator filters inaccessible source videos if configured.
@@ -53,7 +54,7 @@ The core retrieval problem is unchanged across versions.
 4. Miner downloads the video, runs retrieval, optionally extracts and scores speech transcripts, and returns ranked windows.
 5. Validator computes best-match IoU and updates moving scores.
 6. Validator sets on-chain weights.
-7. Optional validator gateway fans out organic traffic to currently responsive miners.
+7. Organic relay behavior existed outside the scoring path and is no longer part of the subnet runtime.
 
 ## 5. `v2.0` Target Data Flow
 
@@ -92,7 +93,7 @@ sequenceDiagram
     V->>C: Set weights
 
     U->>V: Organic request
-    V->>M: Gateway fanout
+    V->>M: Organic fanout
     M-->>V: Ranked windows
     V-->>U: Aggregated response
 ```
@@ -123,17 +124,14 @@ sequenceDiagram
 
 ### 7.1. `v1.x`
 
-Validators are both:
+Validators are the scoring layer.
 
-- the scoring layer
-- an optional public gateway layer
-
-They currently:
+They:
 
 - generate synthetic tasks
 - track miner responsiveness
-- query miner endpoints directly
-- aggregate gateway traffic
+- queried miner endpoints directly
+- aggregated organic traffic
 
 ### 7.2. `v2.0`
 
@@ -149,9 +147,9 @@ They should:
 
 ## 8. Miner Design
 
-### 8.1. `v1.x` current miner runtime
+### 8.1. Reference retrieval runtime
 
-The reference miner currently performs:
+The reference retrieval runtime performs:
 
 1. video download
 2. CLIP-based visual retrieval
@@ -178,9 +176,9 @@ Because the Chutes promotion flow locks the exact Docker image running at clone 
 
 ## 9. Chutes Integration
 
-### 9.1. `v1.x` informal Chutes usage
+### 9.1. Historical informal Chutes usage
 
-Chutes may be used by miners as an internal inference backend, but the validator still reasons about miners primarily as live endpoints.
+Chutes could be used by miners as an internal inference backend, but validators still reasoned about miners primarily as live endpoints.
 
 ### 9.2. `v2.0` formal Chutes-backed design
 
@@ -220,11 +218,15 @@ This allows validators to:
 - distinguish mutable endpoint references from immutable runtime identity
 - reject malformed or stale submissions deterministically
 
+The current subnet implementation uses latest revealed v2 commitments by miner hotkey. Local metadata-file fallback has been removed so validators test the same on-chain path they run in production.
+
+Submission routing evaluates private runtimes only for synthetic scoring. In v2, responsive miner selection requires valid metadata for hotkeys present in the metagraph and a successful `/health` response from the resolved runtime. Organic serving remains outside validator scoring and belongs to the owner-run API plane.
+
 ## 11. Public API Design Implication
 
 ### `v1.x`
 
-The developer API ultimately depends on validator gateway fanout to miners.
+The developer API depended on validator-mediated fanout to miners.
 
 ### `v2.0`
 

@@ -11,13 +11,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from validator import (
     build_emission_weights,
-    run_runtime_sync_loop,
+    build_responsive_submission_snapshot,
+    refresh_responsive_miners_from_submissions,
     run_validator_loop,
     seed_scores_from_metagraph,
 )
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
-from chronoseek.validator.gateway import ValidatorGatewayRuntime
+from chronoseek.validator.state import ValidatorRuntimeState
+from chronoseek.validator.submissions import MinerSubmission
 
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
@@ -55,6 +57,26 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         np.testing.assert_allclose(scores, np.array([0.2, 0.3, 0.5]))
 
+    def test_responsive_submission_snapshot_uses_health_checked_endpoints(self):
+        metagraph = MagicMock()
+        metagraph.hotkeys = ["h1", "h2", "h3"]
+
+        submissions = build_responsive_submission_snapshot(
+            metagraph=metagraph,
+            endpoint_map={
+                0: "https://runtime-0.example.com",
+                2: "https://runtime-2.example.com",
+            },
+            candidate_uids=[0, 1, 2],
+        )
+
+        self.assertEqual(set(submissions), {"h1", "h3"})
+        self.assertEqual(
+            str(submissions["h1"].endpoint).rstrip("/"),
+            "https://runtime-0.example.com",
+        )
+        self.assertEqual(submissions["h3"].uid, 2)
+
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
     async def test_weight_setting(self, mock_run_step, mock_task_gen):
@@ -77,7 +99,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         # Simulate block progression: 0 -> 1 -> ... -> 5 (trigger weights) -> 6 (stop)
         # We use a side_effect to increment blocks and eventually set stop_event
-        block_counter = [0]
+        block_counter = [1]
 
         def get_block_side_effect():
             current = block_counter[0]
@@ -96,23 +118,56 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         # Iteration 2: Miner 1 scores 0.5
         # ...
         async def run_step_side_effect(*args, **kwargs):
+            self.assertEqual(kwargs["candidate_uids"], [0, 1, 2])
+            self.assertEqual(
+                str(kwargs["miner_submissions"]["h1"].endpoint).rstrip("/"),
+                "https://runtime-0.example.com",
+            )
             return [(0, 1.0), (1, 0.5)]
 
         mock_run_step.side_effect = run_step_side_effect
 
         # Mock sleep to be instant
         with patch("asyncio.sleep", new_callable=AsyncMock), patch(
-            "validator.refresh_responsive_miners", new_callable=AsyncMock
-        ) as mock_refresh_responsive_miners:
-            mock_refresh_responsive_miners.return_value = {0, 1, 2}
-            runtime = ValidatorGatewayRuntime(
+            "validator.MinerSubmissionResolver"
+        ) as mock_resolver_cls, patch(
+            "validator.refresh_responsive_miners_from_submissions", new_callable=AsyncMock
+        ) as mock_refresh_responsive:
+            mock_resolver = MagicMock()
+            mock_resolver.get_submissions = AsyncMock(
+                return_value={
+                    "h1": MinerSubmission(
+                        hotkey="h1", endpoint="https://runtime-0.example.com"
+                    ),
+                    "h2": MinerSubmission(
+                        hotkey="h2", endpoint="https://runtime-1.example.com"
+                    ),
+                    "h3": MinerSubmission(
+                        hotkey="h3", endpoint="https://runtime-2.example.com"
+                    ),
+                }
+            )
+            mock_resolver_cls.return_value = mock_resolver
+
+            async def refresh_side_effect(*args, **kwargs):
+                refresh_runtime = kwargs["runtime"]
+                with refresh_runtime.responsive_lock:
+                    refresh_runtime.responsive_uids = {0, 1, 2}
+                    refresh_runtime.miner_endpoints = {
+                        0: "https://runtime-0.example.com",
+                        1: "https://runtime-1.example.com",
+                        2: "https://runtime-2.example.com",
+                    }
+                    refresh_runtime.responsive_initialized = True
+                    refresh_runtime.responsive_last_refresh_at = 1.0
+                return {0, 1, 2}
+
+            mock_refresh_responsive.side_effect = refresh_side_effect
+            runtime = ValidatorRuntimeState(
                 wallet=mock_wallet,
                 metagraph=mock_metagraph,
                 scores=seed_scores_from_metagraph(mock_metagraph),
-                score_lock=MagicMock(),
-                max_miners_per_request=3,
-                sync_miner_request_timeout_seconds=60.0,
-                stream_miner_request_timeout_seconds=60.0,
+                score_lock=threading.Lock(),
             )
             await run_validator_loop(
                 mock_subtensor,
@@ -132,8 +187,8 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
-                    validator_miner_health_interval_seconds=15.0,
-                    validator_miner_health_timeout_seconds=3.0,
+                    miner_submission_refresh_interval_seconds=15.0,
+                    miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
                 ),
@@ -166,9 +221,6 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         uids = kwargs["uids"]
         weights = kwargs["weights"]
 
-        # Debug print
-        print(f"Weights set: {weights}")
-
         self.assertEqual(uids, [0, 1, 2])
         # If both are 0.0, it means scoring didn't propagate.
         # Check if scores array was updated in the loop.
@@ -180,9 +232,88 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         # or check if set_weights was called with ANY weights.
         self.assertEqual(len(weights), 3)
 
-        print("✅ Validator Flow Test Passed: Weights set correctly based on scores.")
+    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
+    @patch("chronoseek.validator.forward.run_step")
+    async def test_validator_loop_skips_unhealthy_submission_runtimes(
+        self,
+        mock_run_step,
+        mock_task_gen,
+    ):
+        mock_subtensor = MagicMock()
+        mock_subtensor.get_subnet_hyperparameters.return_value.tempo = 100
+        mock_subtensor.get_current_block.return_value = 1
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.n = 1
+        mock_metagraph.hotkeys = ["h1"]
+        mock_metagraph.I = [1.0]
+        stop_event = MagicMock()
+        stop_event.is_set.side_effect = [False, True]
 
-    async def test_metagraph_growth_seeds_new_scores_from_incentives(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock), patch(
+            "validator.MinerSubmissionResolver"
+        ) as mock_resolver_cls, patch(
+            "validator.refresh_responsive_miners_from_submissions", new_callable=AsyncMock
+        ) as mock_refresh_responsive:
+            mock_resolver = MagicMock()
+            mock_resolver.get_submissions = AsyncMock(
+                return_value={
+                    "h1": MinerSubmission(
+                        hotkey="h1", endpoint="https://runtime-0.example.com"
+                    )
+                }
+            )
+            mock_resolver_cls.return_value = mock_resolver
+
+            async def refresh_side_effect(*args, **kwargs):
+                refresh_runtime = kwargs["runtime"]
+                with refresh_runtime.responsive_lock:
+                    refresh_runtime.responsive_uids = set()
+                    refresh_runtime.miner_endpoints = {}
+                    refresh_runtime.responsive_initialized = True
+                    refresh_runtime.responsive_last_refresh_at = 1.0
+                return set()
+
+            mock_refresh_responsive.side_effect = refresh_side_effect
+            runtime = ValidatorRuntimeState(
+                wallet=mock_wallet,
+                metagraph=mock_metagraph,
+                scores=seed_scores_from_metagraph(mock_metagraph),
+                score_lock=threading.Lock(),
+            )
+
+            await run_validator_loop(
+                mock_subtensor,
+                runtime,
+                netuid=1,
+                stop_event=stop_event,
+                last_heartbeat=[0],
+                config=MagicMock(
+                    task_dataset_path="",
+                    task_split="validation",
+                    require_accessible_videos=False,
+                    task_max_sampling_attempts=10,
+                    synthetic_miner_timeout_seconds=60.0,
+                    miner_emission_burn_percent=0.0,
+                    video_availability_cache_path="",
+                    accessible_video_cache_path="",
+                    inaccessible_video_cache_path="",
+                    video_availability_cache_ttl_hours=24,
+                    video_availability_timeout=5,
+                    miner_submission_refresh_interval_seconds=15.0,
+                    miner_submission_health_timeout_seconds=10.0,
+                    hf_cache_dir="",
+                    hf_activitynet_filename="",
+                ),
+            )
+
+        mock_run_step.assert_not_called()
+
+    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
+    async def test_validator_loop_syncs_metagraph_growth_from_incentives(
+        self,
+        mock_task_gen,
+    ):
         mock_subtensor = MagicMock()
         mock_wallet = MagicMock()
         mock_metagraph = MagicMock()
@@ -205,7 +336,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         with patch("asyncio.sleep", new_callable=AsyncMock), patch(
             "validator.sync_runtime_metagraph"
         ) as mock_sync_runtime_metagraph, patch(
-            "validator.refresh_responsive_miners", new_callable=AsyncMock
+            "validator.refresh_responsive_miners_from_submissions", new_callable=AsyncMock
         ) as mock_refresh_responsive_miners:
             def sync_runtime_metagraph_side_effect(subtensor, runtime, netuid):
                 runtime.metagraph = synced_metagraph
@@ -214,16 +345,13 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
             mock_sync_runtime_metagraph.side_effect = sync_runtime_metagraph_side_effect
             mock_refresh_responsive_miners.return_value = {0, 1, 2}
-            runtime = ValidatorGatewayRuntime(
+            runtime = ValidatorRuntimeState(
                 wallet=mock_wallet,
                 metagraph=mock_metagraph,
                 scores=seed_scores_from_metagraph(mock_metagraph),
                 score_lock=threading.Lock(),
-                max_miners_per_request=3,
-                sync_miner_request_timeout_seconds=60.0,
-                stream_miner_request_timeout_seconds=60.0,
             )
-            await run_runtime_sync_loop(
+            await run_validator_loop(
                 mock_subtensor,
                 runtime,
                 netuid=1,
@@ -235,19 +363,120 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
                     synthetic_miner_timeout_seconds=60.0,
+                    miner_emission_burn_percent=0.0,
                     video_availability_cache_path="",
                     accessible_video_cache_path="",
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
-                    validator_miner_health_interval_seconds=15.0,
-                    validator_miner_health_timeout_seconds=3.0,
+                    miner_submission_refresh_interval_seconds=15.0,
+                    miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
                 ),
             )
 
         np.testing.assert_allclose(runtime.scores, np.array([0.4, 0.6, 0.9]))
+
+    @patch("validator.httpx.AsyncClient")
+    async def test_submission_refresh_sets_responsive_uids_from_metadata_and_health(
+        self,
+        mock_async_client_cls,
+    ):
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["hk-0", "hk-1"]
+        mock_metagraph.uids = [0, 1]
+        mock_metagraph.n = 2
+
+        submission = MagicMock()
+        submission.endpoint = "https://runtime.example.com"
+        submission.chute_slug = None
+
+        resolver = MagicMock()
+        resolver.get_submissions = AsyncMock(return_value={"hk-1": submission})
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True}
+        client = AsyncMock()
+        client.get.return_value = response
+        mock_async_client_cls.return_value.__aenter__.return_value = client
+
+        runtime = ValidatorRuntimeState(
+            wallet=mock_wallet,
+            metagraph=mock_metagraph,
+            scores=np.array([0.0, 1.0]),
+            score_lock=threading.Lock(),
+        )
+
+        responsive_uids = await refresh_responsive_miners_from_submissions(
+            runtime=runtime,
+            subtensor=MagicMock(),
+            netuid=1,
+            submission_resolver=resolver,
+            chutes_base_domain="chutes.ai",
+            health_timeout_seconds=10,
+            provider_headers={"Authorization": "Bearer secret"},
+        )
+
+        self.assertEqual(responsive_uids, {1})
+        self.assertEqual(runtime.responsive_uids, {1})
+        self.assertEqual(
+            runtime.miner_endpoints,
+            {1: "https://runtime.example.com"},
+        )
+        self.assertEqual(
+            client.get.call_args.args[0],
+            "https://runtime.example.com/health",
+        )
+        self.assertEqual(
+            client.get.call_args.kwargs["headers"],
+            {"Authorization": "Bearer secret"},
+        )
+
+    @patch("validator.httpx.AsyncClient")
+    async def test_submission_refresh_excludes_unhealthy_runtime(
+        self,
+        mock_async_client_cls,
+    ):
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["hk-0", "hk-1"]
+        mock_metagraph.uids = [0, 1]
+        mock_metagraph.n = 2
+
+        submission = MagicMock()
+        submission.endpoint = "https://runtime.example.com"
+        submission.chute_slug = None
+
+        resolver = MagicMock()
+        resolver.get_submissions = AsyncMock(return_value={"hk-1": submission})
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": False}
+        client = AsyncMock()
+        client.get.return_value = response
+        mock_async_client_cls.return_value.__aenter__.return_value = client
+
+        runtime = ValidatorRuntimeState(
+            wallet=mock_wallet,
+            metagraph=mock_metagraph,
+            scores=np.array([0.0, 1.0]),
+            score_lock=threading.Lock(),
+        )
+
+        responsive_uids = await refresh_responsive_miners_from_submissions(
+            runtime=runtime,
+            subtensor=MagicMock(),
+            netuid=1,
+            submission_resolver=resolver,
+            chutes_base_domain="chutes.ai",
+            health_timeout_seconds=10,
+        )
+
+        self.assertEqual(responsive_uids, set())
+        self.assertEqual(runtime.responsive_uids, set())
+        self.assertEqual(runtime.miner_endpoints, {})
 
 
 if __name__ == "__main__":
@@ -287,7 +516,7 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
             client,
             1,
             "hk-1",
-            "127.0.0.1:8000",
+            "https://runtime.example.com",
             request,
             mock_wallet,
         )
