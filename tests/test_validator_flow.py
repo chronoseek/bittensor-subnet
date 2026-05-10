@@ -11,7 +11,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from validator import (
     build_emission_weights,
-    build_responsive_submission_snapshot,
     refresh_responsive_miners_from_submissions,
     run_validator_loop,
     seed_scores_from_metagraph,
@@ -19,7 +18,7 @@ from validator import (
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
 from chronoseek.validator.state import ValidatorRuntimeState
-from chronoseek.validator.submissions import MinerSubmission
+from chronoseek.chain.submissions import MinerSubmission
 
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
@@ -56,26 +55,6 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         scores = seed_scores_from_metagraph(metagraph)
 
         np.testing.assert_allclose(scores, np.array([0.2, 0.3, 0.5]))
-
-    def test_responsive_submission_snapshot_uses_health_checked_endpoints(self):
-        metagraph = MagicMock()
-        metagraph.hotkeys = ["h1", "h2", "h3"]
-
-        submissions = build_responsive_submission_snapshot(
-            metagraph=metagraph,
-            endpoint_map={
-                0: "https://runtime-0.example.com",
-                2: "https://runtime-2.example.com",
-            },
-            candidate_uids=[0, 1, 2],
-        )
-
-        self.assertEqual(set(submissions), {"h1", "h3"})
-        self.assertEqual(
-            str(submissions["h1"].endpoint).rstrip("/"),
-            "https://runtime-0.example.com",
-        )
-        self.assertEqual(submissions["h3"].uid, 2)
 
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
@@ -118,9 +97,10 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         # Iteration 2: Miner 1 scores 0.5
         # ...
         async def run_step_side_effect(*args, **kwargs):
-            self.assertEqual(kwargs["candidate_uids"], [0, 1, 2])
+            miner_endpoints = kwargs["miner_endpoints"]
+            self.assertEqual([endpoint.uid for endpoint in miner_endpoints], [0, 1, 2])
             self.assertEqual(
-                str(kwargs["miner_submissions"]["h1"].endpoint).rstrip("/"),
+                miner_endpoints[0].endpoint,
                 "https://runtime-0.example.com",
             )
             return [(0, 1.0), (1, 0.5)]
@@ -180,7 +160,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     task_split="validation",
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
-                    synthetic_miner_timeout_seconds=60.0,
+                    miner_request_timeout_seconds=60.0,
                     miner_emission_burn_percent=0.0,
                     video_availability_cache_path="",
                     accessible_video_cache_path="",
@@ -293,7 +273,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     task_split="validation",
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
-                    synthetic_miner_timeout_seconds=60.0,
+                    miner_request_timeout_seconds=60.0,
                     miner_emission_burn_percent=0.0,
                     video_availability_cache_path="",
                     accessible_video_cache_path="",
@@ -362,7 +342,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     task_split="validation",
                     require_accessible_videos=False,
                     task_max_sampling_attempts=10,
-                    synthetic_miner_timeout_seconds=60.0,
+                    miner_request_timeout_seconds=60.0,
                     miner_emission_burn_percent=0.0,
                     video_availability_cache_path="",
                     accessible_video_cache_path="",
@@ -378,7 +358,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         np.testing.assert_allclose(runtime.scores, np.array([0.4, 0.6, 0.9]))
 
-    @patch("validator.httpx.AsyncClient")
+    @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
     async def test_submission_refresh_sets_responsive_uids_from_metadata_and_health(
         self,
         mock_async_client_cls,
@@ -434,7 +414,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
             {"Authorization": "Bearer secret"},
         )
 
-    @patch("validator.httpx.AsyncClient")
+    @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
     async def test_submission_refresh_excludes_unhealthy_runtime(
         self,
         mock_async_client_cls,

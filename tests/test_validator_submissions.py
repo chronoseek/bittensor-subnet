@@ -4,11 +4,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner, run_step
-from chronoseek.validator.submissions import (
+from chronoseek.chain.submissions import (
     MinerSubmission,
+    load_chain_submissions,
+)
+from chronoseek.chutes.runtime import (
+    ChutesRuntimeEndpoint,
     build_evaluation_endpoints,
     build_submission_endpoint_map,
-    load_chain_submissions,
     resolve_submission_endpoint,
 )
 
@@ -207,12 +210,13 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
             wallet=wallet,
             client=client,
             miner_timeout_seconds=10,
-            miner_submissions={
-                "hk-1": MinerSubmission(
+            miner_endpoints=[
+                ChutesRuntimeEndpoint(
+                    uid=1,
                     hotkey="hk-1",
                     endpoint="https://runtime.example.com",
                 )
-            },
+            ],
             provider_headers={"Authorization": "Bearer secret"},
         )
 

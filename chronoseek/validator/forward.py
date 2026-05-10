@@ -15,11 +15,7 @@ from chronoseek.protocol_models import (
 )
 from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
-from chronoseek.validator.submissions import (
-    MinerEvaluationEndpoint,
-    MinerSubmission,
-    build_evaluation_endpoints,
-)
+from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
 
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
@@ -137,7 +133,7 @@ async def query_miner(
 
 async def query_uid(
     semaphore: asyncio.Semaphore,
-    miner_endpoint: MinerEvaluationEndpoint,
+    miner_endpoint: ChutesRuntimeEndpoint,
     client: httpx.AsyncClient,
     request_model: VideoSearchRequest,
     wallet: bt.Wallet,
@@ -194,9 +190,7 @@ async def run_step(
     wallet: bt.Wallet,
     client: httpx.AsyncClient,
     miner_timeout_seconds: float = 60.0,
-    candidate_uids: List[int] | None = None,
-    miner_submissions: dict[str, MinerSubmission] | None = None,
-    chutes_base_domain: str = "chutes.ai",
+    miner_endpoints: list[ChutesRuntimeEndpoint] | None = None,
     provider_headers: dict[str, str] | None = None,
 ) -> List[Tuple[int, float]]:
     """
@@ -252,16 +246,11 @@ async def run_step(
 
     scores = []
 
-    miner_endpoints = build_evaluation_endpoints(
-        metagraph=metagraph,
-        candidate_uids=candidate_uids,
-        submissions_by_hotkey=miner_submissions,
-        chutes_base_domain=chutes_base_domain,
-    )
+    miner_endpoints = list(miner_endpoints or [])
     bt.logging.info(
         "\n>>> Phase 2: Querying Miners "
         f"({len(metagraph.uids)} total | selected={len(miner_endpoints)} | "
-        f"routing=chain | submissions={len(miner_endpoints)})"
+        f"routing=chain+chutes)"
     )
 
     tasks = []

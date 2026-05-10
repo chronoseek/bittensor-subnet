@@ -132,27 +132,7 @@ def build_protocol_error(
     )
 
 
-@app.exception_handler(RequestValidationError)
-async def handle_request_validation_error(request: Request, exc: RequestValidationError):
-    request_id = None
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            request_id = body.get("request_id")
-    except Exception:
-        request_id = None
-
-    return build_protocol_error(
-        code="INVALID_REQUEST",
-        message="The search request payload is invalid.",
-        status_code=400,
-        request_id=request_id,
-        details={"errors": exc.errors()},
-    )
-
-
-@app.get("/health")
-async def health():
+def health_payload() -> dict:
     ready = miner_logic is not None and validator_auth is not None
     return {
         "ok": ready,
@@ -163,13 +143,15 @@ async def health():
     }
 
 
-@app.post("/search", response_model=VideoSearchResponse)
-async def search(
+def execute_search(
     payload: VideoSearchRequest,
-    caller_hotkey: str = Depends(verify_signature),
+    *,
+    caller_hotkey: str | None = None,
+    enforce_validator_auth: bool = True,
 ):
     request_id = payload.request_id or "unknown-request"
-    bt.logging.info(f"Received request {request_id} from {caller_hotkey}: {payload.query}")
+    caller = caller_hotkey or "chutes-sdk-authenticated-caller"
+    bt.logging.info(f"Received request {request_id} from {caller}: {payload.query}")
     bt.logging.debug(f"Video URL: {payload.video_url}")
 
     if miner_logic is None or validator_auth is None:
@@ -189,18 +171,27 @@ async def search(
             request_id=payload.request_id,
         )
 
-    is_authorized, auth_details = authorize_hotkey(validator_auth, caller_hotkey)
-    if not is_authorized:
-        bt.logging.warning(
-            f"Rejecting request {request_id} from hotkey {caller_hotkey} with stake {auth_details['caller_stake']:.6f} below minimum {auth_details['minimum_validator_stake']:.6f}"
-        )
-        return build_protocol_error(
-            code="INVALID_REQUEST",
-            message="Caller hotkey does not meet the minimum validator stake requirement.",
-            status_code=403,
-            request_id=payload.request_id,
-            details=auth_details,
-        )
+    if enforce_validator_auth:
+        if not caller_hotkey:
+            return build_protocol_error(
+                code="INVALID_REQUEST",
+                message="Caller hotkey is required for validator authorization.",
+                status_code=401,
+                request_id=payload.request_id,
+            )
+
+        is_authorized, auth_details = authorize_hotkey(validator_auth, caller_hotkey)
+        if not is_authorized:
+            bt.logging.warning(
+                f"Rejecting request {request_id} from hotkey {caller_hotkey} with stake {auth_details['caller_stake']:.6f} below minimum {auth_details['minimum_validator_stake']:.6f}"
+            )
+            return build_protocol_error(
+                code="INVALID_REQUEST",
+                message="Caller hotkey does not meet the minimum validator stake requirement.",
+                status_code=403,
+                request_id=payload.request_id,
+                details=auth_details,
+            )
 
     try:
         bt.logging.info("Starting search processing...")
@@ -238,3 +229,39 @@ async def search(
             status_code=500,
             request_id=payload.request_id,
         )
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(request: Request, exc: RequestValidationError):
+    request_id = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            request_id = body.get("request_id")
+    except Exception:
+        request_id = None
+
+    return build_protocol_error(
+        code="INVALID_REQUEST",
+        message="The search request payload is invalid.",
+        status_code=400,
+        request_id=request_id,
+        details={"errors": exc.errors()},
+    )
+
+
+@app.get("/health")
+async def health():
+    return health_payload()
+
+
+@app.post("/search", response_model=VideoSearchResponse)
+async def search(
+    payload: VideoSearchRequest,
+    caller_hotkey: str = Depends(verify_signature),
+):
+    return execute_search(
+        payload,
+        caller_hotkey=caller_hotkey,
+        enforce_validator_auth=True,
+    )

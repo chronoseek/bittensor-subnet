@@ -22,11 +22,14 @@ load_dotenv()
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
 from chronoseek.validator.state import ValidatorRuntimeState
-from chronoseek.validator.submissions import (
-    MinerSubmission,
+from chronoseek.chain.submissions import (
     MinerSubmissionResolver,
+)
+from chronoseek.chutes.runtime import (
+    build_runtime_endpoints_from_map,
     build_submission_endpoint_map,
     chutes_auth_headers_from_env,
+    filter_healthy_runtime_endpoints,
 )
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
@@ -165,40 +168,11 @@ async def refresh_responsive_miners_from_submissions(
         submissions_by_hotkey=submissions,
         chutes_base_domain=chutes_base_domain,
     )
-    healthy_endpoint_map: dict[int, str] = {}
-
-    async def check_health(
-        client: httpx.AsyncClient,
-        uid: int,
-        endpoint: str,
-    ) -> None:
-        try:
-            response = await client.get(
-                f"{endpoint.rstrip('/')}/health",
-                headers=provider_headers or {},
-                timeout=health_timeout_seconds,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict) or payload.get("ok") is not True:
-                bt.logging.debug(
-                    f"Miner UID {uid} health check returned unexpected payload: {payload}"
-                )
-                return
-            healthy_endpoint_map[uid] = endpoint
-        except Exception as exc:
-            bt.logging.debug(
-                f"Miner UID {uid} has committed metadata but failed /health at {endpoint}: {exc}"
-            )
-
-    if endpoint_map:
-        async with httpx.AsyncClient(timeout=health_timeout_seconds) as client:
-            await asyncio.gather(
-                *(
-                    check_health(client, int(uid), endpoint)
-                    for uid, endpoint in endpoint_map.items()
-                )
-            )
+    healthy_endpoint_map = await filter_healthy_runtime_endpoints(
+        endpoint_map=endpoint_map,
+        health_timeout_seconds=health_timeout_seconds,
+        provider_headers=provider_headers,
+    )
 
     responsive_uids = set(healthy_endpoint_map)
     refreshed_at = time.time()
@@ -228,32 +202,6 @@ def apply_responsive_miner_filter(
         if uid not in responsive_set:
             filtered_scores[uid] = 0.0
     return filtered_scores
-
-
-def build_responsive_submission_snapshot(
-    *,
-    metagraph: bt.Metagraph,
-    endpoint_map: dict[int, str],
-    candidate_uids: list[int],
-) -> dict[str, MinerSubmission]:
-    """Build routable submissions from the health-checked runtime snapshot."""
-
-    hotkeys = getattr(metagraph, "hotkeys", [])
-    submissions: dict[str, MinerSubmission] = {}
-    for uid in candidate_uids:
-        uid = int(uid)
-        if uid < 0 or uid >= len(hotkeys):
-            continue
-        endpoint = endpoint_map.get(uid)
-        if not endpoint:
-            continue
-        hotkey = hotkeys[uid]
-        submissions[hotkey] = MinerSubmission(
-            hotkey=hotkey,
-            uid=uid,
-            endpoint=endpoint,
-        )
-    return submissions
 
 
 def build_emission_weights(
@@ -317,7 +265,7 @@ async def run_validator_loop(
     config: bt.Config,
 ):
     """
-    Async synthetic validator loop.
+    Async validator evaluation loop.
     """
     cache_root = Path.home() / ".cache" / "chronoseek"
     accessible_video_cache_path = config.accessible_video_cache_path
@@ -419,7 +367,7 @@ async def run_validator_loop(
                     uid for uid in runtime.responsive_uids if uid in endpoint_map
                 )
 
-            miner_submissions = build_responsive_submission_snapshot(
+            miner_endpoints = build_runtime_endpoints_from_map(
                 metagraph=metagraph,
                 endpoint_map=endpoint_map,
                 candidate_uids=candidate_uids,
@@ -438,10 +386,8 @@ async def run_validator_loop(
                 metagraph,
                 runtime.wallet,
                 async_client,
-                miner_timeout_seconds=float(config.synthetic_miner_timeout_seconds),
-                candidate_uids=candidate_uids,
-                miner_submissions=miner_submissions,
-                chutes_base_domain=chutes_base_domain,
+                miner_timeout_seconds=float(config.miner_request_timeout_seconds),
+                miner_endpoints=miner_endpoints,
                 provider_headers=provider_headers,
             )
 
@@ -601,17 +547,10 @@ def get_config():
         help="Timeout in seconds for validator-side video availability checks.",
     )
     parser.add_argument(
-        "--enable-synthetic-evaluation",
-        action=argparse.BooleanOptionalAction,
-        default=os.getenv("ENABLE_SYNTHETIC_EVALUATION", "1")
-        in {"1", "true", "True"},
-        help="Enable validator synthetic evaluation and on-chain weight updates.",
-    )
-    parser.add_argument(
-        "--synthetic-miner-timeout-seconds",
+        "--miner-request-timeout-seconds",
         type=float,
-        default=float(os.getenv("SYNTHETIC_MINER_TIMEOUT_SECONDS", "150")),
-        help="Per-miner timeout in seconds for synthetic validator evaluation requests.",
+        default=float(os.getenv("MINER_REQUEST_TIMEOUT_SECONDS", "150")),
+        help="Per-miner timeout in seconds for validator runtime search requests.",
     )
     parser.add_argument(
         "--miner-submission-cache-ttl-seconds",
@@ -745,11 +684,6 @@ def main():
             score_lock=threading.Lock(),
             provider_headers=provider_headers,
         )
-
-        if not config.enable_synthetic_evaluation:
-            bt.logging.error("Synthetic evaluation is disabled. Nothing to run.")
-            stop_event.set()
-            return
 
         sync_runtime_metagraph(subtensor, runtime, config.netuid)
         submission_resolver = MinerSubmissionResolver(

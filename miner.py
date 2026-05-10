@@ -7,7 +7,6 @@ the runtime metadata on-chain. This process does not serve HTTP locally.
 
 import argparse
 import asyncio
-import inspect
 import json
 import os
 import sys
@@ -15,7 +14,10 @@ import sys
 import bittensor as bt
 from dotenv import load_dotenv
 
-from chronoseek.validator.submissions import MinerSubmission
+from chronoseek.chain.submissions import (
+    MinerSubmission,
+    commit_miner_submission,
+)
 
 load_dotenv()
 
@@ -89,12 +91,6 @@ def configure_logging(config) -> None:
         bt.logging.set_info(True)
 
 
-async def maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
 def get_wallet_hotkey_address(wallet) -> str | None:
     hotkey = getattr(wallet, "hotkey", None)
     return getattr(hotkey, "ss58_address", None)
@@ -124,7 +120,7 @@ def assert_registered_hotkey(wallet_hotkey: str, metagraph, netuid: int) -> bool
     return True
 
 
-def build_submission_payload(config, hotkey: str) -> tuple[MinerSubmission, str]:
+def build_submission_payload(config, hotkey: str) -> MinerSubmission:
     if not config.endpoint and not config.chute_slug:
         raise ValueError(
             "current validators require --endpoint or --chute-slug to resolve the runtime; --chute-id alone is not routable yet"
@@ -140,9 +136,7 @@ def build_submission_payload(config, hotkey: str) -> tuple[MinerSubmission, str]
         artifact_digest=config.artifact_digest or None,
         capabilities=list(config.capability or []),
     )
-    payload = submission.model_dump(mode="json", exclude_none=True)
-    data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return submission, data
+    return submission
 
 
 async def submit_runtime_metadata(config) -> int:
@@ -159,7 +153,7 @@ async def submit_runtime_metadata(config) -> int:
         return 1
 
     try:
-        submission, data = build_submission_payload(config, wallet_hotkey)
+        submission = build_submission_payload(config, wallet_hotkey)
     except Exception as exc:
         bt.logging.error(f"Invalid miner submission metadata: {exc}")
         bt.logging.error(
@@ -172,19 +166,15 @@ async def submit_runtime_metadata(config) -> int:
     bt.logging.info(
         f"Committing ChronoSeek v2 runtime metadata for {wallet_hotkey} on netuid={config.netuid}"
     )
-    result = subtensor.set_reveal_commitment(
+    success = await commit_miner_submission(
+        subtensor=subtensor,
         wallet=wallet,
-        netuid=config.netuid,
-        data=data,
+        netuid=int(config.netuid),
+        submission=submission,
         blocks_until_reveal=int(config.blocks_until_reveal),
     )
-    response = await maybe_await(result)
-    success = bool(getattr(response, "success", response))
     if not success:
-        message = getattr(response, "message", None) or getattr(response, "error", None)
         bt.logging.error("Chain rejected v2 miner submission commitment.")
-        if message:
-            bt.logging.error(str(message))
         return 1
 
     bt.logging.success("ChronoSeek v2 miner submission committed.")

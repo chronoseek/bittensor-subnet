@@ -35,8 +35,8 @@ def test_should_prefer_ytdlp_for_platform_and_ambiguous_urls():
 def test_ytdlp_cookie_options_uses_cookie_file_when_present(monkeypatch, tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(cookies))
-    monkeypatch.delenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", raising=False)
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookies))
+    monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
     opts = VideoDownloader._ytdlp_cookie_options()
     assert opts == {"cookiefile": str(cookies)}
 
@@ -44,8 +44,8 @@ def test_ytdlp_cookie_options_uses_cookie_file_when_present(monkeypatch, tmp_pat
 def test_ytdlp_cookie_options_prefers_file_over_browser(monkeypatch, tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(cookies))
-    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", "chrome")
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookies))
+    monkeypatch.setenv("YTDLP_COOKIES_BROWSER", "chrome")
     opts = VideoDownloader._ytdlp_cookie_options()
     assert "cookiefile" in opts
     assert "cookiesfrombrowser" not in opts
@@ -167,4 +167,3 @@ def test_ytdlp_clean_parent_env_strips_node_ipc_vars(monkeypatch):
         assert "NODE_CHANNEL_SERIALIZATION_MODE" not in os.environ
     assert os.environ.get("NODE_CHANNEL_FD") == "99"
     assert os.environ.get("NODE_CHANNEL_SERIALIZATION_MODE") == "json"
-

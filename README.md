@@ -112,11 +112,15 @@ poetry install
 poetry env activate
 ```
 
-### Hugging Face token
+### Setting up environment variables
+
+Before running the project, copy the example environment file and edit it with your credentials:
 
 ```bash
-export HF_TOKEN=your_token_here
+cp .env.example .env
 ```
+
+Open the new `.env` file and set all required variables, including your Hugging Face token (`HF_TOKEN`) and Chutes API key (`CHUTES_API_KEY`). Refer to comments in `.env.example` for guidance on which variables need to be filled in for your use case.
 
 ## Runtime Notes
 
@@ -132,7 +136,7 @@ The reference runtime currently:
 
 ### `v2.0` miner submission model
 
-The miner submission unit is shifting toward a Chutes-hosted retrieval runtime with immutable deployment metadata. In practice this means:
+The miner submission unit is a Chutes-hosted retrieval runtime with immutable deployment metadata. In practice this means:
 
 - miners still own training and deployment
 - miner submissions may include full custom runtime code for video access, clip traversal, transcription, retrieval, ranking, and formatting
@@ -140,33 +144,97 @@ The miner submission unit is shifting toward a Chutes-hosted retrieval runtime w
 - the product API no longer depends on direct miner fanout
 - promoted serving uses a Chutes clone locked to the exact Docker image that was running at clone time
 
-Miners participate by deploying their runtime to Chutes and committing a validated v2 submission payload:
+Miners participate by deploying their runtime to Chutes, then committing a validated v2 submission payload:
 
 ```bash
+cp chronoseek_chute.example.py chronoseek_chute.py
+poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
+  --chute-ref chronoseek_chute:chute \
+  --accept-fee
+
 poetry run python miner.py \
-  --chute-id chute-deployment-id \
-  --chute-slug chronoseek-runtime \
-  --artifact-revision immutable-revision
+  --chute-slug <chutes-username>-chronoseek-runtime
 ```
 
+The helper boundaries are intentionally narrow:
+
+- `chronoseek.chain.submissions` owns on-chain miner metadata commit/fetch.
+- `chronoseek.chutes.deployment` owns Chutes API build/deploy calls and metadata extraction from SDK-defined objects.
+- `chronoseek.chutes.runtime` owns Chutes endpoint resolution, auth headers, and runtime health checks.
+- validator scoring remains in the v1.x evaluation loop; v2.0 only changes how validators discover and reach miners.
+
 ## Running Nodes
+
+### Deploy a miner Chutes runtime
+
+Use the deployment wrapper to publish a Chutes runtime through Chutes APIs. The wrapper does not commit anything on-chain; it prints normalized deployment metadata and the exact `miner.py` command to run next.
+
+The Chute is still defined with the Chutes SDK, so the wrapper expects a module reference, not a file path:
+
+```text
+chronoseek_chute:chute
+```
+
+This means: load the root-level `chronoseek_chute.py`, then use the object named `chute`. Create your local copy from the committed example:
+
+```bash
+cp chronoseek_chute.example.py chronoseek_chute.py
+```
+
+Then edit `chronoseek_chute.py` before deploying:
+
+- `CHUTES_USERNAME`: your Chutes username.
+- `RUNTIME_NAME`: the Chutes runtime name, for example `chronoseek-runtime`. Chutes public hostnames use `<username>-<runtime-name>.chutes.ai`.
+- `RUNTIME_REVISION`: git SHA, image version, or other immutable build label.
+- `CHRONOSEEK_PACKAGE`: where Chutes can install your runtime code from. This can be a public git URL, private git URL with deploy credentials, or your own package/image install command.
+- `node_selector`: GPU requirements, especially `gpu_count` and `min_vram_gb_per_gpu`.
+- `concurrency`: keep this low at first because video retrieval is GPU/CPU/memory heavy.
+- `allow_external_egress=True`: required because the runtime must fetch validator task videos.
+
+The template exposes `/health` and `/search` as native Chutes SDK cords. It does not start a local FastAPI server inside Chutes.
+
+Build and deploy from the SDK-defined object through the Chutes APIs:
+
+```bash
+poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
+  --chute-ref chronoseek_chute:chute \
+  --accept-fee \
+  --artifact-id chronoseek-runtime
+```
+
+Set `RUNTIME_REVISION` inside `chronoseek_chute.py` for the actual Chutes image/chute revision. The helper's `--revision` flag only overrides the on-chain provenance value printed for `miner.py`.
+
+Before building, the wrapper checks whether the generated Chutes image already exists. If it does, it prompts with `[Y/n]`; pressing Enter or typing `y` deletes the existing image and submits a new build, while `n` aborts. For non-interactive rebuilds, pass `--overwrite-existing-image`; to fail fast without prompting, pass `--no-overwrite-existing-image`.
+
+If the image is already built, deploy only:
+
+```bash
+poetry run python scripts/deploy_chutes_runtime.py --deploy \
+  --chute-ref chronoseek_chute:chute \
+  --accept-fee
+```
+
+If you only need to print the suggested on-chain commit command from the SDK-defined object:
+
+```bash
+poetry run python scripts/deploy_chutes_runtime.py \
+  --chute-ref chronoseek_chute:chute
+```
+
+For custom ChronoSeek runtimes, no Hugging Face repo is required. The Chutes deployment input is the Python Chute SDK definition, converted into Chutes API requests by `scripts/deploy_chutes_runtime.py`. `--artifact-id`, `--artifact-revision`, and `--artifact-digest` are optional provenance fields for your runtime image/build, not model repository requirements.
 
 ### Commit a miner runtime submission
 
 ```bash
 poetry run python miner.py \
   --chute-id chute-deployment-id \
-  --chute-slug chronoseek-runtime \
+  --chute-slug <chutes-username>-chronoseek-runtime \
   --artifact-revision immutable-revision
 ```
 
 ### Chutes runtime entrypoint
 
-```bash
-uvicorn chronoseek.miner.runtime:app --host 0.0.0.0 --port 8000
-```
-
-The runtime is deployed on Chutes and exposes `/health` and `/search`. The subnet miner command does not serve HTTP locally.
+The runtime is deployed from the Chutes SDK definition through Chutes APIs and exposes `/health` and `/search` as native Chutes cords. The subnet miner command does not serve HTTP locally.
 
 ### Start the validator
 
@@ -180,36 +248,77 @@ The validator reads latest revealed metadata for hotkeys present in the metagrap
 
 The subnet now supports `v2.0` submission-based evaluation. Serving promotion and owner-run public API selection live outside this subnet process.
 
-| Variable                                     | Description                                                   | Default                 |
-| -------------------------------------------- | ------------------------------------------------------------- | ----------------------- |
-| `WALLET_NAME`                                | Name of your coldkey                                          | `default`               |
-| `HOTKEY_NAME`                                | Name of your hotkey                                           | `default`               |
-| `WALLET_PATH`                                | Path to your wallet storage                                   | `~/.bittensor/wallets/` |
-| `NETUID`                                     | Subnet NetUID                                                 | `298`                   |
-| `NETWORK`                                    | Network (`finney`, `test`, `local`)                           | `test`                  |
-| `MIN_VALIDATOR_STAKE`                        | Minimum validator stake required by the Chutes runtime        | `10000`                 |
-| `CHRONOSEEK_YTDLP_COOKIES`                   | Optional path to Netscape `cookies.txt` for YouTube auth      | ``                      |
-| `CHRONOSEEK_YTDLP_COOKIES_BROWSER`           | Optional browser source for cookies                           | ``                      |
-| `CHRONOSEEK_YTDLP_NODE_PATH`                 | Optional Node.js runtime path for yt-dlp EJS challenge solver | ``                      |
-| `CHRONOSEEK_YTDLP_DENO_PATH`                 | Optional Deno runtime path for yt-dlp EJS challenge solver    | ``                      |
-| `LOG_LEVEL`                                  | Logging verbosity                                             | `INFO`                  |
-| `HF_TOKEN`                                   | Hugging Face token                                            | `None`                  |
-| `HF_HOME`                                    | Hugging Face cache directory                                  | `~/.cache/huggingface`  |
-| `HF_ACTIVITYNET_FILENAME`                    | Optional filename override inside the ActivityNet snapshot    | ``                      |
-| `TASK_DATASET_PATH`                          | Optional local validator dataset path                         | ``                      |
-| `TASK_SPLIT`                                 | Validator task split                                          | `validation`            |
-| `REQUIRE_ACCESSIBLE_VIDEOS`                  | Skip inaccessible validator task videos                       | `1`                     |
-| `TASK_MAX_SAMPLING_ATTEMPTS`                 | Max tries to find an accessible validator task                | `50`                    |
-| `VIDEO_AVAILABILITY_CACHE_PATH`              | Legacy base path for validator availability caches            | ``                      |
-| `ACCESSIBLE_VIDEO_CACHE_PATH`                | JSON cache path for accessible validator videos               | ``                      |
-| `INACCESSIBLE_VIDEO_CACHE_PATH`              | JSON cache path for inaccessible validator videos             | ``                      |
-| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS`         | TTL for cached video availability checks                      | `24`                    |
-| `VIDEO_AVAILABILITY_TIMEOUT`                 | Timeout for validator-side video availability checks          | `20`                    |
-| `ENABLE_SYNTHETIC_EVALUATION`                | Enable synthetic validator scoring and weight updates         | `1`                     |
-| `SYNTHETIC_MINER_TIMEOUT_SECONDS`            | Per-miner timeout for synthetic validator evaluation          | `150`                   |
-| `MINER_SUBMISSION_CACHE_TTL_SECONDS`         | Cache TTL for loaded v2 submissions                           | `300`                   |
-| `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS`  | Interval between validator submission metadata refreshes      | `60`                    |
-| `MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS`    | Per-runtime timeout for responsive miner `/health` checks     | `10`                    |
-| `CHUTES_BASE_DOMAIN`                         | Domain used to resolve `chute_slug` submissions               | `chutes.ai`             |
-| `CHRONOSEEK_CHUTES_API_KEY`                  | Optional provider auth token for private Chutes eval          | ``                      |
-| `MINER_EMISSION_BURN_PERCENT`                | Percent of miner emissions to burn through UID 0 weighting    | `0`                     |
+### Chain
+
+| Variable  | Description                         | Default  |
+| --------- | ----------------------------------- | -------- |
+| `NETWORK` | Network (`finney`, `test`, `local`) | `finney` |
+| `NETUID`  | Subnet NetUID                       | `1`      |
+
+### Wallet
+
+| Variable      | Description                 | Default                |
+| ------------- | --------------------------- | ---------------------- |
+| `WALLET_NAME` | Name of your coldkey        | `default`              |
+| `HOTKEY_NAME` | Name of your hotkey         | `default`              |
+| `WALLET_PATH` | Path to your wallet storage | `~/.bittensor/wallets` |
+
+### Chutes
+
+| Variable              | Description                                            | Default     |
+| --------------------- | ------------------------------------------------------ | ----------- |
+| `CHUTES_API_KEY`      | Chutes API token for build/deploy and private eval     | ``          |
+| `CHUTES_BASE_DOMAIN`  | Domain used to resolve `chute_slug` submissions        | `chutes.ai` |
+| `MIN_VALIDATOR_STAKE` | Minimum validator stake required by the Chutes runtime | `10000`     |
+
+### Miner Video Download
+
+| Variable                | Description                                                   | Default |
+| ----------------------- | ------------------------------------------------------------- | ------- |
+| `YTDLP_COOKIES`         | Optional path to Netscape `cookies.txt` for YouTube auth      | ``      |
+| `YTDLP_COOKIES_BROWSER` | Optional browser source for cookies                           | ``      |
+| `YTDLP_NODE_PATH`       | Optional Node.js runtime path for yt-dlp EJS challenge solver | ``      |
+| `YTDLP_DENO_PATH`       | Optional Deno runtime path for yt-dlp EJS challenge solver    | ``      |
+
+### Hugging Face
+
+| Variable                  | Description                                                | Default                |
+| ------------------------- | ---------------------------------------------------------- | ---------------------- |
+| `HF_TOKEN`                | Hugging Face token                                         | `None`                 |
+| `HF_HOME`                 | Hugging Face cache directory                               | `~/.cache/huggingface` |
+| `HF_ACTIVITYNET_FILENAME` | Optional filename override inside the ActivityNet snapshot | ``                     |
+
+### Validator Task Generation
+
+| Variable                     | Description                                    | Default      |
+| ---------------------------- | ---------------------------------------------- | ------------ |
+| `TASK_DATASET_PATH`          | Optional local validator dataset path          | ``           |
+| `TASK_SPLIT`                 | Validator task split                           | `validation` |
+| `REQUIRE_ACCESSIBLE_VIDEOS`  | Skip inaccessible validator task videos        | `1`          |
+| `TASK_MAX_SAMPLING_ATTEMPTS` | Max tries to find an accessible validator task | `50`         |
+
+### Validator Video Availability Cache
+
+| Variable                             | Description                                          | Default |
+| ------------------------------------ | ---------------------------------------------------- | ------- |
+| `VIDEO_AVAILABILITY_CACHE_PATH`      | Legacy base path for validator availability caches   | ``      |
+| `ACCESSIBLE_VIDEO_CACHE_PATH`        | JSON cache path for accessible validator videos      | ``      |
+| `INACCESSIBLE_VIDEO_CACHE_PATH`      | JSON cache path for inaccessible validator videos    | ``      |
+| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | TTL for cached video availability checks             | `24`    |
+| `VIDEO_AVAILABILITY_TIMEOUT`         | Timeout for validator-side video availability checks | `20`    |
+
+### Validator Evaluation
+
+| Variable                                    | Description                                                | Default |
+| ------------------------------------------- | ---------------------------------------------------------- | ------- |
+| `MINER_REQUEST_TIMEOUT_SECONDS`             | Per-miner timeout for validator runtime search requests    | `150`   |
+| `MINER_SUBMISSION_CACHE_TTL_SECONDS`        | Cache TTL for loaded v2 submissions                        | `300`   |
+| `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS` | Interval between validator submission metadata refreshes   | `60`    |
+| `MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS`   | Per-runtime timeout for responsive miner `/health` checks  | `10`    |
+| `MINER_EMISSION_BURN_PERCENT`               | Percent of miner emissions to burn through UID 0 weighting | `0`     |
+
+### Logging
+
+| Variable    | Description       | Default |
+| ----------- | ----------------- | ------- |
+| `LOG_LEVEL` | Logging verbosity | `INFO`  |

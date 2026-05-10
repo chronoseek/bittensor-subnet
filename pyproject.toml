@@ -32,6 +32,7 @@ huggingface-hub = ">=1.5.0"
 pyarrow = ">=21.0.0"
 yt-dlp = ">=2026.3.17"
 yt-dlp-ejs = ">=0.8.0"
+chutes = "^0.6.8"
 
 [build-system]
 requires = ["poetry-core"]

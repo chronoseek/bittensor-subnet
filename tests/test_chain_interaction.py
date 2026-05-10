@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 import unittest
@@ -7,7 +6,6 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from miner import main as miner_main
-from scripts.commit_v2_submission import main_async as commit_v2_main_async
 
 
 class TestChainInteraction(unittest.TestCase):
@@ -89,32 +87,6 @@ class TestChainInteraction(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         mock_subtensor.set_reveal_commitment.assert_not_called()
-
-    @patch("bittensor.Wallet")
-    @patch("bittensor.Subtensor")
-    def test_commit_script_rejects_chute_id_only_submission_until_resolver_exists(
-        self,
-        mock_subtensor_cls,
-        mock_wallet_cls,
-    ):
-        mock_wallet = MagicMock()
-        mock_wallet.hotkey.ss58_address = "5FakeAddress"
-        mock_wallet_cls.return_value = mock_wallet
-
-        test_args = [
-            "commit_v2_submission.py",
-            "--netuid",
-            "298",
-            "--chute-id",
-            "chute-deployment-id",
-        ]
-
-        with patch.object(sys, "argv", test_args), patch("builtins.print"):
-            exit_code = asyncio.run(commit_v2_main_async())
-
-        self.assertEqual(exit_code, 1)
-        mock_subtensor_cls.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

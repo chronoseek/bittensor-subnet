@@ -23,13 +23,13 @@ class VideoDownloader:
     """
 
     # Netscape-format cookies.txt (see yt-dlp wiki: passing cookies to yt-dlp).
-    _ENV_YTDLP_COOKIES_FILE = "CHRONOSEEK_YTDLP_COOKIES"
+    _ENV_YTDLP_COOKIES_FILE = "YTDLP_COOKIES"
     # Optional: e.g. "chrome", "firefox", or "chrome:Default" (profile). Headless
     # servers usually need _ENV_YTDLP_COOKIES_FILE instead.
-    _ENV_YTDLP_COOKIES_BROWSER = "CHRONOSEEK_YTDLP_COOKIES_BROWSER"
+    _ENV_YTDLP_COOKIES_BROWSER = "YTDLP_COOKIES_BROWSER"
     # yt-dlp EJS n-challenge solver needs Node 20+ or Deno 2+ (see yt-dlp wiki/EJS).
-    _ENV_YTDLP_NODE_PATH = "CHRONOSEEK_YTDLP_NODE_PATH"
-    _ENV_YTDLP_DENO_PATH = "CHRONOSEEK_YTDLP_DENO_PATH"
+    _ENV_YTDLP_NODE_PATH = "YTDLP_NODE_PATH"
+    _ENV_YTDLP_DENO_PATH = "YTDLP_DENO_PATH"
     # Node-based parents (e.g. PM2) set these; yt-dlp's node/deno children then break IPC.
     _YTDLP_STRIP_ENV_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
 
@@ -242,7 +242,7 @@ class VideoDownloader:
             "socket_timeout": timeout,
             "retries": 3,
             # Prefer mobile/web clients first; many videos work without cookies; bot-checked
-            # IDs still need CHRONOSEEK_YTDLP_COOKIES or CHRONOSEEK_YTDLP_COOKIES_BROWSER.
+            # IDs still need YTDLP_COOKIES or YTDLP_COOKIES_BROWSER.
             "extractor_args": {
                 "youtube": {
                     "player_client": ["android", "web", "ios"],

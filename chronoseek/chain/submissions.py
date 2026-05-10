@@ -1,8 +1,6 @@
 import inspect
 import json
-import os
 import time
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import bittensor as bt
@@ -20,10 +18,10 @@ CHRONOSEEK_RUNTIME_PROTOCOL = "chronoseek-runtime-v2"
 
 
 class MinerSubmission(BaseModel):
-    """Structured v2 miner submission metadata.
+    """Structured v2 miner runtime metadata committed on-chain.
 
-    The chain payload is intentionally transport/runtime metadata only. Auth
-    secrets stay local to validators as environment variables.
+    The chain payload is transport/runtime metadata only. Runtime auth tokens
+    and provider credentials stay local to validators and deployment tools.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -73,21 +71,37 @@ class MinerSubmission(BaseModel):
         return self
 
 
-@dataclass(frozen=True)
-class MinerEvaluationEndpoint:
-    uid: int
-    hotkey: str
-    endpoint: str
-    submission: MinerSubmission | None = None
+def serialize_submission(submission: MinerSubmission) -> str:
+    payload = submission.model_dump(mode="json", exclude_none=True)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+async def maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def commit_miner_submission(
+    *,
+    subtensor: Any,
+    wallet: bt.Wallet,
+    netuid: int,
+    submission: MinerSubmission,
+    blocks_until_reveal: int,
+) -> bool:
+    result = subtensor.set_reveal_commitment(
+        wallet=wallet,
+        netuid=int(netuid),
+        data=serialize_submission(submission),
+        blocks_until_reveal=max(1, int(blocks_until_reveal)),
+    )
+    response = await maybe_await(result)
+    return bool(getattr(response, "success", response))
 
 
 def _patch_bittensor_commit_decoder() -> None:
-    """Patch Bittensor 10.x revealed commitment decoding when needed.
-
-    Affine carries the same workaround. Some Bittensor 10.x versions decode
-    revealed string commitments as hex and fail when the chain returns raw
-    SCALE-prefixed bytes represented as a Python string.
-    """
+    """Patch Bittensor 10.x revealed commitment decoding when needed."""
 
     try:
         from bittensor.core.chain_data import utils as bt_utils
@@ -142,12 +156,6 @@ def _patch_bittensor_commit_decoder() -> None:
     bt_utils._chronoseek_safe_decode_patched = True
 
 
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
 def _coerce_submission(
     *,
     raw: Any,
@@ -180,17 +188,17 @@ async def load_chain_submissions(
     netuid: int,
     metagraph: bt.Metagraph,
 ) -> dict[str, MinerSubmission]:
-    """Read latest revealed v2 submissions from the chain by hotkey."""
+    """Read latest revealed v2 miner submissions from chain by hotkey."""
 
     if not hasattr(subtensor, "get_all_revealed_commitments"):
         bt.logging.warning(
-            "Configured chain submission routing, but this subtensor does not provide get_all_revealed_commitments."
+            "Chain submission routing is configured, but this subtensor does not provide get_all_revealed_commitments."
         )
         return {}
 
     _patch_bittensor_commit_decoder()
     try:
-        commits = await _maybe_await(subtensor.get_all_revealed_commitments(netuid))
+        commits = await maybe_await(subtensor.get_all_revealed_commitments(netuid))
     except Exception as exc:
         bt.logging.warning(f"Failed to read miner submissions from chain: {exc}")
         return {}
@@ -220,84 +228,6 @@ async def load_chain_submissions(
     return submissions
 
 
-def resolve_submission_endpoint(
-    submission: MinerSubmission,
-    *,
-    chutes_base_domain: str,
-) -> str | None:
-    if submission.endpoint:
-        return str(submission.endpoint).rstrip("/")
-
-    if submission.chute_slug:
-        domain = chutes_base_domain.strip().removeprefix("https://").removeprefix(
-            "http://"
-        )
-        return f"https://{submission.chute_slug}.{domain}".rstrip("/")
-
-    return None
-
-
-def build_evaluation_endpoints(
-    *,
-    metagraph: bt.Metagraph,
-    candidate_uids: list[int] | None,
-    submissions_by_hotkey: dict[str, MinerSubmission] | None = None,
-    chutes_base_domain: str = "chutes.ai",
-) -> list[MinerEvaluationEndpoint]:
-    submissions_by_hotkey = submissions_by_hotkey or {}
-    uids_to_query = candidate_uids if candidate_uids is not None else metagraph.uids
-    endpoints: list[MinerEvaluationEndpoint] = []
-    hotkeys = getattr(metagraph, "hotkeys", [])
-
-    for raw_uid in uids_to_query:
-        uid = int(raw_uid)
-        if uid < 0 or uid >= len(hotkeys):
-            continue
-
-        hotkey = hotkeys[uid]
-        submission = submissions_by_hotkey.get(hotkey)
-
-        if submission is not None:
-            endpoint = resolve_submission_endpoint(
-                submission,
-                chutes_base_domain=chutes_base_domain,
-            )
-            if endpoint:
-                endpoints.append(
-                    MinerEvaluationEndpoint(
-                        uid=uid,
-                        hotkey=hotkey,
-                        endpoint=endpoint,
-                        submission=submission,
-                    )
-                )
-
-    return endpoints
-
-
-def build_submission_endpoint_map(
-    *,
-    metagraph: bt.Metagraph,
-    submissions_by_hotkey: dict[str, MinerSubmission],
-    chutes_base_domain: str = "chutes.ai",
-) -> dict[int, str]:
-    """Resolve v2 submission endpoints for registered metagraph hotkeys."""
-
-    endpoints: dict[int, str] = {}
-    hotkeys = getattr(metagraph, "hotkeys", [])
-    for uid, hotkey in enumerate(hotkeys):
-        submission = submissions_by_hotkey.get(hotkey)
-        if submission is None:
-            continue
-        endpoint = resolve_submission_endpoint(
-            submission,
-            chutes_base_domain=chutes_base_domain,
-        )
-        if endpoint:
-            endpoints[int(uid)] = endpoint
-    return endpoints
-
-
 class MinerSubmissionResolver:
     def __init__(
         self,
@@ -320,17 +250,7 @@ class MinerSubmissionResolver:
             return dict(self._cached)
 
         submissions = await load_chain_submissions(subtensor, netuid, metagraph)
-
         self._cached = dict(submissions)
         self._cached_at = now
-        bt.logging.info(
-            f"Loaded {len(submissions)} v2 miner submissions from chain."
-        )
+        bt.logging.info(f"Loaded {len(submissions)} v2 miner submissions from chain.")
         return submissions
-
-
-def chutes_auth_headers_from_env() -> dict[str, str]:
-    token = os.getenv("CHRONOSEEK_CHUTES_API_KEY") or os.getenv("CHUTES_API_KEY")
-    if not token:
-        return {}
-    return {"Authorization": f"Bearer {token}"}
