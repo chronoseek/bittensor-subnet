@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build/deploy a ChronoSeek miner runtime through Chutes APIs.
+"""Build/deploy a ChronoSeek miner runtime through production Chutes APIs.
 
 The Chute and Image are defined with the Chutes SDK in `chronoseek_chute.py`,
 but this script performs the actual image build and chute deployment through
 Chutes HTTP APIs using `CHUTES_API_KEY`. Miners do not need `chutes login` or a
-local Chutes SDK config file.
+local Chutes SDK config file. Use `scripts/test_chutes_runtime_local.py` for
+local, no-credit testing before running this helper.
 """
 
 import argparse
@@ -54,8 +55,8 @@ load_dotenv()
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Build/deploy a ChronoSeek Chutes runtime through Chutes APIs "
-            "and print the metadata needed for miner.py."
+            "Build/deploy a ChronoSeek Chutes runtime through production "
+            "Chutes APIs and print the metadata needed for miner.py."
         )
     )
     parser.add_argument(

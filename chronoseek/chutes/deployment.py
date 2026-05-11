@@ -7,10 +7,13 @@ requiring miners to run `chutes login` or maintain local Chutes SDK configs.
 
 import base64
 import importlib
+import os
 import pickle
 import re
+import shutil
 import sys
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -23,6 +26,9 @@ import httpx
 from chronoseek.chutes.runtime import chutes_auth_headers_from_env
 
 DEFAULT_CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
+CHRONOSEEK_YTDLP_COOKIES_ENV = "CHRONOSEEK_YTDLP_COOKIES"
+CHUTES_MINER_FILE_ROOT = "/opt/chronoseek/miner-files"
+CHUTES_IMAGE_FILE_BUILD_CONTEXT_ROOT = ".chronoseek-chutes-build"
 
 
 @dataclass(frozen=True)
@@ -33,6 +39,14 @@ class RuntimeMetadata:
     artifact_id: str | None = None
     artifact_revision: str | None = None
     artifact_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class ChutesImageFile:
+    env_names: tuple[str, ...]
+    source_path: Path
+    staged_path: Path
+    image_path: str
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -472,6 +486,87 @@ def metadata_from_chute_definition(
     )
 
 
+def resolve_ytdlp_cookies_source() -> Path | None:
+    """Return the local cookies.txt file to embed in the Chutes image, if set."""
+
+    raw_path = os.getenv(CHRONOSEEK_YTDLP_COOKIES_ENV, "").strip()
+    if not raw_path:
+        return None
+
+    source = Path(raw_path).expanduser().resolve()
+    if source.is_file():
+        return source
+    bt.logging.warning(
+        f"{CHRONOSEEK_YTDLP_COOKIES_ENV} is set but is not a readable file; "
+        f"skipping Chutes image copy: {source}"
+    )
+    return None
+
+
+def _safe_staging_component(value: str) -> str:
+    return normalize_name_component(value).replace("-", "_") or "file"
+
+
+def _apply_ytdlp_cookies_file(
+    image: Any,
+    *,
+    staging_root: Path,
+    image_root: str = CHUTES_MINER_FILE_ROOT,
+) -> ChutesImageFile | None:
+    source = resolve_ytdlp_cookies_source()
+    if source is None:
+        return None
+
+    cwd = Path.cwd().resolve()
+    source_name = source.name or "cookies.txt"
+    staged_path = staging_root / "ytdlp" / _safe_staging_component(source_name)
+    staged_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, staged_path)
+
+    source_rel = staged_path.relative_to(cwd).as_posix()
+    image_path = f"{image_root.rstrip('/')}/ytdlp/{source_name}"
+    image.add(source_rel, image_path, chmod="644")
+    image.with_env(CHRONOSEEK_YTDLP_COOKIES_ENV, image_path)
+    bt.logging.info(
+        f"Added yt-dlp cookies file to Chutes image at {image_path}."
+    )
+    return ChutesImageFile(
+        env_names=(CHRONOSEEK_YTDLP_COOKIES_ENV,),
+        source_path=source,
+        staged_path=staged_path,
+        image_path=image_path,
+    )
+
+
+@contextmanager
+def chutes_ytdlp_cookie_file_context(
+    image: Any,
+    *,
+    image_root: str = CHUTES_MINER_FILE_ROOT,
+):
+    """Temporarily add the miner's yt-dlp cookies file to a Chutes image."""
+
+    cwd = Path.cwd().resolve()
+    staging_root = cwd / CHUTES_IMAGE_FILE_BUILD_CONTEXT_ROOT / uuid.uuid4().hex
+    directive_count = len(getattr(image, "_directives", []))
+    try:
+        applied = _apply_ytdlp_cookies_file(
+            image,
+            staging_root=staging_root,
+            image_root=image_root,
+        )
+        yield applied
+    finally:
+        if hasattr(image, "_directives"):
+            del image._directives[directive_count:]
+        if staging_root.exists():
+            shutil.rmtree(staging_root, ignore_errors=True)
+        try:
+            staging_root.parent.rmdir()
+        except OSError:
+            pass
+
+
 def _collect_build_context_paths(image: Any, *, include_cwd: bool) -> list[Path]:
     from chutes.image.directive.add import ADD
 
@@ -821,12 +916,13 @@ async def build_image_via_api(
             timeout_seconds=timeout_seconds,
         )
 
-    data, files = image_build_form_payload(
-        image,
-        include_cwd=include_cwd,
-        public=public,
-        logo_id=logo_id,
-    )
+    with chutes_ytdlp_cookie_file_context(image):
+        data, files = image_build_form_payload(
+            image,
+            include_cwd=include_cwd,
+            public=public,
+            logo_id=logo_id,
+        )
     return await submit_image_build_via_api(
         api_base_url=api_base_url,
         data=data,

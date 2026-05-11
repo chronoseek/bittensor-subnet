@@ -35,8 +35,8 @@ def test_should_prefer_ytdlp_for_platform_and_ambiguous_urls():
 def test_ytdlp_cookie_options_uses_cookie_file_when_present(monkeypatch, tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("YTDLP_COOKIES", str(cookies))
-    monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
+    monkeypatch.delenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", raising=False)
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(cookies))
     opts = VideoDownloader._ytdlp_cookie_options()
     assert opts == {"cookiefile": str(cookies)}
 
@@ -44,11 +44,34 @@ def test_ytdlp_cookie_options_uses_cookie_file_when_present(monkeypatch, tmp_pat
 def test_ytdlp_cookie_options_prefers_file_over_browser(monkeypatch, tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("YTDLP_COOKIES", str(cookies))
-    monkeypatch.setenv("YTDLP_COOKIES_BROWSER", "chrome")
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(cookies))
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", "chrome:Default")
     opts = VideoDownloader._ytdlp_cookie_options()
     assert "cookiefile" in opts
     assert "cookiesfrombrowser" not in opts
+
+
+def test_ytdlp_cookie_options_uses_default_chrome_profile(monkeypatch):
+    monkeypatch.delenv("CHRONOSEEK_YTDLP_COOKIES", raising=False)
+    monkeypatch.delenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", raising=False)
+
+    assert VideoDownloader._ytdlp_cookie_options() == {
+        "cookiesfrombrowser": ("chrome", "Default")
+    }
+
+
+def test_ytdlp_js_runtime_options_uses_chronoseek_paths(monkeypatch, tmp_path):
+    node = tmp_path / "node"
+    deno = tmp_path / "deno"
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_NODE_PATH", str(node))
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_DENO_PATH", str(deno))
+
+    assert VideoDownloader._ytdlp_js_runtime_options() == {
+        "js_runtimes": {
+            "node": {"path": str(node)},
+            "deno": {"path": str(deno)},
+        }
+    }
 
 
 def test_cleanup_removes_downloaded_artifacts():

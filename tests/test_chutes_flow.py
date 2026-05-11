@@ -1,4 +1,6 @@
 import asyncio
+from io import BytesIO
+from zipfile import ZipFile
 
 import chronoseek.chutes.deployment as chutes_deployment
 from chronoseek.chain.submissions import MinerSubmission
@@ -6,11 +8,13 @@ from chronoseek.chutes.deployment import (
     RuntimeMetadata,
     apply_runtime_name,
     build_image_via_api,
+    chutes_ytdlp_cookie_file_context,
     chute_deploy_payload,
     image_build_form_payload,
     merge_metadata,
     metadata_from_chute_object,
     metadata_from_chutes_response,
+    resolve_ytdlp_cookies_source,
     require_chute_module_ref,
     resolve_chute_api_name,
     resolve_chute_api_runtime_name,
@@ -21,6 +25,7 @@ from chronoseek.chutes.deployment import (
 )
 from chronoseek.chutes.runtime import resolve_submission_endpoint
 import scripts.deploy_chutes_runtime as deploy_chutes_runtime
+import scripts.test_chutes_runtime_local as test_chutes_runtime_local
 from scripts.deploy_chutes_runtime import (
     explicit_metadata,
     metadata_with_chute_slug,
@@ -186,6 +191,35 @@ def test_deploy_wrapper_miner_command_contains_commit_metadata():
     assert "--chute-slug" in command
     assert "chronoseek-runtime" in command
     assert command.count("--capability") == 2
+
+
+def test_local_chutes_helper_uses_local_build_and_dev_run(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("HF_TOKEN=hf_test\n", encoding="utf-8")
+
+    build_cmd = test_chutes_runtime_local.local_build_command("chronoseek_chute:chute")
+    run_cmd = test_chutes_runtime_local.local_run_command(
+        "chronoseek_chute:chute",
+        "chronoseek-runtime:test",
+        port=8123,
+        env_file=str(env_file),
+    )
+
+    assert build_cmd[-3:] == ["build", "chronoseek_chute:chute", "--local"]
+    assert run_cmd[:4] == ["docker", "run", "--rm", "-it"]
+    assert "--env-file" in run_cmd
+    assert "CHUTES_EXECUTION_CONTEXT=REMOTE" in run_cmd
+    assert "-p" in run_cmd
+    assert "8123:8123" in run_cmd
+    assert run_cmd[-6:] == [
+        "chutes",
+        "run",
+        "chronoseek_chute:chute",
+        "--port",
+        "8123",
+        "--dev",
+    ]
+    assert "https://api.chutes.ai" not in " ".join(run_cmd + build_cmd)
 
 
 def test_metadata_with_chute_slug_prefers_generated_slug():
@@ -406,6 +440,52 @@ def test_image_build_payload_uses_chutes_image_object():
     assert data["image"]
     assert files["build_context"][0] == "chute.zip"
     assert files["build_context"][2] == "application/zip"
+
+
+def test_resolve_ytdlp_cookies_source_uses_chronoseek_env(
+    tmp_path,
+    monkeypatch,
+):
+    chronoseek = tmp_path / "chronoseek-cookies.txt"
+    chronoseek.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(chronoseek))
+
+    assert resolve_ytdlp_cookies_source() == chronoseek.resolve()
+
+
+def test_chutes_ytdlp_cookie_file_context_adds_cookie_file(
+    tmp_path,
+    monkeypatch,
+):
+    from chutes.image import Image
+
+    monkeypatch.chdir(tmp_path)
+    cookies = tmp_path / "local-cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(cookies))
+
+    image = Image(
+        username="chronoseek",
+        name="runtime",
+        tag="rev-1",
+        readme="Runtime readme.",
+    ).from_base("parachutes/python:3.12")
+
+    with chutes_ytdlp_cookie_file_context(image) as applied:
+        data, files = image_build_form_payload(image)
+
+        assert applied.env_names == ("CHRONOSEEK_YTDLP_COOKIES",)
+        assert (
+            "ENV CHRONOSEEK_YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/local-cookies.txt"
+            in data["dockerfile"]
+        )
+        assert "--chmod=644" in data["dockerfile"]
+        with ZipFile(BytesIO(files["build_context"][1])) as archive:
+            names = set(archive.namelist())
+        assert any(name.endswith("ytdlp/local_cookies_txt") for name in names)
+
+    assert ".chronoseek-chutes-build" not in str(image)
+    assert not (tmp_path / ".chronoseek-chutes-build").exists()
 
 
 def test_chute_deploy_payload_uses_chutes_chute_object(tmp_path, monkeypatch):

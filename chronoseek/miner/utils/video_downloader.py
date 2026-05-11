@@ -23,13 +23,14 @@ class VideoDownloader:
     """
 
     # Netscape-format cookies.txt (see yt-dlp wiki: passing cookies to yt-dlp).
-    _ENV_YTDLP_COOKIES_FILE = "YTDLP_COOKIES"
-    # Optional: e.g. "chrome", "firefox", or "chrome:Default" (profile). Headless
-    # servers usually need _ENV_YTDLP_COOKIES_FILE instead.
-    _ENV_YTDLP_COOKIES_BROWSER = "YTDLP_COOKIES_BROWSER"
+    _ENV_YTDLP_COOKIES_FILE = "CHRONOSEEK_YTDLP_COOKIES"
+    # Optional: e.g. "chrome", "firefox", or "chrome:Default" (profile). Chutes
+    # runtimes usually need _ENV_YTDLP_COOKIES_FILE instead.
+    _ENV_YTDLP_COOKIES_BROWSER = "CHRONOSEEK_YTDLP_COOKIES_BROWSER"
+    _DEFAULT_YTDLP_COOKIES_BROWSER = "chrome:Default"
     # yt-dlp EJS n-challenge solver needs Node 20+ or Deno 2+ (see yt-dlp wiki/EJS).
-    _ENV_YTDLP_NODE_PATH = "YTDLP_NODE_PATH"
-    _ENV_YTDLP_DENO_PATH = "YTDLP_DENO_PATH"
+    _ENV_YTDLP_NODE_PATH = "CHRONOSEEK_YTDLP_NODE_PATH"
+    _ENV_YTDLP_DENO_PATH = "CHRONOSEEK_YTDLP_DENO_PATH"
     # Node-based parents (e.g. PM2) set these; yt-dlp's node/deno children then break IPC.
     _YTDLP_STRIP_ENV_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
 
@@ -118,6 +119,10 @@ class VideoDownloader:
             return True
         return False
 
+    @staticmethod
+    def _env_value(name: str, default: str = "") -> str:
+        return os.environ.get(name, "").strip() or default
+
     @classmethod
     def _download_attempts(cls, url: str) -> list[tuple[str, Callable[..., DownloadedVideo]]]:
         """
@@ -170,7 +175,7 @@ class VideoDownloader:
     def _ytdlp_cookie_options(cls) -> dict:
         """Options for YouTube auth when Google serves the bot / sign-in interstitial."""
         opts: dict = {}
-        path = os.environ.get(cls._ENV_YTDLP_COOKIES_FILE, "").strip()
+        path = cls._env_value(cls._ENV_YTDLP_COOKIES_FILE)
         if path:
             path = os.path.expanduser(path)
             if os.path.isfile(path):
@@ -179,7 +184,10 @@ class VideoDownloader:
                 bt.logging.warning(
                     f"{cls._ENV_YTDLP_COOKIES_FILE} is set but not a readable file: {path}"
                 )
-        browser = os.environ.get(cls._ENV_YTDLP_COOKIES_BROWSER, "").strip()
+        browser = cls._env_value(
+            cls._ENV_YTDLP_COOKIES_BROWSER,
+            cls._DEFAULT_YTDLP_COOKIES_BROWSER,
+        )
         if browser and "cookiefile" not in opts:
             parts = tuple(p for p in browser.split(":") if p)
             if parts:
@@ -200,11 +208,11 @@ class VideoDownloader:
     def _ytdlp_js_runtime_options(cls) -> dict:
         """Enable YouTube n/sig challenge solving (requires yt-dlp-ejs + supported runtime)."""
         runtimes: dict[str, dict[str, str]] = {}
-        node_path = os.environ.get(cls._ENV_YTDLP_NODE_PATH, "").strip()
+        node_path = cls._env_value(cls._ENV_YTDLP_NODE_PATH)
         runtimes["node"] = (
             {"path": os.path.expanduser(node_path)} if node_path else {}
         )
-        deno_path = os.environ.get(cls._ENV_YTDLP_DENO_PATH, "").strip()
+        deno_path = cls._env_value(cls._ENV_YTDLP_DENO_PATH)
         runtimes["deno"] = (
             {"path": os.path.expanduser(deno_path)} if deno_path else {}
         )
@@ -242,7 +250,7 @@ class VideoDownloader:
             "socket_timeout": timeout,
             "retries": 3,
             # Prefer mobile/web clients first; many videos work without cookies; bot-checked
-            # IDs still need YTDLP_COOKIES or YTDLP_COOKIES_BROWSER.
+            # IDs still need CHRONOSEEK_YTDLP_COOKIES or CHRONOSEEK_YTDLP_COOKIES_BROWSER.
             "extractor_args": {
                 "youtube": {
                     "player_client": ["android", "web", "ios"],
@@ -265,7 +273,7 @@ class VideoDownloader:
                         "YouTube blocked this download (bot check). Export cookies from a "
                         "logged-in browser and set "
                         f"{cls._ENV_YTDLP_COOKIES_FILE} to the cookies.txt path, or set "
-                        f"{cls._ENV_YTDLP_COOKIES_BROWSER} (e.g. chrome). See "
+                        f"{cls._ENV_YTDLP_COOKIES_BROWSER} (default: chrome:Default). See "
                         "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
                     )
                 else:

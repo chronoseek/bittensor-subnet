@@ -64,6 +64,16 @@ IMAGE_TAG = RUNTIME_REVISION[:32]
 # Use a public git URL, a private URL with deploy credentials, or replace this
 # with your own image/package install command. Do not commit embedded secrets.
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+CHRONOSEEK_YTDLP_COOKIES_BROWSER = (
+    os.getenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
+    or "chrome:Default"
+)
+CHRONOSEEK_YTDLP_DENO_PATH = (
+    os.getenv("CHRONOSEEK_YTDLP_DENO_PATH", "/opt/deno/bin/deno").strip()
+    or "/opt/deno/bin/deno"
+)
+CHRONOSEEK_YTDLP_NODE_PATH = os.getenv("CHRONOSEEK_YTDLP_NODE_PATH", "").strip()
 
 
 image = (
@@ -84,10 +94,19 @@ image = (
     .with_env("UV_CACHE_DIR", "/tmp/uv-cache")
     .with_env("XDG_CACHE_HOME", "/tmp/.cache")
     .with_env("HF_HOME", "/data/huggingface")
+    .with_env("DENO_INSTALL", "/opt/deno")
+    .with_env("PATH", "/opt/deno/bin:$PATH")
+    .with_env("CHRONOSEEK_YTDLP_COOKIES_BROWSER", CHRONOSEEK_YTDLP_COOKIES_BROWSER)
+    .with_env("CHRONOSEEK_YTDLP_DENO_PATH", CHRONOSEEK_YTDLP_DENO_PATH)
     .run_command(
         "apt-get update && "
-        "apt-get install -y --no-install-recommends ffmpeg git && "
+        "apt-get install -y --no-install-recommends "
+        "ca-certificates curl ffmpeg git unzip && "
         "rm -rf /var/lib/apt/lists/*"
+    )
+    .run_command(
+        "curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/opt/deno sh && "
+        "chmod -R a+rx /opt/deno"
     )
     .run_command(
         "mkdir -p /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data/huggingface && "
@@ -103,6 +122,15 @@ image = (
         "/usr/local/share /usr/local/share/man || true"
     )
 )
+
+if HF_TOKEN:
+    image = image.with_env("HF_TOKEN", HF_TOKEN)
+
+if CHRONOSEEK_YTDLP_NODE_PATH:
+    image = image.with_env(
+        "CHRONOSEEK_YTDLP_NODE_PATH",
+        CHRONOSEEK_YTDLP_NODE_PATH,
+    )
 
 
 chute = Chute(

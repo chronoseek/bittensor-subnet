@@ -196,6 +196,44 @@ Then edit `chronoseek_chute.py` before deploying:
 
 The template exposes `/health` and `/search` as native Chutes SDK cords. It does not start a local FastAPI server inside Chutes.
 
+### Local Chutes runtime testing
+
+Use local Chutes before production deployment. Production build/deploy calls consume Chutes credits; only the project owner should run them intentionally.
+
+Print the exact local build/run commands for the current `chronoseek_chute.py`:
+
+```bash
+poetry run python scripts/test_chutes_runtime_local.py --print-commands
+```
+
+Build the image locally:
+
+```bash
+poetry run python scripts/test_chutes_runtime_local.py --build
+```
+
+Run the local Chutes container in a separate terminal:
+
+```bash
+poetry run python scripts/test_chutes_runtime_local.py --run
+```
+
+Smoke-test the already-running local runtime:
+
+```bash
+poetry run python scripts/test_chutes_runtime_local.py --smoke
+```
+
+For a cheap readiness check that avoids video inference:
+
+```bash
+poetry run python scripts/test_chutes_runtime_local.py --smoke --health-only
+```
+
+This helper follows the official local Chutes flow (`chutes build <ref> --local`, then `docker run ... chutes run <ref> --dev`) and never calls the production Chutes API.
+
+### Production Chutes deployment
+
 Build and deploy from the SDK-defined object through the Chutes APIs:
 
 ```bash
@@ -207,7 +245,7 @@ poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
 
 The deploy wrapper is an off-chain Chutes helper. It does not load wallets, verify metagraph registration, or touch the chain. Every run generates a UTC millisecond timestamp for runtime uniqueness. With Chutes account `chronoseek` and timestamp `20260510143015999`, the Chutes API `name` is `ChronoSeek-runtime-20260510143015999`, the human display label in logs/readme is `ChronoSeek Runtime`, and the routable `slug` is `chronoseek-chronoseek-runtime-20260510143015999`. Validators resolve that to `https://chronoseek-chronoseek-runtime-20260510143015999.chutes.ai`. Use the exact slug printed by the deploy helper when committing metadata with `miner.py`.
 
-Before build/deploy, the wrapper downloads `CHRONOSEEK_LOGO_URL`, uploads it to Chutes, and sends the returned `logo_id` with both the image build and chute deploy payloads.
+Before build/deploy, the wrapper downloads `CHRONOSEEK_LOGO_URL`, uploads it to Chutes, and sends the returned `logo_id` with both the image build and chute deploy payloads. During image build, it also checks `CHRONOSEEK_YTDLP_COOKIES`; when it points to an existing local cookies file, the wrapper copies it into the build context, adds it under `/opt/chronoseek/miner-files/ytdlp/...`, and rewrites the cookie env var inside the image to that container path. The example chute installs Deno at `/opt/deno/bin/deno`, sets the yt-dlp Deno env var, defaults the browser cookie source to `chrome:Default`, and forwards `HF_TOKEN` into the image when it is present in the local environment.
 
 Set `RUNTIME_REVISION` inside `chronoseek_chute.py` for the actual Chutes image/chute revision. The helper's `--revision` flag only overrides the on-chain provenance value printed for `miner.py`.
 
@@ -274,20 +312,20 @@ The subnet now supports `v2.0` submission-based evaluation. Serving promotion an
 
 ### Chutes
 
-| Variable              | Description                                            | Default     |
-| --------------------- | ------------------------------------------------------ | ----------- |
-| `CHUTES_API_KEY`      | Chutes API token for build/deploy and private eval     | ``          |
-| `CHUTES_BASE_DOMAIN`  | Domain used to resolve `chute_slug` submissions        | `chutes.ai` |
-| `MIN_VALIDATOR_STAKE` | Minimum validator stake required by the Chutes runtime | `10000`     |
+| Variable                     | Description                                                                | Default                                         |
+| ---------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------- |
+| `CHUTES_API_KEY`             | Chutes API token for build/deploy and private eval                         | ``                                              |
+| `CHUTES_BASE_DOMAIN`         | Domain used to resolve `chute_slug` submissions                            | `chutes.ai`                                     |
+| `MIN_VALIDATOR_STAKE`        | Minimum validator stake required by the Chutes runtime                     | `10000`                                         |
 
 ### Miner Video Download
 
-| Variable                | Description                                                   | Default |
-| ----------------------- | ------------------------------------------------------------- | ------- |
-| `YTDLP_COOKIES`         | Optional path to Netscape `cookies.txt` for YouTube auth      | ``      |
-| `YTDLP_COOKIES_BROWSER` | Optional browser source for cookies                           | ``      |
-| `YTDLP_NODE_PATH`       | Optional Node.js runtime path for yt-dlp EJS challenge solver | ``      |
-| `YTDLP_DENO_PATH`       | Optional Deno runtime path for yt-dlp EJS challenge solver    | ``      |
+| Variable                             | Description                                                                 | Default              |
+| ------------------------------------ | --------------------------------------------------------------------------- | -------------------- |
+| `CHRONOSEEK_YTDLP_COOKIES`           | Optional local Netscape `cookies.txt`; copied into the Chutes image at build | ``                   |
+| `CHRONOSEEK_YTDLP_COOKIES_BROWSER`   | Browser cookie source used if no cookies file is available                  | `chrome:Default`     |
+| `CHRONOSEEK_YTDLP_NODE_PATH`         | Optional Node.js runtime path for yt-dlp EJS challenge solver               | ``                   |
+| `CHRONOSEEK_YTDLP_DENO_PATH`         | Deno runtime path for yt-dlp EJS challenge solver                           | `/opt/deno/bin/deno` |
 
 ### Hugging Face
 
