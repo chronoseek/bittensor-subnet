@@ -13,6 +13,7 @@ import json
 import os
 import shlex
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Bittensor parses --help during import in some versions. Preserve normal
@@ -34,8 +35,15 @@ from chronoseek.chutes.deployment import (
     metadata_from_chute_definition,
     metadata_from_chutes_response,
     normalize_url,
+    resolve_chute_api_name,
+    resolve_chute_api_runtime_name,
+    resolve_chute_display_name,
+    resolve_chute_logo_url,
+    resolve_chute_slug,
+    load_chute_object,
     require_chute_module_ref,
     stream_image_build_logs_via_api,
+    upload_logo_via_api,
 )
 from chronoseek.chutes.runtime import resolve_submission_endpoint
 
@@ -123,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--endpoint",
         type=str,
         default="",
-        help="Explicit deployed runtime endpoint to commit on-chain.",
+        help="Explicit deployed runtime endpoint to include in deployment metadata.",
     )
     parser.add_argument("--chute-id", type=str, default="")
     parser.add_argument("--chute-slug", type=str, default="")
@@ -153,18 +161,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Runtime capability to include in the suggested miner.py command. Can be repeated.",
-    )
-    parser.add_argument(
-        "--netuid",
-        type=int,
-        default=int(os.getenv("NETUID", "1")),
-        help="Subnet NetUID used in the suggested miner.py command.",
-    )
-    parser.add_argument(
-        "--network",
-        type=str,
-        default=os.getenv("NETWORK", "finney"),
-        help="Bittensor network used in the suggested miner.py command.",
     )
     parser.add_argument(
         "--chutes-timeout-seconds",
@@ -197,6 +193,20 @@ def configure_logging(config) -> None:
         bt.logging.set_info(True)
 
 
+def resolve_runtime_timestamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")[:-3]
+
+
+def chute_username(chute) -> str:
+    return str(
+        getattr(chute, "username", None) or getattr(chute, "_username", None) or ""
+    ).strip()
+
+
+def chute_logo_url(chute) -> str:
+    return resolve_chute_logo_url(chute)
+
+
 def explicit_metadata(config) -> RuntimeMetadata:
     return RuntimeMetadata(
         endpoint=normalize_url(config.endpoint) or None,
@@ -208,16 +218,26 @@ def explicit_metadata(config) -> RuntimeMetadata:
     )
 
 
+def metadata_with_chute_slug(
+    metadata: RuntimeMetadata,
+    chute_slug: str,
+) -> RuntimeMetadata:
+    return RuntimeMetadata(
+        endpoint=metadata.endpoint,
+        chute_id=metadata.chute_id,
+        chute_slug=chute_slug or metadata.chute_slug,
+        artifact_id=metadata.artifact_id,
+        artifact_revision=metadata.artifact_revision,
+        artifact_digest=metadata.artifact_digest,
+    )
+
+
 def miner_command(metadata: RuntimeMetadata, config) -> list[str]:
     command = [
         "poetry",
         "run",
         "python",
         "miner.py",
-        "--subtensor.network",
-        str(config.network),
-        "--netuid",
-        str(config.netuid),
     ]
     field_to_flag = {
         "endpoint": "--endpoint",
@@ -270,16 +290,39 @@ def print_results(metadata: RuntimeMetadata, config) -> None:
         output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         bt.logging.success(f"Wrote deployment metadata to {output_path}")
 
-    print("\nCommit this deployment on-chain with:")
+    print("\nCommit this deployment on-chain with miner.py:")
     print(shlex.join(miner_command(metadata, config)))
 
 
 async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
     require_chute_module_ref(config.chute_ref)
+    runtime_timestamp = resolve_runtime_timestamp()
     explicit = explicit_metadata(config)
-    definition_metadata = metadata_from_chute_definition(config.chute_ref)
+    base_chute = load_chute_object(config.chute_ref)
+    logo_url = chute_logo_url(base_chute)
+    base_chute_name = getattr(base_chute, "name", None) or "chronoseek-runtime"
+    chute_base_name = resolve_chute_api_name(base_chute_name)
+    chute_name = resolve_chute_api_runtime_name(chute_base_name, runtime_timestamp)
+    chute_display_name = resolve_chute_display_name(chute_base_name)
+    chute_slug = resolve_chute_slug(
+        chute_username(base_chute),
+        chute_base_name,
+        runtime_timestamp,
+    )
+    bt.logging.info(f"Resolved Chutes runtime timestamp: {runtime_timestamp}")
+    bt.logging.info(f"Resolved Chutes display label: {chute_display_name}")
+    bt.logging.info(f"Resolved Chutes API name: {chute_name}")
+    bt.logging.info(f"Resolved Chutes slug: {chute_slug}")
+    bt.logging.info(f"Resolved Chutes logo URL: {logo_url}")
+    definition_metadata = metadata_from_chute_definition(
+        config.chute_ref,
+        chute_name=chute_name,
+        chute_slug=chute_slug,
+        chute_display_name=chute_display_name,
+    )
     api_metadata = RuntimeMetadata()
     raw_responses: dict[str, object] = {}
+    logo_id: str | None = None
 
     if config.lookup_only:
         chute_id_or_name = config.chute_id or config.chute_slug
@@ -292,6 +335,15 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
         )
         api_metadata = metadata_from_chutes_response(raw_responses["lookup"])
     else:
+        if config.build or config.deploy:
+            logo_id = await upload_logo_via_api(
+                api_base_url=config.chutes_api_base_url,
+                logo_url=logo_url,
+                timeout_seconds=min(float(config.chutes_timeout_seconds), 120.0),
+            )
+            raw_responses["logo"] = {"logo_id": logo_id, "url": logo_url}
+            bt.logging.info(f"Resolved Chutes logo ID: {logo_id}")
+
         if config.build:
             raw_responses["image"] = await build_image_via_api(
                 api_base_url=config.chutes_api_base_url,
@@ -300,6 +352,10 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 public=bool(config.public),
                 overwrite_existing=config.overwrite_existing_image,
                 timeout_seconds=float(config.chutes_timeout_seconds),
+                chute_name=chute_name,
+                chute_slug=chute_slug,
+                chute_display_name=chute_display_name,
+                logo_id=logo_id,
             )
             image_id = (
                 raw_responses["image"].get("image_id")
@@ -320,8 +376,15 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 accept_fee=bool(config.accept_fee),
                 public=bool(config.public),
                 timeout_seconds=float(config.chutes_timeout_seconds),
+                chute_name=chute_name,
+                chute_slug=chute_slug,
+                chute_display_name=chute_display_name,
+                logo_id=logo_id,
             )
-            api_metadata = metadata_from_chutes_response(raw_responses["chute"])
+            api_metadata = metadata_with_chute_slug(
+                metadata_from_chutes_response(raw_responses["chute"]),
+                chute_slug,
+            )
 
     return (
         merge_metadata(

@@ -8,6 +8,9 @@ requiring miners to run `chutes login` or maintain local Chutes SDK configs.
 import base64
 import importlib
 import pickle
+import re
+import sys
+import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -18,6 +21,8 @@ import bittensor as bt
 import httpx
 
 from chronoseek.chutes.runtime import chutes_auth_headers_from_env
+
+DEFAULT_CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,175 @@ def _first_text(*values: Any) -> str | None:
         if text:
             return text
     return None
+
+
+def normalize_name_component(value: str) -> str:
+    """Normalize a value for Chutes image/chute names and DNS-safe slugs."""
+
+    normalized = re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower())
+    normalized = re.sub(r"-+", "-", normalized).strip("-")
+    return normalized
+
+
+def resolve_chute_api_name(base_name: str) -> str:
+    """Build the Chutes-valid API name used for the card title."""
+
+    normalized_base = normalize_name_component(base_name)
+    if not normalized_base:
+        normalized_base = "chronoseek-runtime"
+    parts = [
+        "ChronoSeek" if part == "chronoseek" else part
+        for part in normalized_base.split("-")
+        if part
+    ]
+    return "-".join(parts)
+
+
+def resolve_chute_api_runtime_name(base_name: str, runtime_timestamp: str) -> str:
+    """Build a Chutes API name with branding preserved and runtime uniqueness."""
+
+    api_name = resolve_chute_api_name(base_name)
+    normalized_timestamp = normalize_name_component(runtime_timestamp)
+    if not normalized_timestamp:
+        return api_name
+    if api_name.lower().endswith(f"-{normalized_timestamp}"):
+        return api_name
+    return f"{api_name}-{normalized_timestamp}"
+
+
+def resolve_runtime_name(base_name: str, runtime_timestamp: str) -> str:
+    """Build a DNS-safe runtime name from a generated unique ID."""
+
+    normalized_base = normalize_name_component(base_name) or "chronoseek-runtime"
+    normalized_timestamp = normalize_name_component(runtime_timestamp)
+    if not normalized_timestamp:
+        return normalized_base
+    if normalized_base.endswith(f"-{normalized_timestamp}"):
+        return normalized_base
+    return f"{normalized_base}-{normalized_timestamp}"
+
+
+def resolve_chute_slug(
+    username: str | None,
+    runtime_name: str,
+    runtime_timestamp: str,
+) -> str:
+    """Build the canonical routable Chutes slug committed on-chain."""
+
+    normalized_username = normalize_name_component(username or "")
+    runtime_name_with_timestamp = resolve_runtime_name(
+        runtime_name,
+        runtime_timestamp,
+    )
+    if normalized_username:
+        return f"{normalized_username}-{runtime_name_with_timestamp}"
+    return runtime_name_with_timestamp
+
+
+def resolve_chute_display_name(base_name: str) -> str:
+    """Build a human-facing label for logs/readme, not the Chutes API name."""
+
+    words = normalize_name_component(base_name).split("-")
+    display_words = [
+        "ChronoSeek" if word == "chronoseek" else word.capitalize()
+        for word in words
+        if word
+    ]
+    return " ".join(display_words)
+
+
+def resolve_chute_logo_url(chute: Any) -> str:
+    """Return the logo URL attached to a Chute object, or the ChronoSeek default."""
+
+    return (
+        _first_text(
+            getattr(chute, "_chronoseek_logo_url", None),
+            getattr(chute, "logo_url", None),
+        )
+        or DEFAULT_CHRONOSEEK_LOGO_URL
+    )
+
+
+def resolve_image_name(runtime_name: str, runtime_revision: str | None) -> str:
+    """Build the Chutes image name for a runtime/revision pair."""
+
+    normalized_name = normalize_name_component(runtime_name)
+    short_revision = str(runtime_revision or "").strip().lower()[-7:]
+    if not short_revision:
+        return normalized_name
+    return f"{normalized_name}-{short_revision}"
+
+
+def _recompute_image_uid(image: Any) -> None:
+    username = getattr(image, "username", None)
+    name = getattr(image, "name", None)
+    tag = getattr(image, "tag", None)
+    if username and name and tag:
+        image._uid = str(
+            uuid.uuid5(uuid.NAMESPACE_OID, f"{username}/{name}:{tag}".lower())
+        )
+
+
+def _recompute_chute_uid(chute: Any) -> None:
+    username = getattr(chute, "username", None) or getattr(chute, "_username", None)
+    name = getattr(chute, "name", None)
+    if username and name:
+        chute._uid = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{username}::chute::{name}"))
+
+
+def _readme_with_runtime_info(
+    readme: str | None,
+    *,
+    chute_slug: str | None,
+    chute_display_name: str | None = None,
+) -> str:
+    base_readme = str(readme or "").rstrip()
+    details = [
+        "",
+        "## Runtime",
+        "",
+    ]
+    if chute_display_name:
+        details.append(f"- Display label: `{chute_display_name}`")
+    if chute_slug:
+        details.append(f"- Runtime slug: `{chute_slug}`")
+    return base_readme + "\n".join(details) + "\n"
+
+
+def apply_runtime_name(
+    chute: Any,
+    chute_name: str | None,
+    *,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
+) -> Any:
+    """Apply deployment-time display/routing metadata to loaded Chutes objects."""
+
+    api_name = resolve_chute_api_name(chute_name) if chute_name else ""
+    normalized_slug = normalize_name_component(chute_slug or api_name)
+    if not api_name and not normalized_slug:
+        return chute
+
+    # Chutes SDK exposes read-only Chute.name/Image.uid properties, so update
+    # the backing fields after the deployment-time final name is known.
+    if api_name:
+        chute._name = api_name
+        _recompute_chute_uid(chute)
+    if normalized_slug:
+        chute._chronoseek_chute_slug = normalized_slug
+    chute._readme = _readme_with_runtime_info(
+        getattr(chute, "readme", ""),
+        chute_slug=normalized_slug,
+        chute_display_name=chute_display_name,
+    )
+
+    image = getattr(chute, "image", None)
+    if image is not None and not isinstance(image, str):
+        revision = getattr(chute, "revision", None) or getattr(image, "tag", None)
+        image.name = resolve_image_name(normalized_slug or api_name, revision)
+        _recompute_image_uid(image)
+
+    return chute
 
 
 def _image_id_from_response(image: Any) -> str | None:
@@ -101,10 +275,8 @@ def metadata_from_chutes_response(raw: dict[str, Any]) -> RuntimeMetadata:
         chute_slug=_first_text(
             raw.get("chute_slug"),
             raw.get("slug"),
-            raw.get("name"),
             chute.get("chute_slug"),
             chute.get("slug"),
-            chute.get("name"),
         ),
         artifact_id=_first_text(
             raw.get("artifact_id"),
@@ -215,42 +387,65 @@ def require_chute_module_ref(chute_ref: str) -> str:
     return chute_ref
 
 
-def load_chute_definition(chute_ref: str):
+def load_chute_definition(
+    chute_ref: str,
+    *,
+    chute_name: str | None = None,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
+):
     """Load a Chute object without requiring Chutes credentials/config."""
 
     require_chute_module_ref(chute_ref)
     from chutes.chute import Chute, ChutePack
 
     module_name, attr = chute_ref.split(":", 1)
-    module = importlib.import_module(module_name)
+    if module_name in sys.modules:
+        module = importlib.reload(sys.modules[module_name])
+    else:
+        module = importlib.import_module(module_name)
     chute = getattr(module, attr)
     if isinstance(chute, ChutePack):
         chute = chute.chute
     if not isinstance(chute, Chute):
         raise TypeError(f"{chute_ref} did not resolve to a Chutes Chute object.")
+    apply_runtime_name(
+        chute,
+        chute_name,
+        chute_slug=chute_slug,
+        chute_display_name=chute_display_name,
+    )
     module_path = Path(module.__file__).resolve()
     return module, module_path, chute
 
 
-def load_chute_object(chute_ref: str):
+def load_chute_object(
+    chute_ref: str,
+    *,
+    chute_name: str | None = None,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
+):
     """Load a Chute object using local Python imports only."""
 
-    _, _, chute = load_chute_definition(chute_ref)
+    _, _, chute = load_chute_definition(
+        chute_ref,
+        chute_name=chute_name,
+        chute_slug=chute_slug,
+        chute_display_name=chute_display_name,
+    )
     return chute
 
 
 def metadata_from_chute_object(chute: Any) -> RuntimeMetadata:
-    image_id, image_tag = _image_metadata_from_definition(
-        getattr(chute, "image", None)
-    )
+    image_id, image_tag = _image_metadata_from_definition(getattr(chute, "image", None))
     revision = getattr(chute, "revision", None) or image_tag
     chute_name = getattr(chute, "name", None)
-    username = getattr(chute, "username", None) or getattr(chute, "_username", None)
-    chute_slug = getattr(chute, "slug", None)
-    if not chute_slug and username and chute_name:
-        chute_slug = f"{username}-{chute_name}"
-    elif not chute_slug:
-        chute_slug = chute_name
+    chute_slug = getattr(chute, "_chronoseek_chute_slug", None) or getattr(
+        chute, "slug", None
+    )
+    if not chute_slug:
+        chute_slug = normalize_name_component(chute_name)
 
     return RuntimeMetadata(
         chute_id=str(getattr(chute, "uid", "")) or None,
@@ -260,8 +455,21 @@ def metadata_from_chute_object(chute: Any) -> RuntimeMetadata:
     )
 
 
-def metadata_from_chute_definition(chute_ref: str) -> RuntimeMetadata:
-    return metadata_from_chute_object(load_chute_object(chute_ref))
+def metadata_from_chute_definition(
+    chute_ref: str,
+    *,
+    chute_name: str | None = None,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
+) -> RuntimeMetadata:
+    return metadata_from_chute_object(
+        load_chute_object(
+            chute_ref,
+            chute_name=chute_name,
+            chute_slug=chute_slug,
+            chute_display_name=chute_display_name,
+        )
+    )
 
 
 def _collect_build_context_paths(image: Any, *, include_cwd: bool) -> list[Path]:
@@ -341,9 +549,7 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
     except httpx.HTTPStatusError as exc:
         detail = response.text.strip()
         if detail:
-            raise RuntimeError(
-                f"{exc}. Chutes response body: {detail[:2000]}"
-            ) from exc
+            raise RuntimeError(f"{exc}. Chutes response body: {detail[:2000]}") from exc
         raise
 
 
@@ -429,20 +635,85 @@ async def submit_image_build_via_api(
         return response.json()
 
 
+async def upload_logo_via_api(
+    *,
+    api_base_url: str,
+    logo_url: str = DEFAULT_CHRONOSEEK_LOGO_URL,
+    timeout_seconds: float = 60.0,
+) -> str:
+    """Upload a logo URL to Chutes and return the resulting `logo_id`."""
+
+    normalized_logo_url = str(logo_url or "").strip()
+    if not normalized_logo_url:
+        raise ValueError("logo_url is required")
+
+    timeout = max(1.0, float(timeout_seconds))
+    bt.logging.info(f"Downloading Chutes logo asset: {normalized_logo_url}")
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        logo_response = await client.get(
+            normalized_logo_url,
+            headers={"Accept": "image/*"},
+        )
+        _raise_for_status_with_body(logo_response)
+        logo_bytes = logo_response.content
+        if not logo_bytes:
+            raise RuntimeError(
+                f"Logo URL returned an empty body: {normalized_logo_url}"
+            )
+
+        content_type = (
+            logo_response.headers.get("Content-Type", "").split(";")[0].strip()
+            or "image/png"
+        )
+        filename = Path(normalized_logo_url.split("?", 1)[0]).name or "logo.png"
+        bt.logging.info(
+            f"Uploading Chutes logo through API: POST {api_base_url.rstrip('/')}/logos/"
+        )
+        upload_response = await client.post(
+            f"{api_base_url.rstrip('/')}/logos/",
+            files={"logo": (filename, logo_bytes, content_type)},
+            headers=chutes_auth_headers_from_env(require_token=True),
+        )
+        _raise_for_status_with_body(upload_response)
+
+    payload = _json_or_empty(upload_response)
+    logo_id = _first_text(
+        payload.get("logo_id"),
+        payload.get("id"),
+        payload.get("uid"),
+    )
+    if not logo_id:
+        raise RuntimeError(
+            f"Chutes logo upload response did not include logo_id: {payload}"
+        )
+    return logo_id
+
+
 def chute_deploy_payload(
     *,
     chute_ref: str,
     public: bool = False,
     logo_id: str | None = None,
+    chute_name: str | None = None,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
 ) -> dict[str, Any]:
-    _, module_path, chute = load_chute_definition(chute_ref)
+    _, module_path, chute = load_chute_definition(
+        chute_ref,
+        chute_name=chute_name,
+        chute_slug=chute_slug,
+        chute_display_name=chute_display_name,
+    )
     image = chute.image if isinstance(chute.image, str) else chute.image.uid
+    resolved_chute_slug = getattr(chute, "_chronoseek_chute_slug", None) or getattr(
+        chute, "slug", None
+    )
     node_selector = (
         chute.node_selector.model_dump()
         if hasattr(chute.node_selector, "model_dump")
         else chute.node_selector.dict()
     )
-    return {
+    payload = {
         "name": chute.name,
         "tagline": chute.tagline,
         "readme": chute.readme,
@@ -496,6 +767,9 @@ def chute_deploy_payload(
             for job in chute._jobs
         ],
     }
+    if resolved_chute_slug:
+        payload["slug"] = resolved_chute_slug
+    return payload
 
 
 async def build_image_via_api(
@@ -506,10 +780,19 @@ async def build_image_via_api(
     public: bool = False,
     overwrite_existing: bool | None = None,
     timeout_seconds: float = 900.0,
+    chute_name: str | None = None,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
+    logo_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a Chutes image build through `POST /images/`."""
 
-    image = load_chute_object(chute_ref).image
+    image = load_chute_object(
+        chute_ref,
+        chute_name=chute_name,
+        chute_slug=chute_slug,
+        chute_display_name=chute_display_name,
+    ).image
     image_id = image_id_from_definition(image)
     image_label = image_label_from_definition(image)
     existing_image = await get_image_via_api(
@@ -542,6 +825,7 @@ async def build_image_via_api(
         image,
         include_cwd=include_cwd,
         public=public,
+        logo_id=logo_id,
     )
     return await submit_image_build_via_api(
         api_base_url=api_base_url,
@@ -634,10 +918,21 @@ async def deploy_chute_via_api(
     accept_fee: bool = False,
     public: bool = False,
     timeout_seconds: float = 900.0,
+    chute_name: str | None = None,
+    chute_slug: str | None = None,
+    chute_display_name: str | None = None,
+    logo_id: str | None = None,
 ) -> dict[str, Any]:
     """Deploy a Chute through `POST /chutes/`."""
 
-    payload = chute_deploy_payload(chute_ref=chute_ref, public=public)
+    payload = chute_deploy_payload(
+        chute_ref=chute_ref,
+        public=public,
+        logo_id=logo_id,
+        chute_name=chute_name,
+        chute_slug=chute_slug,
+        chute_display_name=chute_display_name,
+    )
     url = f"{api_base_url.rstrip('/')}/chutes/"
     bt.logging.info(f"Deploying Chutes runtime through API: POST {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:

@@ -49,8 +49,12 @@ def resolve_image_name(base_name: str, runtime_revision: str) -> str:
     return f"{base_name}-{short_rev}"
 
 
-CHUTES_USERNAME = "CHANGE_ME"
-CHUTE_NAME = "CHANGE_ME"
+# Required by Chutes SDK image/chute object construction. This is not part of
+# ChronoSeek miner identity.
+CHUTES_ACCOUNT = "CHANGE_ME"
+CHUTE_BASE_NAME = "chronoseek-runtime"
+CHUTE_NAME = CHUTE_BASE_NAME
+CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
 RUNTIME_REVISION = resolve_runtime_revision()
 IMAGE_NAME = resolve_image_name(CHUTE_NAME, RUNTIME_REVISION)
 # Chutes API enforces <=32 chars for image tags.
@@ -64,7 +68,7 @@ CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 
 image = (
     Image(
-        username=CHUTES_USERNAME,
+        username=CHUTES_ACCOUNT,
         name=IMAGE_NAME,
         tag=IMAGE_TAG,
         readme="ChronoSeek miner runtime.",
@@ -102,12 +106,12 @@ image = (
 
 
 chute = Chute(
-    username=CHUTES_USERNAME,
+    username=CHUTES_ACCOUNT,
     name=CHUTE_NAME,
-    tagline="ChronoSeek semantic video moment retrieval runtime.",
+    tagline="ChronoSeek",
     readme=(
         "# ChronoSeek Runtime\n\n"
-        "Exposes `/health` and `/search` for validator evaluation."
+        "ChronoSeek runtime for validator evaluation. Exposes `/health` and `/search`."
     ),
     image=image,
     node_selector=NodeSelector(
@@ -123,6 +127,7 @@ chute = Chute(
     # The runtime must fetch arbitrary validator task videos.
     allow_external_egress=True,
 )
+chute._chronoseek_logo_url = CHRONOSEEK_LOGO_URL
 
 
 @chute.on_startup()

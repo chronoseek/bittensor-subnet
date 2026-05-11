@@ -99,7 +99,7 @@ Recommended minimal manifest:
   "protocol": "chronoseek-runtime-v2",
   "hotkey": "miner-hotkey-ss58",
   "chute_id": "chute-deployment-id",
-  "chute_slug": "chronoseek-runtime",
+  "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
   "created_at_block": 123456
 }
 ```
@@ -121,12 +121,16 @@ Current subnet implementation uses latest revealed chain commitments by miner ho
 
 For now, validators resolve an explicit `endpoint` first, then `chute_slug` as `https://{chute_slug}.${CHUTES_BASE_DOMAIN}`. Responsive miner selection requires both valid revealed metadata for a registered metagraph hotkey and a successful `/health` response from the resolved runtime. A `chute_id` remains part of the canonical identity, but a validator needs either a direct endpoint, a slug, or future Chutes metadata lookup to dispatch a request.
 
+Chutes derives the public slug from the Chutes account and API `name`, so the deploy helper appends a UTC millisecond timestamp to the API `name` while preserving brand casing, for example `ChronoSeek-runtime-20260510143015999`. The committed `chute_slug` is unique and includes the lowercase Chutes account plus timestamp, for example `chronoseek-chronoseek-runtime-20260510143015999`. The description/tagline is `ChronoSeek`; the human display label in logs/readme is `ChronoSeek Runtime`; the visible author comes from the Chutes account. Chutes deployment naming is off-chain and the deploy helper prints the slug to commit with `miner.py`. The deploy helper also uploads the ChronoSeek logo from `https://chronoseek.org/logo.png` and reuses the returned Chutes `logo_id` for the image and chute payloads.
+
 Miners can commit a submission with:
 
 ```bash
 poetry run python miner.py \
+  --wallet.name miner \
+  --wallet.hotkey default \
   --chute-id chute-deployment-id \
-  --chute-slug chronoseek-runtime \
+  --chute-slug chronoseek-chronoseek-runtime-20260510143015999 \
   --artifact-revision immutable-revision
 ```
 

@@ -153,7 +153,9 @@ poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
   --accept-fee
 
 poetry run python miner.py \
-  --chute-slug <chutes-username>-chronoseek-runtime
+  --wallet.name <wallet-name> \
+  --wallet.hotkey <hotkey-name> \
+  --chute-slug <username>-chronoseek-runtime-<timestamp>
 ```
 
 The helper boundaries are intentionally narrow:
@@ -183,8 +185,9 @@ cp chronoseek_chute.example.py chronoseek_chute.py
 
 Then edit `chronoseek_chute.py` before deploying:
 
-- `CHUTES_USERNAME`: your Chutes username.
-- `RUNTIME_NAME`: the Chutes runtime name, for example `chronoseek-runtime`. Chutes public hostnames use `<username>-<runtime-name>.chutes.ai`.
+- `CHUTES_ACCOUNT`: account namespace required by the Chutes SDK object construction. This is not part of ChronoSeek miner identity or the runtime slug.
+- `CHUTE_BASE_NAME`: the shared base name, `chronoseek-runtime`. The deploy wrapper renders the Chutes API name with brand casing as `ChronoSeek-runtime-<timestamp>` because Chutes derives the public slug from `username + name`.
+- `CHRONOSEEK_LOGO_URL`: card/image avatar uploaded to Chutes before build/deploy. The default is `https://chronoseek.org/logo.png`.
 - `RUNTIME_REVISION`: git SHA, image version, or other immutable build label.
 - `CHRONOSEEK_PACKAGE`: where Chutes can install your runtime code from. This can be a public git URL, private git URL with deploy credentials, or your own package/image install command.
 - `node_selector`: GPU requirements, especially `gpu_count` and `min_vram_gb_per_gpu`.
@@ -201,6 +204,10 @@ poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
   --accept-fee \
   --artifact-id chronoseek-runtime
 ```
+
+The deploy wrapper is an off-chain Chutes helper. It does not load wallets, verify metagraph registration, or touch the chain. Every run generates a UTC millisecond timestamp for runtime uniqueness. With Chutes account `chronoseek` and timestamp `20260510143015999`, the Chutes API `name` is `ChronoSeek-runtime-20260510143015999`, the human display label in logs/readme is `ChronoSeek Runtime`, and the routable `slug` is `chronoseek-chronoseek-runtime-20260510143015999`. Validators resolve that to `https://chronoseek-chronoseek-runtime-20260510143015999.chutes.ai`. Use the exact slug printed by the deploy helper when committing metadata with `miner.py`.
+
+Before build/deploy, the wrapper downloads `CHRONOSEEK_LOGO_URL`, uploads it to Chutes, and sends the returned `logo_id` with both the image build and chute deploy payloads.
 
 Set `RUNTIME_REVISION` inside `chronoseek_chute.py` for the actual Chutes image/chute revision. The helper's `--revision` flag only overrides the on-chain provenance value printed for `miner.py`.
 
@@ -227,8 +234,10 @@ For custom ChronoSeek runtimes, no Hugging Face repo is required. The Chutes dep
 
 ```bash
 poetry run python miner.py \
+  --wallet.name <wallet-name> \
+  --wallet.hotkey <hotkey-name> \
   --chute-id chute-deployment-id \
-  --chute-slug <chutes-username>-chronoseek-runtime \
+  --chute-slug <username>-chronoseek-runtime-<timestamp> \
   --artifact-revision immutable-revision
 ```
 
