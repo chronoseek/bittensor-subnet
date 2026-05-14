@@ -26,7 +26,7 @@ import httpx
 from chronoseek.chutes.runtime import chutes_auth_headers_from_env
 
 DEFAULT_CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
-CHRONOSEEK_YTDLP_COOKIES_ENV = "CHRONOSEEK_YTDLP_COOKIES"
+YTDLP_COOKIES_ENV = "YTDLP_COOKIES"
 CHUTES_MINER_FILE_ROOT = "/opt/chronoseek/miner-files"
 CHUTES_IMAGE_FILE_BUILD_CONTEXT_ROOT = ".chronoseek-chutes-build"
 
@@ -489,7 +489,7 @@ def metadata_from_chute_definition(
 def resolve_ytdlp_cookies_source() -> Path | None:
     """Return the local cookies.txt file to embed in the Chutes image, if set."""
 
-    raw_path = os.getenv(CHRONOSEEK_YTDLP_COOKIES_ENV, "").strip()
+    raw_path = os.getenv(YTDLP_COOKIES_ENV, "").strip()
     if not raw_path:
         return None
 
@@ -497,7 +497,7 @@ def resolve_ytdlp_cookies_source() -> Path | None:
     if source.is_file():
         return source
     bt.logging.warning(
-        f"{CHRONOSEEK_YTDLP_COOKIES_ENV} is set but is not a readable file; "
+        f"{YTDLP_COOKIES_ENV} is set but is not a readable file; "
         f"skipping Chutes image copy: {source}"
     )
     return None
@@ -526,12 +526,12 @@ def _apply_ytdlp_cookies_file(
     source_rel = staged_path.relative_to(cwd).as_posix()
     image_path = f"{image_root.rstrip('/')}/ytdlp/{source_name}"
     image.add(source_rel, image_path, chmod="644")
-    image.with_env(CHRONOSEEK_YTDLP_COOKIES_ENV, image_path)
+    image.with_env(YTDLP_COOKIES_ENV, image_path)
     bt.logging.info(
         f"Added yt-dlp cookies file to Chutes image at {image_path}."
     )
     return ChutesImageFile(
-        env_names=(CHRONOSEEK_YTDLP_COOKIES_ENV,),
+        env_names=(YTDLP_COOKIES_ENV,),
         source_path=source,
         staged_path=staged_path,
         image_path=image_path,

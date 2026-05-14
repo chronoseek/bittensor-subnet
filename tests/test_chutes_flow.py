@@ -442,15 +442,15 @@ def test_image_build_payload_uses_chutes_image_object():
     assert files["build_context"][2] == "application/zip"
 
 
-def test_resolve_ytdlp_cookies_source_uses_chronoseek_env(
+def test_resolve_ytdlp_cookies_source_uses_ytdlp_env(
     tmp_path,
     monkeypatch,
 ):
-    chronoseek = tmp_path / "chronoseek-cookies.txt"
-    chronoseek.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(chronoseek))
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookies))
 
-    assert resolve_ytdlp_cookies_source() == chronoseek.resolve()
+    assert resolve_ytdlp_cookies_source() == cookies.resolve()
 
 
 def test_chutes_ytdlp_cookie_file_context_adds_cookie_file(
@@ -462,7 +462,7 @@ def test_chutes_ytdlp_cookie_file_context_adds_cookie_file(
     monkeypatch.chdir(tmp_path)
     cookies = tmp_path / "local-cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("CHRONOSEEK_YTDLP_COOKIES", str(cookies))
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookies))
 
     image = Image(
         username="chronoseek",
@@ -474,9 +474,9 @@ def test_chutes_ytdlp_cookie_file_context_adds_cookie_file(
     with chutes_ytdlp_cookie_file_context(image) as applied:
         data, files = image_build_form_payload(image)
 
-        assert applied.env_names == ("CHRONOSEEK_YTDLP_COOKIES",)
+        assert applied.env_names == ("YTDLP_COOKIES",)
         assert (
-            "ENV CHRONOSEEK_YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/local-cookies.txt"
+            "ENV YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/local-cookies.txt"
             in data["dockerfile"]
         )
         assert "--chmod=644" in data["dockerfile"]
@@ -586,6 +586,7 @@ chute = Chute(
 
 def test_build_image_aborts_when_existing_image_overwrite_is_declined(monkeypatch):
     calls = []
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
 
     async def fake_get_image_via_api(**kwargs):
         calls.append(("get", kwargs))
@@ -633,6 +634,7 @@ def test_build_image_aborts_when_existing_image_overwrite_is_declined(monkeypatc
 
 def test_build_image_deletes_existing_image_after_yes_confirmation(monkeypatch):
     calls = []
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
 
     async def fake_get_image_via_api(**kwargs):
         calls.append(("get", kwargs))
@@ -681,6 +683,7 @@ def test_build_image_deletes_existing_image_after_yes_confirmation(monkeypatch):
 
 def test_build_image_deletes_existing_image_by_default_confirmation(monkeypatch):
     calls = []
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
 
     async def fake_get_image_via_api(**kwargs):
         calls.append(("get", kwargs))

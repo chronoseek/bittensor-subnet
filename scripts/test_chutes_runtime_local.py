@@ -3,8 +3,8 @@
 
 This helper follows the Chutes local testing flow:
 
-    chutes build chronoseek_chute:chute --local
-    docker run ... chutes run chronoseek_chute:chute --dev
+    chutes build chronoseek_chute_local:chute --local
+    docker run ... chutes run chronoseek_chute_local:chute --dev
 
 It never calls the production Chutes API.
 """
@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--chute-ref",
-        default="chronoseek_chute:chute",
+        default="chronoseek_chute_local:chute",
         help="Chutes SDK module ref to test locally.",
     )
     parser.add_argument("--port", type=int, default=8000)

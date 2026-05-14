@@ -16,10 +16,14 @@ local copy must live in the subnet root and is referenced as
 import os
 import subprocess
 
+from dotenv import load_dotenv
 from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
 
 from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
+
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 def resolve_runtime_revision() -> str:
@@ -65,15 +69,12 @@ IMAGE_TAG = RUNTIME_REVISION[:32]
 # with your own image/package install command. Do not commit embedded secrets.
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-CHRONOSEEK_YTDLP_COOKIES_BROWSER = (
-    os.getenv("CHRONOSEEK_YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
+IMAGE_YTDLP_DENO_PATH = "/opt/deno/bin/deno"
+YTDLP_COOKIES_BROWSER = (
+    os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
     or "chrome:Default"
 )
-CHRONOSEEK_YTDLP_DENO_PATH = (
-    os.getenv("CHRONOSEEK_YTDLP_DENO_PATH", "/opt/deno/bin/deno").strip()
-    or "/opt/deno/bin/deno"
-)
-CHRONOSEEK_YTDLP_NODE_PATH = os.getenv("CHRONOSEEK_YTDLP_NODE_PATH", "").strip()
+YTDLP_DENO_PATH = IMAGE_YTDLP_DENO_PATH
 
 
 image = (
@@ -96,8 +97,8 @@ image = (
     .with_env("HF_HOME", "/data/huggingface")
     .with_env("DENO_INSTALL", "/opt/deno")
     .with_env("PATH", "/opt/deno/bin:$PATH")
-    .with_env("CHRONOSEEK_YTDLP_COOKIES_BROWSER", CHRONOSEEK_YTDLP_COOKIES_BROWSER)
-    .with_env("CHRONOSEEK_YTDLP_DENO_PATH", CHRONOSEEK_YTDLP_DENO_PATH)
+    .with_env("YTDLP_COOKIES_BROWSER", YTDLP_COOKIES_BROWSER)
+    .with_env("YTDLP_DENO_PATH", YTDLP_DENO_PATH)
     .run_command(
         "apt-get update && "
         "apt-get install -y --no-install-recommends "
@@ -125,12 +126,6 @@ image = (
 
 if HF_TOKEN:
     image = image.with_env("HF_TOKEN", HF_TOKEN)
-
-if CHRONOSEEK_YTDLP_NODE_PATH:
-    image = image.with_env(
-        "CHRONOSEEK_YTDLP_NODE_PATH",
-        CHRONOSEEK_YTDLP_NODE_PATH,
-    )
 
 
 chute = Chute(
@@ -168,6 +163,14 @@ async def initialize_chronoseek(self):
         env_value = os.getenv(env_name)
         if env_value:
             os.environ[env_name] = os.path.expanduser(env_value.strip())
+
+    deno_path = os.path.expanduser(os.getenv("YTDLP_DENO_PATH", "").strip())
+    if not deno_path or not os.path.exists(deno_path):
+        os.environ["YTDLP_DENO_PATH"] = IMAGE_YTDLP_DENO_PATH
+
+    node_path = os.path.expanduser(os.getenv("YTDLP_NODE_PATH", "").strip())
+    if node_path and not os.path.exists(node_path):
+        os.environ.pop("YTDLP_NODE_PATH", None)
 
     # Chutes finalization installs substrate-interface, which brings in
     # scalecodec. Bittensor's async substrate stack expects cyscale in that
