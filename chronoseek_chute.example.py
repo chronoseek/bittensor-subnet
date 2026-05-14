@@ -101,7 +101,7 @@ image = (
     .run_command(
         "apt-get update && "
         "apt-get install -y --no-install-recommends "
-        "ca-certificates curl ffmpeg git unzip && "
+        "ca-certificates curl ffmpeg git libgl1 libglib2.0-0 unzip && "
         "rm -rf /var/lib/apt/lists/*"
     )
     .run_command(
@@ -161,6 +161,32 @@ chute._chronoseek_logo_url = CHRONOSEEK_LOGO_URL
 @chute.on_startup()
 async def initialize_chronoseek(self):
     """Initialize ChronoSeek once per Chutes instance."""
+
+    import sys
+
+    for env_name in ("HF_TOKEN", "HF_HOME"):
+        env_value = os.getenv(env_name)
+        if env_value:
+            os.environ[env_name] = os.path.expanduser(env_value.strip())
+
+    # Chutes finalization installs substrate-interface, which brings in
+    # scalecodec. Bittensor's async substrate stack expects cyscale in that
+    # namespace, so repair the shared package namespace before importing runtime.
+    subprocess.run(
+        [sys.executable, "-m", "pip", "uninstall", "-y", "scalecodec", "cyscale"],
+        check=False,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "cyscale>=0.3.3,<1.0.0",
+        ],
+        check=True,
+    )
 
     from chronoseek.miner import runtime as chronoseek_runtime
 
