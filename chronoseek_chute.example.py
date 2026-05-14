@@ -149,6 +149,8 @@ chute = Chute(
     revision=RUNTIME_REVISION,
     # The runtime must fetch arbitrary validator task videos.
     allow_external_egress=True,
+    # Chutes production deployments require TEE-enabled chutes.
+    tee=True,
 )
 chute._chronoseek_logo_url = CHRONOSEEK_LOGO_URL
 
