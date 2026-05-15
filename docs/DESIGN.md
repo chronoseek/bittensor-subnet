@@ -5,14 +5,14 @@
 This document describes:
 
 - the historical `v1.x` testnet architecture
-- the active `v2.0` architecture built around the `Eval/Serve Split`
+- the active `v2.0` architecture built around Decoupled Evaluation-Serving Architecture (DESA)
 
-`Eval/Serve Split` is the engineering name for the new mechanism:
+DESA is the formal name for the new mechanism:
 
 - `eval plane`: synthetic validator evaluation and on-chain weight setting
 - `serve plane`: owner-controlled public API for organic traffic
 
-The full v2.0 source of truth is [ChronoSeek v2.0 Eval/Serve Split](./CHRONOSEEK_V2_EVAL_SERVE_SPLIT.md).
+The full v2.0 source of truth is [ChronoSeek v2.0 DESA](./CHRONOSEEK_V2_DESA.md).
 
 ## 2. Version Summary
 

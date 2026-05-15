@@ -4,14 +4,14 @@
 
 ChronoSeek addresses a persistent problem in video data: users can store and stream video at scale, but they still cannot search inside it reliably by meaning.
 
-The product and subnet are now being separated more cleanly under the `Eval/Serve Split` design:
+The product and subnet are now being separated more cleanly under Decoupled Evaluation-Serving Architecture (DESA):
 
 - the subnet exists to evaluate and rank retrieval runtimes through synthetic tasks
 - the product API exists to serve stable organic traffic through owner-controlled infrastructure
 
 This separation improves both decentralization quality and product reliability.
 
-The implementation target is `v2.0`. See [ChronoSeek v2.0 Eval/Serve Split](./CHRONOSEEK_V2_EVAL_SERVE_SPLIT.md) for the source-of-truth architecture.
+The implementation target is `v2.0`. See [ChronoSeek v2.0 DESA](./CHRONOSEEK_V2_DESA.md) for the source-of-truth architecture.
 
 ## 2. Market Opportunity
 
@@ -44,7 +44,7 @@ That third point is now important. A subnet can be decentralized without forcing
 
 This was acceptable for early testing, but weak for a production developer API.
 
-### 4.2. `v2.0` target model: `Eval/Serve Split`
+### 4.2. `v2.0` target model: DESA
 
 #### Subnet role
 
@@ -90,7 +90,7 @@ The old validator-relay design had a mismatch:
 
 Those are different operational goals.
 
-`Eval/Serve Split` resolves that mismatch:
+DESA resolves that mismatch:
 
 - synthetic requests stay decentralized
 - organic requests become stable and productized

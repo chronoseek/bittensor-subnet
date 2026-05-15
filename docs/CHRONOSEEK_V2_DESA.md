@@ -1,4 +1,4 @@
-# ChronoSeek v2.0 Eval/Serve Split
+# ChronoSeek v2.0 Decoupled Evaluation-Serving Architecture
 
 ## Status
 
@@ -18,11 +18,11 @@ ChronoSeek is Google for Videos.
 
 ## Mechanism Name
 
-Use the engineering name:
+Use the formal whitepaper name:
 
-- `Eval/Serve Split`
+- Decoupled Evaluation-Serving Architecture (DESA)
 
-Meaning:
+The older engineering shorthand is `Eval/Serve Split`. DESA means:
 
 - `eval plane`: decentralized subnet evaluation through synthetic validator tasks
 - `serve plane`: owner-controlled public API serving organic user and developer traffic
@@ -170,7 +170,9 @@ The public API should not:
 - reveal private miner Chute endpoints
 - require customers to understand subnet routing
 
-## Promotion Flow
+## Evaluation-Guided Runtime Promotion
+
+The runtime handoff mechanism inside DESA is Evaluation-Guided Runtime Promotion:
 
 ```text
 1. Miner deploys private Chute.
@@ -210,4 +212,4 @@ The old model mixed two different goals:
 - subnet evaluation needs decentralized miner competition
 - public serving needs stability, observability, rollback, and ownership
 
-`Eval/Serve Split` keeps the incentive market decentralized while making the product API operationally stable.
+DESA keeps the incentive market decentralized while making the product API operationally stable.

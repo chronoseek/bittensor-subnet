@@ -23,7 +23,7 @@ A decentralized subnet where miners compete to provide the most accurate timesta
 
 ## v2.0 Serving Boundary
 
-ChronoSeek's production serving model is moving to `Eval/Serve Split`:
+ChronoSeek's production serving model is moving to Decoupled Evaluation-Serving Architecture (DESA):
 
 - the subnet evaluates miner runtimes with synthetic requests
 - miners submit private Chutes-hosted retrieval runtimes

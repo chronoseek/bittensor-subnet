@@ -2,9 +2,9 @@
 
 > **Google for Videos.**
 
-ChronoSeek uses a Chutes-backed `v2.0` `Eval/Serve Split` architecture.
+ChronoSeek uses a Chutes-backed `v2.0` Decoupled Evaluation-Serving Architecture (DESA).
 
-The full design note is [ChronoSeek v2.0 Eval/Serve Split](./docs/CHRONOSEEK_V2_EVAL_SERVE_SPLIT.md).
+The full design note is [ChronoSeek v2.0 DESA](./docs/CHRONOSEEK_V2_DESA.md).
 
 ## Version Guide
 
@@ -14,7 +14,7 @@ The full design note is [ChronoSeek v2.0 Eval/Serve Split](./docs/CHRONOSEEK_V2_
 - validators generate synthetic tasks and score miner responses
 - organic traffic could be forwarded through validator-owned infrastructure
 
-### `v2.0` Target design: `Eval/Serve Split`
+### `v2.0` Target design: DESA
 
 - miners deploy private retrieval runtimes to Chutes
 - miners commit structured deployment metadata on-chain
