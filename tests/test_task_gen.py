@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 from chronoseek.validator.task_gen import ActivityNetTaskGenerator
 from chronoseek.validator.video_availability import VideoAvailabilityResult
@@ -31,6 +33,38 @@ def test_local_manifest_loads_validation_split(tmp_path):
     assert task_gen.dataset
     assert all(task["split"] == "validation" for task in task_gen.dataset)
     assert all("task_id" in task for task in task_gen.dataset)
+
+
+def test_cache_dir_expands_user_before_huggingface_download(monkeypatch, tmp_path):
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+    dataset_path = snapshot_dir / "validation.json"
+    dataset_path.write_text(
+        json.dumps(
+            [
+                {
+                    "video_id": "v_demo1234567",
+                    "caption": "a person waves",
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+
+    with patch(
+        "huggingface_hub.snapshot_download",
+        return_value=str(snapshot_dir),
+    ) as snapshot_download:
+        task_gen = ActivityNetTaskGenerator(cache_dir="~/.cache/huggingface")
+
+    assert task_gen.cache_dir == str(Path("~/.cache/huggingface").expanduser())
+    assert snapshot_download.call_args.kwargs["cache_dir"] == str(
+        Path("~/.cache/huggingface").expanduser()
+    )
+    assert not snapshot_download.call_args.kwargs["cache_dir"].startswith("~")
 
 
 def test_generate_task_returns_expected_shape(tmp_path):

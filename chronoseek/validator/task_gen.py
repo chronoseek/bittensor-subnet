@@ -29,10 +29,10 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         availability_checker: VideoAvailabilityChecker | None = None,
         max_sampling_attempts: int = 50,
     ):
-        self.dataset_path = dataset_path
+        self.dataset_path = self._normalize_optional_path(dataset_path)
         self.split = split
         self.dataset_repo_id = dataset_repo_id
-        self.cache_dir = cache_dir
+        self.cache_dir = self._normalize_optional_path(cache_dir)
         self.dataset_filename = dataset_filename
         self.require_accessible_videos = require_accessible_videos
         self.availability_checker = availability_checker
@@ -44,6 +44,12 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
     def _default_dataset_path(self) -> str:
         return str(Path(__file__).resolve().parent / "data" / "smoke_test_tasks.json")
+
+    @staticmethod
+    def _normalize_optional_path(path: str | None) -> str | None:
+        if not path:
+            return None
+        return str(Path(path).expanduser())
 
     def _load_huggingface_dataset(self) -> List[Dict]:
         hf_token = os.getenv("HF_TOKEN")
@@ -120,7 +126,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             "https://cs.stanford.edu/people/ranjaykrishna/densevid/captions.zip"
         )
         cache_root = (
-            Path(self.cache_dir) if self.cache_dir else snapshot_root.parent.parent
+            Path(self.cache_dir).expanduser()
+            if self.cache_dir
+            else snapshot_root.parent.parent
         )
         activitynet_cache = cache_root / "chronoseek-activitynet"
         activitynet_cache.mkdir(parents=True, exist_ok=True)
@@ -380,11 +388,12 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
     def _load_dataset(self) -> List[Dict]:
         if self.dataset_path:
-            if not os.path.exists(self.dataset_path):
+            dataset_path = str(Path(self.dataset_path).expanduser())
+            if not os.path.exists(dataset_path):
                 raise FileNotFoundError(
-                    f"ActivityNet task dataset not found at {self.dataset_path}"
+                    f"ActivityNet task dataset not found at {dataset_path}"
                 )
-            return self._load_local_dataset(self.dataset_path)
+            return self._load_local_dataset(dataset_path)
 
         return self._load_huggingface_dataset()
 
