@@ -21,7 +21,22 @@ load_dotenv()
 
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.validator.artifact_manifest import TaskArtifactManifest
+from chronoseek.validator.clipper import FfmpegClipper
+from chronoseek.validator.compression import (
+    CompositeCompressor,
+    LocalFfmpegCompressor,
+    VidaioCompressor,
+)
+from chronoseek.validator.hardened_task_gen import (
+    HardenedActivityNetTaskGenerator,
+    HardenedTaskGeneratorConfig,
+)
+from chronoseek.validator.query_variants import QueryVariantSelector
 from chronoseek.validator.state import ValidatorRuntimeState
+from chronoseek.validator.storage import HippiusS3Config, HippiusS3StorageClient
+from chronoseek.validator.task_models import EncodingProfile
+from chronoseek.validator.task_sampler import ActivityNetTaskSampler
 from chronoseek.chain.submissions import (
     MinerSubmissionResolver,
 )
@@ -256,6 +271,129 @@ def get_config_str(config: bt.Config, name: str, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
+def get_config_bool(config: bt.Config, name: str, default: bool) -> bool:
+    value = getattr(config, name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def build_validator_task_generator(
+    *,
+    config: bt.Config,
+    availability_checker: VideoAvailabilityChecker,
+    validator_hotkey: str,
+    current_block_provider,
+):
+    source_task_gen = task_gen_module.ActivityNetTaskGenerator(
+        dataset_path=config.task_dataset_path or None,
+        split=config.task_split,
+        cache_dir=config.hf_cache_dir or None,
+        dataset_filename=config.hf_activitynet_filename or None,
+        require_accessible_videos=config.require_accessible_videos,
+        availability_checker=availability_checker,
+        max_sampling_attempts=config.task_max_sampling_attempts,
+    )
+
+    if not get_config_bool(config, "enable_hardened_tasks", False):
+        bt.logging.info("Validator task generation configured | mode=legacy-activitynet")
+        return source_task_gen
+
+    task_secret = os.getenv("VALIDATOR_TASK_SECRET", "").strip()
+    hippius_access_key_id = os.getenv("HIPPIUS_S3_ACCESS_KEY_ID", "").strip()
+    hippius_secret_access_key = os.getenv("HIPPIUS_S3_SECRET_ACCESS_KEY", "").strip()
+    vidaio_api_key = os.getenv("VIDAIO_API_KEY", "").strip() or None
+
+    task_cache_dir = Path(config.task_clip_cache_dir).expanduser()
+    task_cache_dir.mkdir(parents=True, exist_ok=True)
+    raw_manifest_path = str(config.task_artifact_manifest_path or "").strip()
+    if raw_manifest_path:
+        manifest_path = Path(raw_manifest_path).expanduser()
+    else:
+        manifest_path = task_cache_dir / "artifact_manifest.json"
+
+    encoding_profile = EncodingProfile(
+        name=config.task_encoding_profile_name,
+        max_width=int(config.task_clip_max_width),
+        max_height=int(config.task_clip_max_height),
+        video_bitrate=config.task_clip_video_bitrate,
+        audio_bitrate=config.task_clip_audio_bitrate,
+    )
+    sampler = ActivityNetTaskSampler(
+        source_task_gen.dataset,
+        validator_hotkey=validator_hotkey,
+        task_secret=task_secret,
+        video_cooldown_seconds=float(config.task_video_cooldown_hours) * 3600.0,
+        caption_cooldown_seconds=float(config.task_caption_cooldown_hours) * 3600.0,
+        availability_checker=availability_checker,
+        require_accessible_videos=config.require_accessible_videos,
+        max_sampling_attempts=config.task_max_sampling_attempts,
+    )
+    clipper = FfmpegClipper(
+        cache_dir=str(task_cache_dir),
+        min_clip_duration_seconds=config.task_min_clip_duration_seconds,
+        max_clip_duration_seconds=config.task_max_clip_duration_seconds,
+        download_timeout_seconds=config.task_source_download_timeout_seconds,
+        encoding_profile=encoding_profile,
+    )
+    local_compressor = LocalFfmpegCompressor(encoding_profile=encoding_profile)
+    vidaio_compressor = None
+    if get_config_bool(config, "vidaio_compression_enabled", False):
+        vidaio_compressor = VidaioCompressor(
+            api_base_url=config.vidaio_api_base_url,
+            api_key=vidaio_api_key,
+            timeout_seconds=config.vidaio_timeout_seconds,
+            encoding_profile=encoding_profile,
+        )
+    compressor = CompositeCompressor(
+        local_compressor=local_compressor,
+        vidaio_compressor=vidaio_compressor,
+        vidaio_enabled=get_config_bool(config, "vidaio_compression_enabled", False),
+    )
+    storage = HippiusS3StorageClient(
+        HippiusS3Config(
+            endpoint_url=config.hippius_s3_endpoint_url,
+            public_base_url=config.hippius_s3_public_base_url,
+            bucket=config.hippius_s3_bucket,
+            access_key_id=hippius_access_key_id,
+            secret_access_key=hippius_secret_access_key,
+            region=config.hippius_s3_region,
+        ),
+        timeout_seconds=config.hippius_s3_timeout_seconds,
+    )
+    manifest = TaskArtifactManifest(str(manifest_path))
+    hardened_gen = HardenedActivityNetTaskGenerator(
+        sampler=sampler,
+        query_selector=QueryVariantSelector(config.task_query_variants_path or None),
+        clipper=clipper,
+        compressor=compressor,
+        storage=storage,
+        manifest=manifest,
+        validator_hotkey=validator_hotkey,
+        current_block_provider=current_block_provider,
+        config=HardenedTaskGeneratorConfig(
+            artifact_prefix=config.task_artifact_prefix,
+            ttl_hours=config.task_clip_ttl_hours,
+            cleanup_interval_seconds=config.task_clip_cleanup_interval_seconds,
+            max_generation_attempts=config.hardened_task_max_generation_attempts,
+        ),
+    )
+    hardened_gen.cleanup_expired(force=True)
+    bt.logging.info("Validator task generation configured | mode=hardened-activitynet")
+    return hardened_gen
+
+
 async def run_validator_loop(
     subtensor: bt.Subtensor,
     runtime: ValidatorRuntimeState,
@@ -300,14 +438,11 @@ async def run_validator_loop(
         cache_ttl_seconds=int(config.video_availability_cache_ttl_hours * 3600),
         timeout=config.video_availability_timeout,
     )
-    task_gen = task_gen_module.ActivityNetTaskGenerator(
-        dataset_path=config.task_dataset_path or None,
-        split=config.task_split,
-        cache_dir=config.hf_cache_dir or None,
-        dataset_filename=config.hf_activitynet_filename or None,
-        require_accessible_videos=config.require_accessible_videos,
+    task_gen = build_validator_task_generator(
+        config=config,
         availability_checker=availability_checker,
-        max_sampling_attempts=config.task_max_sampling_attempts,
+        validator_hotkey=runtime.wallet.hotkey.ss58_address,
+        current_block_provider=lambda: subtensor.get_current_block(),
     )
     chutes_base_domain = get_config_str(config, "chutes_base_domain", "chutes.ai")
     submission_resolver = MinerSubmissionResolver(
@@ -389,6 +524,10 @@ async def run_validator_loop(
                 miner_timeout_seconds=float(config.miner_request_timeout_seconds),
                 miner_endpoints=miner_endpoints,
                 provider_headers=provider_headers,
+                validator_eval_top_k=int(config.validator_eval_top_k),
+                max_prediction_duration_seconds=float(
+                    config.task_max_prediction_duration_seconds
+                ),
             )
 
             # Update moving average scores
@@ -515,6 +654,177 @@ def get_config():
         type=int,
         default=int(os.getenv("TASK_MAX_SAMPLING_ATTEMPTS", "50")),
         help="Maximum random samples to try before giving up on finding an accessible validator task.",
+    )
+    parser.add_argument(
+        "--enable-hardened-tasks",
+        action="store_true",
+        default=env_bool("ENABLE_HARDENED_TASKS", False),
+        help="Generate private clipped ActivityNet tasks and upload them to Hippius before querying miners.",
+    )
+    parser.add_argument(
+        "--hardened-task-max-generation-attempts",
+        type=int,
+        default=int(os.getenv("HARDENED_TASK_MAX_GENERATION_ATTEMPTS", "5")),
+        help="Maximum hardened task generation attempts before skipping a validator step.",
+    )
+    parser.add_argument(
+        "--task-query-variants-path",
+        type=str,
+        default=os.getenv("TASK_QUERY_VARIANTS_PATH", ""),
+        help="Private query variant manifest path. Exact ActivityNet captions are avoided when variants exist.",
+    )
+    parser.add_argument(
+        "--task-clip-cache-dir",
+        type=str,
+        default=os.getenv(
+            "TASK_CLIP_CACHE_DIR",
+            str(Path.home() / ".cache" / "chronoseek" / "task-clips"),
+        ),
+        help="Local cache directory for generated validator task clips.",
+    )
+    parser.add_argument(
+        "--task-artifact-manifest-path",
+        type=str,
+        default=os.getenv("TASK_ARTIFACT_MANIFEST_PATH", ""),
+        help="Local JSON manifest of uploaded validator task artifacts.",
+    )
+    parser.add_argument(
+        "--task-artifact-prefix",
+        type=str,
+        default=os.getenv("TASK_ARTIFACT_PREFIX", "validator-tasks"),
+        help="Object key prefix for uploaded validator task clips.",
+    )
+    parser.add_argument(
+        "--task-clip-ttl-hours",
+        type=float,
+        default=float(os.getenv("TASK_CLIP_TTL_HOURS", "6")),
+        help="TTL in hours for local and Hippius validator task artifacts.",
+    )
+    parser.add_argument(
+        "--task-clip-cleanup-interval-seconds",
+        type=float,
+        default=float(os.getenv("TASK_CLIP_CLEANUP_INTERVAL_SECONDS", "900")),
+        help="Minimum interval between expired validator task artifact cleanup runs.",
+    )
+    parser.add_argument(
+        "--task-video-cooldown-hours",
+        type=float,
+        default=float(os.getenv("TASK_VIDEO_COOLDOWN_HOURS", "24")),
+        help="Cooldown before the same ActivityNet source video may be sampled again.",
+    )
+    parser.add_argument(
+        "--task-caption-cooldown-hours",
+        type=float,
+        default=float(os.getenv("TASK_CAPTION_COOLDOWN_HOURS", "168")),
+        help="Cooldown before the same ActivityNet source caption may be sampled again.",
+    )
+    parser.add_argument(
+        "--task-min-clip-duration-seconds",
+        type=float,
+        default=float(os.getenv("TASK_MIN_CLIP_DURATION_SECONDS", "30")),
+        help="Minimum generated task clip duration.",
+    )
+    parser.add_argument(
+        "--task-max-clip-duration-seconds",
+        type=float,
+        default=float(os.getenv("TASK_MAX_CLIP_DURATION_SECONDS", "180")),
+        help="Maximum generated task clip duration.",
+    )
+    parser.add_argument(
+        "--task-source-download-timeout-seconds",
+        type=int,
+        default=int(os.getenv("TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS", "120")),
+        help="Timeout in seconds when downloading ActivityNet source videos for clipping.",
+    )
+    parser.add_argument(
+        "--task-encoding-profile-name",
+        type=str,
+        default=os.getenv("TASK_ENCODING_PROFILE_NAME", "h264-720p-v1"),
+        help="Name recorded for the validator task encoding profile.",
+    )
+    parser.add_argument(
+        "--task-clip-max-width",
+        type=int,
+        default=int(os.getenv("TASK_CLIP_MAX_WIDTH", "1280")),
+        help="Maximum generated task clip width.",
+    )
+    parser.add_argument(
+        "--task-clip-max-height",
+        type=int,
+        default=int(os.getenv("TASK_CLIP_MAX_HEIGHT", "720")),
+        help="Maximum generated task clip height.",
+    )
+    parser.add_argument(
+        "--task-clip-video-bitrate",
+        type=str,
+        default=os.getenv("TASK_CLIP_VIDEO_BITRATE", "1500k"),
+        help="Generated task clip video bitrate.",
+    )
+    parser.add_argument(
+        "--task-clip-audio-bitrate",
+        type=str,
+        default=os.getenv("TASK_CLIP_AUDIO_BITRATE", "96k"),
+        help="Generated task clip audio bitrate.",
+    )
+    parser.add_argument(
+        "--validator-eval-top-k",
+        type=int,
+        default=int(os.getenv("VALIDATOR_EVAL_TOP_K", "1")),
+        help="Number of miner results requested and scored for synthetic evaluation.",
+    )
+    parser.add_argument(
+        "--task-max-prediction-duration-seconds",
+        type=float,
+        default=float(os.getenv("TASK_MAX_PREDICTION_DURATION_SECONDS", "60")),
+        help="Maximum scored miner interval duration unless the ground-truth interval is longer.",
+    )
+    parser.add_argument(
+        "--hippius-s3-endpoint-url",
+        type=str,
+        default=os.getenv("HIPPIUS_S3_ENDPOINT_URL", "https://s3.hippius.com"),
+        help="Hippius S3-compatible endpoint URL used for validator task uploads.",
+    )
+    parser.add_argument(
+        "--hippius-s3-public-base-url",
+        type=str,
+        default=os.getenv("HIPPIUS_S3_PUBLIC_BASE_URL", ""),
+        help="Public base URL for uploaded Hippius validator task clips.",
+    )
+    parser.add_argument(
+        "--hippius-s3-bucket",
+        type=str,
+        default=os.getenv("HIPPIUS_S3_BUCKET", ""),
+        help="Hippius S3 bucket for validator task clips.",
+    )
+    parser.add_argument(
+        "--hippius-s3-region",
+        type=str,
+        default=os.getenv("HIPPIUS_S3_REGION", "decentralized"),
+        help="S3 signing region for Hippius uploads.",
+    )
+    parser.add_argument(
+        "--hippius-s3-timeout-seconds",
+        type=float,
+        default=float(os.getenv("HIPPIUS_S3_TIMEOUT_SECONDS", "60")),
+        help="Hippius S3 upload/delete timeout in seconds.",
+    )
+    parser.add_argument(
+        "--vidaio-compression-enabled",
+        action="store_true",
+        default=env_bool("VIDAIO_COMPRESSION_ENABLED", False),
+        help="Try Vidaio compression before falling back to local ffmpeg.",
+    )
+    parser.add_argument(
+        "--vidaio-api-base-url",
+        type=str,
+        default=os.getenv("VIDAIO_API_BASE_URL", ""),
+        help="Optional Vidaio compression API base URL.",
+    )
+    parser.add_argument(
+        "--vidaio-timeout-seconds",
+        type=float,
+        default=float(os.getenv("VIDAIO_TIMEOUT_SECONDS", "60")),
+        help="Vidaio compression timeout in seconds.",
     )
     parser.add_argument(
         "--video-availability-cache-path",

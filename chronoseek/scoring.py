@@ -1,3 +1,4 @@
+import math
 from typing import Iterable, List, Tuple
 from chronoseek.protocol_models import VideoSearchResult
 
@@ -53,10 +54,84 @@ def best_iou(
     return max_iou
 
 
+def _ground_truth_list(
+    ground_truth: GroundTruthInterval | GroundTruthIntervals,
+) -> list[GroundTruthInterval]:
+    if (
+        isinstance(ground_truth, tuple)
+        and len(ground_truth) == 2
+        and all(isinstance(value, (int, float)) for value in ground_truth)
+    ):
+        return [(float(ground_truth[0]), float(ground_truth[1]))]
+    return [(float(start), float(end)) for start, end in ground_truth]
+
+
+def _valid_prediction(
+    prediction: VideoSearchResult,
+    *,
+    clip_duration: float | None,
+    max_prediction_duration_seconds: float | None,
+    ground_truths: list[GroundTruthInterval],
+) -> bool:
+    start = float(prediction.start)
+    end = float(prediction.end)
+    if not (math.isfinite(start) and math.isfinite(end)):
+        return False
+    if start < 0 or end <= start:
+        return False
+    if clip_duration is not None and end > float(clip_duration):
+        return False
+
+    duration = end - start
+    if max_prediction_duration_seconds is None:
+        return True
+
+    max_duration = float(max_prediction_duration_seconds)
+    if max_duration <= 0 or duration <= max_duration:
+        return True
+
+    return any((gt_end - gt_start) > max_duration for gt_start, gt_end in ground_truths)
+
+
+def valid_predictions(
+    predictions: List[VideoSearchResult],
+    ground_truths: list[GroundTruthInterval],
+    *,
+    clip_duration: float | None = None,
+    max_prediction_duration_seconds: float | None = None,
+    score_top_k: int | None = None,
+) -> list[VideoSearchResult]:
+    valid: list[VideoSearchResult] = []
+    seen: set[tuple[float, float]] = set()
+    candidate_predictions = predictions
+    if score_top_k is not None:
+        candidate_predictions = predictions[: max(0, int(score_top_k))]
+
+    for prediction in candidate_predictions:
+        if not _valid_prediction(
+            prediction,
+            clip_duration=clip_duration,
+            max_prediction_duration_seconds=max_prediction_duration_seconds,
+            ground_truths=ground_truths,
+        ):
+            continue
+        key = (round(float(prediction.start), 3), round(float(prediction.end), 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        valid.append(prediction)
+
+    return valid
+
+
 def score_response(
     predictions: List[VideoSearchResult],
     ground_truth: GroundTruthInterval | GroundTruthIntervals,
     latency: float,  # Kept for API compatibility; current scoring is IoU-only.
+    *,
+    clip_duration: float | None = None,
+    max_prediction_duration_seconds: float | None = None,
+    score_top_k: int | None = None,
 ) -> float:
     """
     Score a miner's response using the best IoU across predictions and ground truths.
@@ -65,16 +140,18 @@ def score_response(
     if not predictions:
         return 0.0
 
-    if (
-        isinstance(ground_truth, tuple)
-        and len(ground_truth) == 2
-        and all(isinstance(value, (int, float)) for value in ground_truth)
-    ):
-        ground_truths = [ground_truth]
-    else:
-        ground_truths = list(ground_truth)
+    ground_truths = _ground_truth_list(ground_truth)
+    filtered_predictions = valid_predictions(
+        predictions,
+        ground_truths,
+        clip_duration=clip_duration,
+        max_prediction_duration_seconds=max_prediction_duration_seconds,
+        score_top_k=score_top_k,
+    )
+    if not filtered_predictions:
+        return 0.0
 
-    return best_iou(predictions, ground_truths)
+    return best_iou(filtered_predictions, ground_truths)
 
 
 def passes_strict_iou(score: float, threshold: float = STRICT_IOU_THRESHOLD) -> bool:
