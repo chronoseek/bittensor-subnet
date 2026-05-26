@@ -2,6 +2,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import bittensor as bt
 
@@ -11,9 +12,8 @@ from chronoseek.validator.artifact_manifest import (
 )
 from chronoseek.validator.base_task_gen import BaseTaskGenerator
 from chronoseek.validator.clipper import FfmpegClipper
-from chronoseek.validator.compression import CompositeCompressor
 from chronoseek.validator.query_variants import QueryVariantSelector
-from chronoseek.validator.storage import HippiusS3StorageClient
+from chronoseek.validator.compression import CompressionResult
 from chronoseek.validator.task_models import ValidationTask
 from chronoseek.validator.task_sampler import (
     ActivityNetTaskSampler,
@@ -22,12 +22,32 @@ from chronoseek.validator.task_sampler import (
 )
 
 
+class TaskCompressor(Protocol):
+    def compress(self, *, input_path: str, output_path: str) -> CompressionResult:
+        ...
+
+
+class TaskArtifactStorage(Protocol):
+    def upload_file(
+        self,
+        *,
+        local_path: str,
+        object_key: str,
+        content_type: str = "video/mp4",
+    ) -> str:
+        ...
+
+    def delete_object(self, object_key: str) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class HardenedTaskGeneratorConfig:
-    artifact_prefix: str = "validator-tasks"
+    artifact_prefix: str = "task-clips"
     ttl_hours: float = 6.0
     cleanup_interval_seconds: float = 900.0
     max_generation_attempts: int = 5
+    delete_remote_artifacts: bool = False
 
 
 class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
@@ -35,7 +55,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
     Generates private ActivityNet-derived validation tasks.
 
     ActivityNet remains the source of truth, but miners only receive a clipped
-    Hippius artifact URL and a query variant.
+    task artifact URL and a query variant.
     """
 
     def __init__(
@@ -44,8 +64,8 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
         sampler: ActivityNetTaskSampler,
         query_selector: QueryVariantSelector,
         clipper: FfmpegClipper,
-        compressor: CompositeCompressor,
-        storage: HippiusS3StorageClient,
+        compressor: TaskCompressor,
+        storage: TaskArtifactStorage,
         manifest: TaskArtifactManifest,
         validator_hotkey: str,
         current_block_provider,
@@ -72,13 +92,16 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
         ):
             return 0
 
-        deleted = self.manifest.cleanup_expired(
-            delete_remote=self.storage.delete_object,
-            now=now,
+        delete_remote = (
+            self.storage.delete_object if self.config.delete_remote_artifacts else None
         )
+        deleted = self.manifest.cleanup_expired(delete_remote=delete_remote, now=now)
         self._last_cleanup_at = now
         if deleted:
-            bt.logging.info(f"Cleaned up {deleted} expired validator task artifacts.")
+            remote_mode = "with remote deletion" if delete_remote else "local only"
+            bt.logging.info(
+                f"Cleaned up {deleted} expired validator task artifacts ({remote_mode})."
+            )
         return deleted
 
     def _next_nonce(self) -> int:
@@ -86,12 +109,8 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
         return self._nonce
 
     def _object_key(self, *, task_id: str, created_at: float) -> str:
-        day = time.strftime("%Y-%m-%d", time.gmtime(created_at))
-        hotkey_prefix = "".join(
-            char for char in self.validator_hotkey if char.isalnum()
-        )[:16]
         prefix = self.config.artifact_prefix.strip("/")
-        return f"{prefix}/{hotkey_prefix}/{day}/{task_id}.mp4"
+        return f"{prefix}/{task_id}.mp4"
 
     @staticmethod
     def _remove_local_file(path: str | None) -> None:

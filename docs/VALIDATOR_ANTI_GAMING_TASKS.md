@@ -44,7 +44,7 @@ The miner-facing request shape does not change:
   "protocol_version": "2026-04-10",
   "request_id": "validation-...",
   "video": {
-    "url": "https://<hippius-public-base>/validator-tasks/.../task.mp4"
+    "url": "https://s3.hippius.com/chronoseek/task-clips/<task-id>.mp4"
   },
   "query": "query variant text",
   "top_k": 1
@@ -92,9 +92,9 @@ Keep `ActivityNetTaskGenerator` focused on loading and normalizing ActivityNet d
 
 Do not add Hippius, clipping, compression, replay, or query-variant logic to `ActivityNetTaskGenerator`.
 
-### New Validator Modules
+### Validator Modules And Integration Boundaries
 
-Add the following modules under `chronoseek/validator/`:
+Keep task-domain logic under `chronoseek/validator/`:
 
 | Module | Responsibility |
 | --- | --- |
@@ -102,10 +102,18 @@ Add the following modules under `chronoseek/validator/`:
 | `task_sampler.py` | Secret-seeded ActivityNet sampling, cooldowns, replay keys, and diversity checks. |
 | `query_variants.py` | Private query variant manifest loading and deterministic fallback variants. |
 | `clipper.py` | Source video download, crop planning, ffmpeg crop, metadata stripping, and local re-encode. |
-| `compression.py` | Local ffmpeg compression and optional Vidaio compression adapter. |
-| `storage.py` | Hippius S3 upload, delete, public URL construction, and credentials validation. |
+| `compression.py` | Local ffmpeg compression, shared compression result types, and fallback orchestration. |
 | `artifact_manifest.py` | Local JSON manifest for uploaded task clips, expiry, cleanup, and replay metadata. |
 | `hardened_task_gen.py` | Orchestrates sampler, query variants, clipper, compressor, storage, and manifest into `generate_task()`. |
+
+Keep provider-specific integration code outside the validator package, parallel to `chronoseek/chain/` and `chronoseek/chutes/`:
+
+| Module | Responsibility |
+| --- | --- |
+| `chronoseek.hippius.s3` | Hippius S3 upload, download, delete, public URL construction, and credentials validation through the MinIO SDK. |
+| `chronoseek.video.vidaio` | Optional Vidaio compression adapter. |
+
+`HardenedActivityNetTaskGenerator` should accept storage and compression interfaces rather than concrete provider classes.
 
 ### Compatibility Adapter
 
@@ -141,9 +149,10 @@ VALIDATOR_TASK_SECRET=
 VALIDATOR_EVAL_TOP_K=1
 TASK_CLIP_CACHE_DIR=~/.cache/chronoseek/task-clips
 TASK_ARTIFACT_MANIFEST_PATH=
-TASK_ARTIFACT_PREFIX=validator-tasks
+TASK_ARTIFACT_PREFIX=task-clips
 TASK_CLIP_TTL_HOURS=6
 TASK_CLIP_CLEANUP_INTERVAL_SECONDS=900
+TASK_DELETE_REMOTE_ARTIFACTS=0
 TASK_VIDEO_COOLDOWN_HOURS=24
 TASK_CAPTION_COOLDOWN_HOURS=168
 TASK_QUERY_VARIANTS_PATH=
@@ -166,16 +175,18 @@ HARDENED_TASK_MAX_GENERATION_ATTEMPTS=5
 ### Hippius Public S3
 
 ```env
-HIPPIUS_S3_ENDPOINT_URL=
-HIPPIUS_S3_PUBLIC_BASE_URL=
-HIPPIUS_S3_BUCKET=
+HIPPIUS_S3_ENDPOINT_URL=https://s3.hippius.com
+HIPPIUS_S3_PUBLIC_BASE_URL=https://s3.hippius.com
+HIPPIUS_S3_BUCKET=chronoseek
 HIPPIUS_S3_ACCESS_KEY_ID=
 HIPPIUS_S3_SECRET_ACCESS_KEY=
-HIPPIUS_S3_REGION=us-east-1
+HIPPIUS_S3_REGION=decentralized
 HIPPIUS_S3_TIMEOUT_SECONDS=60
 ```
 
-Use Hippius public S3 URLs for miner-facing task clips. Do not use IPFS gateway URLs or presigned URLs for the first implementation.
+Use Hippius public S3 path-style URLs for miner-facing task clips (`https://s3.hippius.com/chronoseek/task-clips/<video-file-name-or-id>`). Do not use IPFS gateway URLs or presigned URLs for the first implementation.
+
+By default, expired-task cleanup removes local files and manifest entries only. Set `TASK_DELETE_REMOTE_ARTIFACTS=1` only if uploaded Hippius task clips should also be deleted.
 
 ### Optional Vidaio
 
@@ -266,9 +277,9 @@ Tests:
 
 ### 6. Add Optional Vidaio Adapter
 
-- Implement `compression.py`.
+- Implement `chronoseek.video.vidaio`.
 - Define a common `compress(input_path) -> output_path` interface.
-- Local ffmpeg compressor is the default.
+- Keep local ffmpeg compression and fallback orchestration in `chronoseek.validator.compression`.
 - Vidaio adapter is enabled only by config.
 - If Vidaio fails, falls back to local ffmpeg.
 
@@ -281,14 +292,14 @@ Tests:
 
 ### 7. Add Hippius Public S3 Upload
 
-- Implement `storage.py`.
+- Implement `chronoseek.hippius.s3`.
 - Upload final task clips to:
 
 ```text
-validator-tasks/<validator_hotkey>/<yyyy-mm-dd>/<task_id>.mp4
+task-clips/<task_id>.mp4
 ```
 
-- Return public URL using `HIPPIUS_PUBLIC_BASE_URL`.
+- Return public URL using `HIPPIUS_S3_PUBLIC_BASE_URL`.
 - Validate that bucket, endpoint, access key, secret key, and public base URL are configured.
 
 Tests:

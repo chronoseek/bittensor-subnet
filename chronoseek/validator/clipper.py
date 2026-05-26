@@ -3,8 +3,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from chronoseek.miner.utils.video_downloader import VideoDownloader
 from chronoseek.validator.task_models import CropPlan, EncodingProfile, GroundTruthIntervals
+from chronoseek.video.downloader import VideoDownloader
 
 
 @dataclass(frozen=True)

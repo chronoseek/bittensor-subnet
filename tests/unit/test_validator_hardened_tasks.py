@@ -51,7 +51,7 @@ def test_normalize_generated_task_supports_legacy_tuple_and_validation_task():
         crop_end=20.0,
         query_variant_id="private:caption-1:0",
         artifact_url="https://hippius.example/task.mp4",
-        artifact_key="validator-tasks/task.mp4",
+        artifact_key="task-clips/task.mp4",
         expires_at=time.time() + 3600,
     )
     normalized = normalize_generated_task(task, default_top_k=1)
@@ -181,7 +181,7 @@ def test_artifact_manifest_records_active_hashes_and_cleans_expired(tmp_path):
     manifest.add(
         ArtifactManifestEntry(
             task_id="expired-task",
-            object_key="validator-tasks/expired-task.mp4",
+            object_key="task-clips/expired-task.mp4",
             public_url="https://public.example/expired-task.mp4",
             local_path=str(local_file),
             source_task_hash="source-hash",
@@ -200,7 +200,7 @@ def test_artifact_manifest_records_active_hashes_and_cleans_expired(tmp_path):
         == 1
     )
     assert not local_file.exists()
-    assert deleted_remote == ["validator-tasks/expired-task.mp4"]
+    assert deleted_remote == ["task-clips/expired-task.mp4"]
 
 
 class FakeClipper:
@@ -247,6 +247,69 @@ class FakeStorage:
         self.deleted.append(object_key)
 
 
+def _add_expired_entry(manifest: TaskArtifactManifest, tmp_path: Path) -> Path:
+    local_file = tmp_path / "expired.mp4"
+    local_file.write_bytes(b"video")
+    manifest.add(
+        ArtifactManifestEntry(
+            task_id="expired-task",
+            object_key="task-clips/expired-task.mp4",
+            public_url="https://s3.hippius.com/chronoseek/task-clips/expired-task.mp4",
+            local_path=str(local_file),
+            source_task_hash="source-hash",
+            encoding_profile="h264-720p-v1",
+            created_at=time.time() - 100,
+            expires_at=time.time() - 1,
+        )
+    )
+    return local_file
+
+
+def test_hardened_cleanup_keeps_remote_artifacts_by_default(tmp_path):
+    manifest = TaskArtifactManifest(tmp_path / "manifest.json")
+    local_file = _add_expired_entry(manifest, tmp_path)
+    storage = FakeStorage()
+    generator = HardenedActivityNetTaskGenerator(
+        sampler=None,
+        query_selector=None,
+        clipper=None,
+        compressor=None,
+        storage=storage,
+        manifest=manifest,
+        validator_hotkey="hotkey",
+        current_block_provider=lambda: 1,
+        config=HardenedTaskGeneratorConfig(cleanup_interval_seconds=0),
+    )
+
+    assert generator.cleanup_expired(force=True) == 1
+    assert not local_file.exists()
+    assert storage.deleted == []
+    assert manifest.entries == {}
+
+
+def test_hardened_cleanup_can_delete_remote_artifacts_when_enabled(tmp_path):
+    manifest = TaskArtifactManifest(tmp_path / "manifest.json")
+    _add_expired_entry(manifest, tmp_path)
+    storage = FakeStorage()
+    generator = HardenedActivityNetTaskGenerator(
+        sampler=None,
+        query_selector=None,
+        clipper=None,
+        compressor=None,
+        storage=storage,
+        manifest=manifest,
+        validator_hotkey="hotkey",
+        current_block_provider=lambda: 1,
+        config=HardenedTaskGeneratorConfig(
+            cleanup_interval_seconds=0,
+            delete_remote_artifacts=True,
+        ),
+    )
+
+    assert generator.cleanup_expired(force=True) == 1
+    assert storage.deleted == ["task-clips/expired-task.mp4"]
+
+
 def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
     variants_path = tmp_path / "variants.json"
     variants_path.write_text(json.dumps({"raw caption": ["private query"]}))
@@ -275,7 +338,7 @@ def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
         validator_hotkey="hotkey",
         current_block_provider=lambda: 123,
         config=HardenedTaskGeneratorConfig(
-            artifact_prefix="validator-tasks",
+            artifact_prefix="task-clips",
             ttl_hours=6,
             cleanup_interval_seconds=900,
             max_generation_attempts=1,
@@ -285,7 +348,8 @@ def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
     task = generator.generate_task()
 
     assert isinstance(task, ValidationTask)
-    assert task.video_url.startswith("https://hippius.example/validator-tasks/")
+    assert task.video_url.startswith("https://hippius.example/task-clips/")
+    assert task.artifact_key == f"task-clips/{task.task_id}.mp4"
     assert task.query == "private query"
     assert task.ground_truths == [(2.0, 5.0)]
     assert task.clip_duration == 15.0
@@ -308,7 +372,7 @@ def test_run_step_accepts_validation_task_and_sends_top_k_one(monkeypatch):
         crop_end=25.0,
         query_variant_id="private:caption-1:0",
         artifact_url="https://hippius.example/task.mp4",
-        artifact_key="validator-tasks/task.mp4",
+        artifact_key="task-clips/task.mp4",
         expires_at=time.time() + 3600,
     )
 

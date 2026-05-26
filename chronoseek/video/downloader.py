@@ -10,6 +10,15 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urlparse
 
+from chronoseek.hippius.s3 import (
+    DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+    DEFAULT_HIPPIUS_S3_REGION,
+    HippiusS3Config,
+    HippiusS3StorageClient,
+    download_public_file,
+    parse_hippius_s3_url,
+)
+
 
 @dataclass
 class DownloadedVideo:
@@ -17,9 +26,40 @@ class DownloadedVideo:
     cleanup_paths: list[str]
 
 
+@dataclass(frozen=True)
+class DownloadAttemptFailure:
+    backend: str
+    message: str
+
+
+class VideoDownloadError(RuntimeError):
+    def __init__(self, *, url: str, failures: list[DownloadAttemptFailure]):
+        self.url = url
+        self.failures = list(failures)
+        summary = "; ".join(
+            f"{failure.backend}: {failure.message}" for failure in self.failures
+        )
+        super().__init__(summary or "video download failed")
+
+    def details(self) -> dict:
+        return {
+            "video_url": self.url,
+            "download_attempts": [
+                {
+                    "backend": failure.backend,
+                    "message": failure.message,
+                }
+                for failure in self.failures
+            ],
+        }
+
+
 class VideoDownloader:
     """
-    Handles secure video downloading with retry logic.
+    Shared validator/miner video downloader with retry logic.
+
+    Extractor platform pages such as YouTube and Vimeo are routed through
+    yt-dlp. Direct media URLs prefer plain HTTP first.
     """
 
     # Netscape-format cookies.txt (see yt-dlp wiki: passing cookies to yt-dlp).
@@ -27,13 +67,24 @@ class VideoDownloader:
     # Optional: e.g. "chrome", "firefox", or "chrome:Default" (profile). Chutes
     # runtimes usually need _ENV_YTDLP_COOKIES_FILE instead.
     _ENV_YTDLP_COOKIES_BROWSER = "YTDLP_COOKIES_BROWSER"
-    _DEFAULT_YTDLP_COOKIES_BROWSER = "chrome:Default"
+    # NOTE: This is intentionally opt-in. Defaulting to chrome breaks headless
+    # servers/CI where no Chrome profile exists and yt-dlp will error out.
+    _DEFAULT_YTDLP_COOKIES_BROWSER = ""
     # yt-dlp EJS n-challenge solver needs Node 20+ or Deno 2+ (see yt-dlp wiki/EJS).
     _ENV_YTDLP_NODE_PATH = "YTDLP_NODE_PATH"
     _ENV_YTDLP_DENO_PATH = "YTDLP_DENO_PATH"
+    _ENV_HIPPIUS_S3_ENDPOINT_URL = "HIPPIUS_S3_ENDPOINT_URL"
+    _ENV_HIPPIUS_S3_PUBLIC_BASE_URL = "HIPPIUS_S3_PUBLIC_BASE_URL"
+    _ENV_HIPPIUS_S3_BUCKET = "HIPPIUS_S3_BUCKET"
+    _ENV_HIPPIUS_S3_ACCESS_KEY_ID = "HIPPIUS_S3_ACCESS_KEY_ID"
+    _ENV_HIPPIUS_S3_SECRET_ACCESS_KEY = "HIPPIUS_S3_SECRET_ACCESS_KEY"
+    _ENV_HIPPIUS_S3_REGION = "HIPPIUS_S3_REGION"
     # Node-based parents (e.g. PM2) set these; yt-dlp's node/deno children then break IPC.
     _YTDLP_STRIP_ENV_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
 
+    HIPPIUS_HOSTS = {
+        "s3.hippius.com",
+    }
     EXTRACTOR_PLATFORM_HOSTS = {
         "youtube.com",
         "www.youtube.com",
@@ -66,6 +117,16 @@ class VideoDownloader:
         ".avi",
         ".mkv",
     }
+
+    @classmethod
+    def is_hippius_url(cls, url: str) -> bool:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        if not host:
+            return False
+        if host in cls.HIPPIUS_HOSTS or host.endswith(".hippius.com"):
+            return True
+        return host in cls._configured_hippius_hosts()
 
     @classmethod
     def is_extractor_platform_url(cls, url: str) -> bool:
@@ -124,23 +185,111 @@ class VideoDownloader:
         return os.environ.get(name, "").strip() or default
 
     @classmethod
+    def _configured_hippius_hosts(cls) -> set[str]:
+        hosts: set[str] = set()
+        for env_name in (
+            cls._ENV_HIPPIUS_S3_ENDPOINT_URL,
+            cls._ENV_HIPPIUS_S3_PUBLIC_BASE_URL,
+        ):
+            value = cls._env_value(env_name)
+            if not value:
+                continue
+            parsed = urlparse(value)
+            host = (parsed.netloc or parsed.path or "").split("/", 1)[0].lower()
+            if host:
+                hosts.add(host)
+        return hosts
+
+    @classmethod
     def _download_attempts(cls, url: str) -> list[tuple[str, Callable[..., DownloadedVideo]]]:
         """
-        Order download backends. Plain GET on youtube.com/watch (etc.) returns HTML,
-        not a video file — never use HTTP fallback for those page URLs.
+        Order download backends. Plain GET on extractor pages often returns HTML;
+        the HTTP backend still validates Content-Type and container bytes.
         """
-        if cls.should_prefer_ytdlp(url):
-            attempts: list[tuple[str, Callable[..., DownloadedVideo]]] = [
-                ("yt-dlp", cls._download_with_ytdlp),
+        if cls.is_hippius_url(url):
+            return [
+                ("hippius-s3", cls._download_with_hippius),
+                ("http", cls._download_with_requests),
             ]
-            if cls.is_direct_media_url(url) or not cls.is_extractor_platform_url(url):
-                attempts.append(("http", cls._download_with_requests))
-            return attempts
+
+        if cls.should_prefer_ytdlp(url):
+            return [
+                ("yt-dlp", cls._download_with_ytdlp),
+                ("http", cls._download_with_requests),
+            ]
 
         return [
             ("http", cls._download_with_requests),
             ("yt-dlp", cls._download_with_ytdlp),
         ]
+
+    @classmethod
+    def _download_with_hippius(cls, url: str, timeout: int) -> DownloadedVideo:
+        """
+        Download a public Hippius S3 task artifact.
+
+        Validator-generated tasks are published as public S3-compatible objects.
+        Miners should route those URLs through this branch first so synthetic
+        Hippius artifacts do not get sent through extractor heuristics.
+        """
+        public_base_url = cls._env_value(
+            cls._ENV_HIPPIUS_S3_PUBLIC_BASE_URL,
+            DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+        )
+        configured_bucket = cls._env_value(cls._ENV_HIPPIUS_S3_BUCKET)
+        object_ref = parse_hippius_s3_url(
+            url,
+            default_bucket=configured_bucket,
+            public_base_url=public_base_url,
+        )
+        access_key_id = cls._env_value(cls._ENV_HIPPIUS_S3_ACCESS_KEY_ID)
+        secret_access_key = cls._env_value(cls._ENV_HIPPIUS_S3_SECRET_ACCESS_KEY)
+        has_credentials = bool(access_key_id and secret_access_key)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+            local_path = tmp_file.name
+
+        try:
+            if object_ref:
+                client = HippiusS3StorageClient(
+                    HippiusS3Config(
+                        endpoint_url=cls._env_value(
+                            cls._ENV_HIPPIUS_S3_ENDPOINT_URL,
+                            DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+                        ),
+                        public_base_url=public_base_url,
+                        bucket=object_ref.bucket,
+                        access_key_id=access_key_id,
+                        secret_access_key=secret_access_key,
+                        region=cls._env_value(
+                            cls._ENV_HIPPIUS_S3_REGION,
+                            DEFAULT_HIPPIUS_S3_REGION,
+                        ),
+                        anonymous=not has_credentials,
+                    ),
+                    timeout_seconds=timeout,
+                )
+                client.download_file(
+                    object_key=object_ref.object_key,
+                    local_path=local_path,
+                )
+            else:
+                download_public_file(
+                    url=url,
+                    local_path=local_path,
+                    timeout_seconds=timeout,
+                )
+        except Exception:
+            try:
+                os.remove(local_path)
+            except OSError:
+                pass
+            raise
+
+        return DownloadedVideo(
+            path=local_path,
+            cleanup_paths=[local_path],
+        )
 
     @classmethod
     def _download_with_requests(cls, url: str, timeout: int) -> DownloadedVideo:
@@ -233,7 +382,7 @@ class VideoDownloader:
             import yt_dlp
         except ImportError as exc:
             raise RuntimeError(
-                "yt-dlp is required to download YouTube-hosted validator videos."
+                "yt-dlp is required to download extractor-platform videos."
             ) from exc
 
         tmp_dir = tempfile.mkdtemp(prefix="chronoseek-ytdlp-")
@@ -281,7 +430,7 @@ class VideoDownloader:
                         "YouTube still blocked this download after applying cookies "
                         f"({cls._ENV_YTDLP_COOKIES_FILE} / "
                         f"{cls._ENV_YTDLP_COOKIES_BROWSER}). Re-export a fresh cookies.txt "
-                        "from a browser session that can play this video, ensure the miner "
+                        "from a browser session that can play this video, ensure the runtime "
                         "process inherits that env var, and confirm the file path is readable."
                     )
             raise
@@ -314,7 +463,12 @@ class VideoDownloader:
                 )
 
     @staticmethod
-    def download_video(url: str, timeout: int = 60) -> DownloadedVideo | None:
+    def download_video(
+        url: str,
+        timeout: int = 60,
+        *,
+        raise_on_failure: bool = False,
+    ) -> DownloadedVideo | None:
         """
         Download video to a temporary file.
         Returns: DownloadedVideo metadata or None on failure.
@@ -322,12 +476,14 @@ class VideoDownloader:
         attempts = VideoDownloader._download_attempts(url)
         if len(attempts) == 1:
             bt.logging.info(f"Downloader strategy: {attempts[0][0]} only.")
+        elif attempts[0][0] == "hippius-s3":
+            bt.logging.info("Downloader strategy: Hippius S3 first, HTTP fallback.")
         elif attempts[0][0] == "yt-dlp":
             bt.logging.info("Downloader strategy: yt-dlp first, HTTP fallback.")
         else:
             bt.logging.info("Downloader strategy: HTTP first, yt-dlp fallback.")
 
-        last_error = None
+        failures: list[DownloadAttemptFailure] = []
         for method_name, downloader in attempts:
             downloaded_video = None
             try:
@@ -342,12 +498,20 @@ class VideoDownloader:
                 bt.logging.info(f"Video download succeeded via {method_name}.")
                 return downloaded_video
             except Exception as e:
-                last_error = e
+                failures.append(
+                    DownloadAttemptFailure(
+                        backend=method_name,
+                        message=str(e),
+                    )
+                )
                 bt.logging.warning(
                     f"Video download attempt via {method_name} failed: {e}"
                 )
                 VideoDownloader.cleanup(downloaded_video)
 
-        if last_error is not None:
-            bt.logging.error(f"Failed to download video: {last_error}")
+        if failures:
+            error = VideoDownloadError(url=url, failures=failures)
+            bt.logging.error(f"Failed to download video: {error}")
+            if raise_on_failure:
+                raise error
         return None

@@ -1,3 +1,12 @@
+"""Run a local end-to-end smoke check for the ChronoSeek MVP pipeline.
+
+This script is intended for developer/operator verification, not validator
+scoring. It loads either the curated smoke-test task manifest or a supplied
+video/query pair, validates the request/response protocol models, runs the
+local reference miner logic, and optionally checks whether the top result passes
+the strict IoU threshold against known ground truth intervals.
+"""
+
 import argparse
 import os
 import sys

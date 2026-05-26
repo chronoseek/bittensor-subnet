@@ -21,12 +21,12 @@ load_dotenv()
 
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
 from chronoseek.validator.clipper import FfmpegClipper
 from chronoseek.validator.compression import (
     CompositeCompressor,
     LocalFfmpegCompressor,
-    VidaioCompressor,
 )
 from chronoseek.validator.hardened_task_gen import (
     HardenedActivityNetTaskGenerator,
@@ -34,9 +34,9 @@ from chronoseek.validator.hardened_task_gen import (
 )
 from chronoseek.validator.query_variants import QueryVariantSelector
 from chronoseek.validator.state import ValidatorRuntimeState
-from chronoseek.validator.storage import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.validator.task_models import EncodingProfile
 from chronoseek.validator.task_sampler import ActivityNetTaskSampler
+from chronoseek.video.vidaio import VidaioCompressor
 from chronoseek.chain.submissions import (
     MinerSubmissionResolver,
 )
@@ -358,8 +358,9 @@ def build_validator_task_generator(
         )
     compressor = CompositeCompressor(
         local_compressor=local_compressor,
-        vidaio_compressor=vidaio_compressor,
-        vidaio_enabled=get_config_bool(config, "vidaio_compression_enabled", False),
+        preferred_compressor=vidaio_compressor,
+        preferred_enabled=get_config_bool(config, "vidaio_compression_enabled", False),
+        preferred_backend_name="Vidaio",
     )
     storage = HippiusS3StorageClient(
         HippiusS3Config(
@@ -371,6 +372,10 @@ def build_validator_task_generator(
             region=config.hippius_s3_region,
         ),
         timeout_seconds=config.hippius_s3_timeout_seconds,
+    )
+    storage.ensure_bucket_public()
+    bt.logging.info(
+        f"Hippius task bucket ready and public-readable | bucket={config.hippius_s3_bucket}"
     )
     manifest = TaskArtifactManifest(str(manifest_path))
     hardened_gen = HardenedActivityNetTaskGenerator(
@@ -387,6 +392,11 @@ def build_validator_task_generator(
             ttl_hours=config.task_clip_ttl_hours,
             cleanup_interval_seconds=config.task_clip_cleanup_interval_seconds,
             max_generation_attempts=config.hardened_task_max_generation_attempts,
+            delete_remote_artifacts=get_config_bool(
+                config,
+                "task_delete_remote_artifacts",
+                False,
+            ),
         ),
     )
     hardened_gen.cleanup_expired(force=True)
@@ -691,7 +701,7 @@ def get_config():
     parser.add_argument(
         "--task-artifact-prefix",
         type=str,
-        default=os.getenv("TASK_ARTIFACT_PREFIX", "validator-tasks"),
+        default=os.getenv("TASK_ARTIFACT_PREFIX", "task-clips"),
         help="Object key prefix for uploaded validator task clips.",
     )
     parser.add_argument(
@@ -705,6 +715,12 @@ def get_config():
         type=float,
         default=float(os.getenv("TASK_CLIP_CLEANUP_INTERVAL_SECONDS", "900")),
         help="Minimum interval between expired validator task artifact cleanup runs.",
+    )
+    parser.add_argument(
+        "--task-delete-remote-artifacts",
+        action="store_true",
+        default=env_bool("TASK_DELETE_REMOTE_ARTIFACTS", False),
+        help="Delete expired uploaded validator task clips from Hippius during cleanup.",
     )
     parser.add_argument(
         "--task-video-cooldown-hours",
@@ -787,13 +803,13 @@ def get_config():
     parser.add_argument(
         "--hippius-s3-public-base-url",
         type=str,
-        default=os.getenv("HIPPIUS_S3_PUBLIC_BASE_URL", ""),
+        default=os.getenv("HIPPIUS_S3_PUBLIC_BASE_URL", "https://s3.hippius.com"),
         help="Public base URL for uploaded Hippius validator task clips.",
     )
     parser.add_argument(
         "--hippius-s3-bucket",
         type=str,
-        default=os.getenv("HIPPIUS_S3_BUCKET", ""),
+        default=os.getenv("HIPPIUS_S3_BUCKET", "chronoseek"),
         help="Hippius S3 bucket for validator task clips.",
     )
     parser.add_argument(
