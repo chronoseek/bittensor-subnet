@@ -16,6 +16,7 @@ class ValidatorRuntimeState:
     provider_headers: dict[str, str] = field(default_factory=dict)
     responsive_lock: Lock = field(default_factory=Lock)
     responsive_uids: set[int] = field(default_factory=set)
+    disqualified_uids: set[int] = field(default_factory=set)
     responsive_initialized: bool = False
     responsive_last_refresh_at: float | None = None
     last_metagraph_sync_block: int | None = None

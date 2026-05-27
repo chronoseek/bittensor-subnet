@@ -89,7 +89,7 @@ poetry run python validator.py \
   --netuid <netuid>
 ```
 
-The validator checks that the hotkey is registered, loads latest revealed miner submissions from chain, health-checks Chutes runtimes, then enters the scoring loop.
+The validator checks that the hotkey is registered, loads permanent miner submissions from chain, disqualifies hotkeys with multiple revealed submissions, health-checks eligible Chutes runtimes, then enters the scoring loop.
 
 ## Hardened Task Flow
 

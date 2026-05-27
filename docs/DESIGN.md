@@ -214,11 +214,11 @@ Recommended fields:
 
 This allows validators to:
 
-- discover the latest valid submission per miner
+- discover the permanent valid submission per miner
 - distinguish mutable endpoint references from immutable runtime identity
 - reject malformed or stale submissions deterministically
 
-The current subnet implementation uses latest revealed v2 commitments by miner hotkey. Local metadata-file fallback has been removed so validators test the same on-chain path they run in production.
+The current subnet implementation accepts only hotkeys with exactly one valid revealed v2 commitment. Hotkeys with multiple revealed commitments are disqualified and score zero, because miner runtime submissions are permanent per hotkey. Local metadata-file fallback has been removed so validators test the same on-chain path they run in production.
 
 Submission routing evaluates private runtimes only for synthetic scoring. In v2, responsive miner selection requires valid metadata for hotkeys present in the metagraph and a successful `/health` response from the resolved runtime. Organic serving remains outside validator scoring and belongs to the owner-run API plane.
 

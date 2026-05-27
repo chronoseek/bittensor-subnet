@@ -190,6 +190,8 @@ poetry run pytest tests/live/test_chutes.py::test_live_chutes_deploy -s
 
 ### Chain Commit
 
+This check requires a miner hotkey with no revealed ChronoSeek runtime submission yet. Miner submissions are permanent per hotkey.
+
 ```bash
 CHRONOSEEK_LIVE_TESTS=1 \
 CHRONOSEEK_LIVE_CHAIN=1 \
@@ -202,6 +204,21 @@ LIVE_CHAIN_CHUTE_SLUG="alice-chronoseek-runtime-live" \
 poetry run pytest tests/live/test_chain.py::test_live_chain_commit_submission -s
 ```
 
+### Duplicate Chain Commit Rejection
+
+This check requires a miner hotkey that already has a revealed ChronoSeek runtime submission. It verifies the local commit path rejects a second submission before sending another chain commitment. If a duplicate commitment does appear on-chain for a hotkey, validators disqualify that hotkey and force its score to zero.
+
+```bash
+CHRONOSEEK_LIVE_TESTS=1 \
+CHRONOSEEK_LIVE_CHAIN=1 \
+CHRONOSEEK_LIVE_CHAIN_DUPLICATE_COMMIT=1 \
+WALLET_NAME="<coldkey>" \
+HOTKEY_NAME="<already-submitted-hotkey>" \
+NETWORK="finney" \
+NETUID="<netuid>" \
+poetry run pytest tests/live/test_chain.py::test_live_chain_rejects_duplicate_submission_for_hotkey -s
+```
+
 ### Chain Fetch
 
 ```bash
@@ -210,6 +227,7 @@ CHRONOSEEK_LIVE_CHAIN=1 \
 NETWORK="finney" \
 NETUID="<netuid>" \
 LIVE_CHAIN_EXPECTED_HOTKEY="<ss58-hotkey>" \
+LIVE_CHAIN_EXPECTED_DUPLICATE_HOTKEY="<optional-duplicate-ss58-hotkey>" \
 poetry run pytest tests/live/test_chain.py::test_live_chain_fetch_submissions -s
 ```
 
@@ -237,4 +255,6 @@ poetry run pytest tests/live/test_vidaio.py::test_live_vidaio_compress -s
 | `CHRONOSEEK_LIVE_CHUTES_ACCEPT_FEE=1` | Confirms Chutes deploy fee acceptance. |
 | `CHRONOSEEK_LIVE_CHAIN=1` | Chain live checks. |
 | `CHRONOSEEK_LIVE_CHAIN_COMMIT=1` | Chain commit check. |
+| `CHRONOSEEK_LIVE_CHAIN_DUPLICATE_COMMIT=1` | Duplicate miner submission rejection check. |
+| `LIVE_CHAIN_EXPECTED_DUPLICATE_HOTKEY=<ss58-hotkey>` | Optional chain fetch assertion that a known duplicate-submitted hotkey is disqualified and absent from valid submissions. |
 | `CHRONOSEEK_LIVE_VIDAIO=1` | Vidaio compression live check. |

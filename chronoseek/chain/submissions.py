@@ -1,6 +1,7 @@
 import inspect
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import bittensor as bt
@@ -24,6 +25,12 @@ PERMANENT_SUBMISSION_ERROR = (
 
 class DuplicateMinerSubmissionError(RuntimeError):
     """Raised when a hotkey tries to submit more than one permanent commitment."""
+
+
+@dataclass(frozen=True)
+class ChainSubmissionSnapshot:
+    submissions: dict[str, "MinerSubmission"]
+    duplicate_hotkeys: set[str]
 
 
 class MinerSubmission(BaseModel):
@@ -255,27 +262,42 @@ async def load_chain_submissions(
     netuid: int,
     metagraph: bt.Metagraph,
 ) -> dict[str, MinerSubmission]:
-    """Read first revealed v2 miner submissions from chain by hotkey.
+    snapshot = await load_chain_submission_snapshot(
+        subtensor=subtensor,
+        netuid=netuid,
+        metagraph=metagraph,
+    )
+    return snapshot.submissions
 
-    Miner submissions are permanent: validators intentionally ignore later
-    commitments from the same hotkey so a miner cannot edit, replace, or retry a
-    submitted runtime without registering a new hotkey.
+
+async def load_chain_submission_snapshot(
+    subtensor: Any,
+    netuid: int,
+    metagraph: bt.Metagraph,
+) -> ChainSubmissionSnapshot:
+    """Read valid v2 miner submissions and duplicate-submit hotkeys from chain.
+
+    Miner submissions are permanent. A hotkey with more than one revealed
+    commitment is disqualified instead of being allowed to keep its first
+    submission, because multiple submissions violate the one-runtime-per-hotkey
+    rule.
     """
 
     if not hasattr(subtensor, "get_all_revealed_commitments"):
         bt.logging.warning(
             "Chain submission routing is configured, but this subtensor does not provide get_all_revealed_commitments."
         )
-        return {}
+        return ChainSubmissionSnapshot(submissions={}, duplicate_hotkeys=set())
 
     _patch_bittensor_commit_decoder()
     try:
         commits = await maybe_await(subtensor.get_all_revealed_commitments(netuid))
     except Exception as exc:
         bt.logging.warning(f"Failed to read miner submissions from chain: {exc}")
-        return {}
+        return ChainSubmissionSnapshot(submissions={}, duplicate_hotkeys=set())
 
     submissions: dict[str, MinerSubmission] = {}
+    duplicate_hotkeys: set[str] = set()
     hotkeys = getattr(metagraph, "hotkeys", [])
     for uid, hotkey in enumerate(hotkeys):
         hotkey_commits = commits.get(hotkey) if isinstance(commits, dict) else None
@@ -285,11 +307,13 @@ async def load_chain_submissions(
             sorted_commits = _sorted_hotkey_commits(hotkey_commits)
             if not sorted_commits:
                 continue
-            block, commit_data = sorted_commits[0]
             if len(sorted_commits) > 1:
+                duplicate_hotkeys.add(str(hotkey))
                 bt.logging.warning(
-                    f"Ignoring {len(sorted_commits) - 1} replacement commitment(s) for hotkey {hotkey}; miner submissions are permanent."
+                    f"Disqualifying hotkey {hotkey} with {len(sorted_commits)} revealed miner submissions; miner submissions are permanent and multiple submissions score zero."
                 )
+                continue
+            block, commit_data = sorted_commits[0]
             submission = _coerce_submission(
                 raw=commit_data,
                 hotkey=hotkey,
@@ -304,7 +328,10 @@ async def load_chain_submissions(
         if submission:
             submissions[hotkey] = submission
 
-    return submissions
+    return ChainSubmissionSnapshot(
+        submissions=submissions,
+        duplicate_hotkeys=duplicate_hotkeys,
+    )
 
 
 class MinerSubmissionResolver:
@@ -316,6 +343,10 @@ class MinerSubmissionResolver:
         self.cache_ttl_seconds = max(1.0, float(cache_ttl_seconds))
         self._cached_at = 0.0
         self._cached: dict[str, MinerSubmission] = {}
+        self._cached_duplicate_hotkeys: set[str] = set()
+
+    def get_duplicate_hotkeys(self) -> set[str]:
+        return set(self._cached_duplicate_hotkeys)
 
     async def get_submissions(
         self,
@@ -328,8 +359,17 @@ class MinerSubmissionResolver:
         if self._cached_at and (now - self._cached_at) < self.cache_ttl_seconds:
             return dict(self._cached)
 
-        submissions = await load_chain_submissions(subtensor, netuid, metagraph)
+        snapshot = await load_chain_submission_snapshot(
+            subtensor=subtensor,
+            netuid=netuid,
+            metagraph=metagraph,
+        )
+        submissions = snapshot.submissions
         self._cached = dict(submissions)
+        self._cached_duplicate_hotkeys = set(snapshot.duplicate_hotkeys)
         self._cached_at = now
-        bt.logging.info(f"Loaded {len(submissions)} v2 miner submissions from chain.")
+        bt.logging.info(
+            "Loaded v2 miner submissions from chain | "
+            f"valid={len(submissions)} | duplicate_hotkeys={len(snapshot.duplicate_hotkeys)}"
+        )
         return submissions

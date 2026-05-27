@@ -10,6 +10,7 @@ import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from validator import (
+    apply_disqualified_miner_penalty,
     build_emission_weights,
     refresh_responsive_miners_from_submissions,
     run_validator_loop,
@@ -55,6 +56,13 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         scores = seed_scores_from_metagraph(metagraph)
 
         np.testing.assert_allclose(scores, np.array([0.2, 0.3, 0.5]))
+
+    def test_apply_disqualified_miner_penalty_zeros_duplicate_submitters(self):
+        scores = np.array([0.4, 0.6, 0.9])
+
+        penalized = apply_disqualified_miner_penalty(scores, {1})
+
+        np.testing.assert_allclose(penalized, np.array([0.4, 0.0, 0.9]))
 
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
@@ -375,6 +383,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         resolver = MagicMock()
         resolver.get_submissions = AsyncMock(return_value={"hk-1": submission})
+        resolver.get_duplicate_hotkeys.return_value = set()
         response = MagicMock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"ok": True}
@@ -431,6 +440,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         resolver = MagicMock()
         resolver.get_submissions = AsyncMock(return_value={"hk-1": submission})
+        resolver.get_duplicate_hotkeys.return_value = set()
         response = MagicMock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"ok": False}
@@ -455,6 +465,43 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(responsive_uids, set())
+        self.assertEqual(runtime.responsive_uids, set())
+        self.assertEqual(runtime.miner_endpoints, {})
+
+    @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
+    async def test_submission_refresh_records_duplicate_submitter_disqualification(
+        self,
+        mock_async_client_cls,
+    ):
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["hk-0", "hk-1"]
+        mock_metagraph.uids = [0, 1]
+        mock_metagraph.n = 2
+
+        resolver = MagicMock()
+        resolver.get_submissions = AsyncMock(return_value={})
+        resolver.get_duplicate_hotkeys.return_value = {"hk-1"}
+        mock_async_client_cls.return_value.__aenter__.return_value = AsyncMock()
+
+        runtime = ValidatorRuntimeState(
+            wallet=mock_wallet,
+            metagraph=mock_metagraph,
+            scores=np.array([0.4, 0.6]),
+            score_lock=threading.Lock(),
+        )
+
+        responsive_uids = await refresh_responsive_miners_from_submissions(
+            runtime=runtime,
+            subtensor=MagicMock(),
+            netuid=1,
+            submission_resolver=resolver,
+            chutes_base_domain="chutes.ai",
+            health_timeout_seconds=10,
+        )
+
+        self.assertEqual(responsive_uids, set())
+        self.assertEqual(runtime.disqualified_uids, {1})
         self.assertEqual(runtime.responsive_uids, set())
         self.assertEqual(runtime.miner_endpoints, {})
 

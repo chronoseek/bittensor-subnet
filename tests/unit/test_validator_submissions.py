@@ -9,6 +9,7 @@ from chronoseek.chain.submissions import (
     MinerSubmission,
     PERMANENT_SUBMISSION_ERROR,
     commit_miner_submission,
+    load_chain_submission_snapshot,
     load_chain_submissions,
 )
 from chronoseek.chutes.runtime import (
@@ -104,7 +105,7 @@ def test_submission_endpoint_map_uses_registered_hotkeys_only():
 
 
 class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
-    async def test_load_chain_submissions_uses_first_commit_by_hotkey(self):
+    async def test_load_chain_submissions_disqualifies_duplicate_commit_hotkey(self):
         class FakeSubtensor:
             def get_all_revealed_commitments(self, netuid):
                 assert netuid == 1
@@ -133,16 +134,16 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
                     )
                 }
 
-        submissions = await load_chain_submissions(
+        snapshot = await load_chain_submission_snapshot(
             FakeSubtensor(),
             netuid=1,
             metagraph=DummyMetagraph(),
         )
 
-        assert submissions["hk-1"].chute_slug == "old-runtime"
-        assert submissions["hk-1"].created_at_block == 10
+        assert "hk-1" not in snapshot.submissions
+        assert snapshot.duplicate_hotkeys == {"hk-1"}
 
-    async def test_load_chain_submissions_ignores_later_retry_after_invalid_first_commit(self):
+    async def test_load_chain_submissions_disqualifies_retry_after_invalid_first_commit(self):
         class FakeSubtensor:
             def get_all_revealed_commitments(self, netuid):
                 assert netuid == 1
@@ -162,13 +163,42 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
                     )
                 }
 
+        snapshot = await load_chain_submission_snapshot(
+            FakeSubtensor(),
+            netuid=1,
+            metagraph=DummyMetagraph(),
+        )
+
+        assert "hk-1" not in snapshot.submissions
+        assert snapshot.duplicate_hotkeys == {"hk-1"}
+
+    async def test_load_chain_submissions_keeps_single_valid_commit(self):
+        class FakeSubtensor:
+            def get_all_revealed_commitments(self, netuid):
+                assert netuid == 1
+                return {
+                    "hk-1": (
+                        (
+                            10,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "only-runtime",
+                                }
+                            ),
+                        ),
+                    )
+                }
+
         submissions = await load_chain_submissions(
             FakeSubtensor(),
             netuid=1,
             metagraph=DummyMetagraph(),
         )
 
-        assert "hk-1" not in submissions
+        assert submissions["hk-1"].chute_slug == "only-runtime"
+        assert submissions["hk-1"].created_at_block == 10
 
     async def test_commit_miner_submission_rejects_second_commit_for_hotkey(self):
         class FakeSubtensor:

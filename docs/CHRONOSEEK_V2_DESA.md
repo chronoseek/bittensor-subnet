@@ -46,7 +46,7 @@ Target implementation:
 
 - miners deploy full private retrieval runtimes to Chutes
 - miners commit structured Chutes submission metadata on-chain
-- validators resolve the latest valid submission per hotkey from chain state
+- validators resolve one permanent valid submission per hotkey from chain state
 - validators query private miner Chutes for synthetic evaluation only
 - the public API is owner-run and serves organic traffic from promoted immutable Chutes clones
 - miners and validators do not publish ports through subnet metadata
@@ -117,7 +117,7 @@ Optional fields:
 
 The implementation should prefer a canonical Chutes identifier such as `chute_id`. Validators can then resolve the serving slug or endpoint from Chutes metadata.
 
-Current subnet implementation uses latest revealed chain commitments by miner hotkey. There is no local metadata-file fallback, including for testing.
+Current subnet implementation treats miner submissions as permanent per hotkey. A hotkey with exactly one valid revealed commitment is eligible; a hotkey with multiple revealed commitments is disqualified and scores zero. There is no local metadata-file fallback, including for testing.
 
 For now, validators resolve an explicit `endpoint` first, then `chute_slug` as `https://{chute_slug}.${CHUTES_BASE_DOMAIN}`. Responsive miner selection requires both valid revealed metadata for a registered metagraph hotkey and a successful `/health` response from the resolved runtime. A `chute_id` remains part of the canonical identity, but a validator needs either a direct endpoint, a slug, or future Chutes metadata lookup to dispatch a request.
 
@@ -141,7 +141,7 @@ poetry run python miner.py \
 In v2.0, validators should:
 
 - generate synthetic tasks as before
-- read the metagraph and latest revealed miner commitments
+- read the metagraph and permanent miner commitments
 - parse and validate each miner's Chutes manifest
 - resolve the Chutes endpoint for each valid hotkey
 - query miner Chutes only for synthetic evaluation
@@ -188,7 +188,7 @@ The runtime handoff mechanism inside DESA is Evaluation-Guided Runtime Promotion
 ## Implementation Order
 
 1. Define the v2 manifest parser and validator. `Implemented`
-2. Add chain read logic for latest revealed commitments by hotkey. `Implemented`
+2. Add chain read logic for permanent one-submission-per-hotkey commitments. `Implemented`
 3. Resolve direct endpoints and `chute_slug` values to Chutes endpoints. `Implemented`
 4. Resolve `chute_id` through Chutes metadata when provider lookup is available. `Pending`
 5. Add synthetic validator routing to Chutes endpoints. `Implemented`
