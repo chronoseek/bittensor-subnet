@@ -99,7 +99,7 @@ Recommended minimal manifest:
   "protocol": "chronoseek-runtime-v2",
   "hotkey": "miner-hotkey-ss58",
   "chute_id": "chute-deployment-id",
-  "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
+  "chute_slug": "alice-chronoseek-runtime-20260510143015999",
   "created_at_block": 123456
 }
 ```
@@ -121,7 +121,7 @@ Current subnet implementation uses latest revealed chain commitments by miner ho
 
 For now, validators resolve an explicit `endpoint` first, then `chute_slug` as `https://{chute_slug}.${CHUTES_BASE_DOMAIN}`. Responsive miner selection requires both valid revealed metadata for a registered metagraph hotkey and a successful `/health` response from the resolved runtime. A `chute_id` remains part of the canonical identity, but a validator needs either a direct endpoint, a slug, or future Chutes metadata lookup to dispatch a request.
 
-Chutes derives the public slug from the Chutes account and API `name`, so the deploy helper appends a UTC millisecond timestamp to the API `name` while preserving brand casing, for example `ChronoSeek-runtime-20260510143015999`. The committed `chute_slug` is unique and includes the lowercase Chutes account plus timestamp, for example `chronoseek-chronoseek-runtime-20260510143015999`. The description/tagline is `ChronoSeek`; the human display label in logs/readme is `ChronoSeek Runtime`; the visible author comes from the Chutes account. Chutes deployment naming is off-chain and the deploy helper prints the slug to commit with `miner.py`. The deploy helper also uploads the ChronoSeek logo from `https://chronoseek.org/logo.png` and reuses the returned Chutes `logo_id` for the image and chute payloads. For miner-side video access, the image build step copies `YTDLP_COOKIES` into `/opt/chronoseek/miner-files/ytdlp/` when the local file exists, rewrites the cookie env var inside the image to the container path, installs Deno for yt-dlp EJS challenge solving, and forwards `HF_TOKEN` when it is present in the build environment.
+Chutes derives the public slug from the Chutes account and API `name`, so the deploy helper appends a UTC millisecond timestamp to the API `name` while preserving brand casing, for example `ChronoSeek-runtime-20260510143015999`. Assuming Chutes account `alice`, the committed `chute_slug` is unique and includes the lowercase Chutes account plus timestamp, for example `alice-chronoseek-runtime-20260510143015999`. The description/tagline is `ChronoSeek`; the human display label in logs/readme is `ChronoSeek Runtime`; the visible author comes from the Chutes account. Chutes deployment naming is off-chain and the deploy helper prints the slug to commit with `miner.py`. The deploy helper also uploads the ChronoSeek logo from `https://chronoseek.org/logo.png` and reuses the returned Chutes `logo_id` for the image and chute payloads. For shared validator/miner video access, the image build step copies `YTDLP_COOKIES` into `/opt/chronoseek/miner-files/ytdlp/` when the local file exists, rewrites the cookie env var inside the image to the container path, installs Deno for yt-dlp EJS challenge solving, and forwards `HF_TOKEN` when it is present in the build environment.
 
 Local validation should use `scripts/test_chutes_runtime_local.py`, which follows the Chutes local testing flow and avoids production API calls or credit usage. `scripts/deploy_chutes_runtime.py` is for intentional production Chutes API build/deploy only.
 
@@ -132,7 +132,7 @@ poetry run python miner.py \
   --wallet.name miner \
   --wallet.hotkey default \
   --chute-id chute-deployment-id \
-  --chute-slug chronoseek-chronoseek-runtime-20260510143015999 \
+  --chute-slug alice-chronoseek-runtime-20260510143015999 \
   --artifact-revision immutable-revision
 ```
 
@@ -192,7 +192,7 @@ The runtime handoff mechanism inside DESA is Evaluation-Guided Runtime Promotion
 3. Resolve direct endpoints and `chute_slug` values to Chutes endpoints. `Implemented`
 4. Resolve `chute_id` through Chutes metadata when provider lookup is available. `Pending`
 5. Add synthetic validator routing to Chutes endpoints. `Implemented`
-6. Keep scoring and task generation unchanged. `Implemented`
+6. Keep scoring unchanged while enhancing task generation with hardened ActivityNet-derived clips for anti-gaming protection. `Implemented`
 7. Remove local validator serving and local miner serving paths. `Implemented`
 8. Add platform configuration for promoted serving backend selection.
 9. Add owner-admin promotion records and rollback selection.

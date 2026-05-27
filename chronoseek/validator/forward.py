@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Tuple
 from uuid import uuid4
+from urllib.parse import urlparse
 
 import bittensor as bt
 import httpx
@@ -16,6 +17,7 @@ from chronoseek.protocol_models import (
 from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
 from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
+from chronoseek.validator.task_models import normalize_generated_task
 
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
@@ -139,6 +141,8 @@ async def query_uid(
     wallet: bt.Wallet,
     ground_truths: List[Tuple[float, float]],
     timeout_seconds: float,
+    clip_duration: float | None = None,
+    max_prediction_duration_seconds: float | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> Tuple[int, float]:
     async with semaphore:
@@ -175,7 +179,14 @@ async def query_uid(
             )
             return int(uid), 0.0
 
-        score = score_response(resp.results, ground_truths, latency)
+        score = score_response(
+            resp.results,
+            ground_truths,
+            latency,
+            clip_duration=clip_duration,
+            max_prediction_duration_seconds=max_prediction_duration_seconds,
+            score_top_k=1,
+        )
         result = resp.results[0]
         res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
         bt.logging.success(
@@ -192,6 +203,8 @@ async def run_step(
     miner_timeout_seconds: float = 60.0,
     miner_endpoints: list[ChutesRuntimeEndpoint] | None = None,
     provider_headers: dict[str, str] | None = None,
+    validator_eval_top_k: int = 1,
+    max_prediction_duration_seconds: float = 60.0,
 ) -> List[Tuple[int, float]]:
     """
     Run a single validation step:
@@ -209,7 +222,10 @@ async def run_step(
 
     bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
     try:
-        video_url, query, ground_truths = task_gen.generate_task()
+        normalized_task = normalize_generated_task(
+            task_gen.generate_task(),
+            default_top_k=validator_eval_top_k,
+        )
     except RuntimeError as exc:
         bt.logging.warning(
             f"Task generation could not find an accessible video: {exc}. Refreshing video availability checks and retrying."
@@ -222,26 +238,37 @@ async def run_step(
                 f"Refreshed {refreshed_entries} cached unavailable video availability entries."
             )
         try:
-            video_url, query, ground_truths = task_gen.generate_task()
+            normalized_task = normalize_generated_task(
+                task_gen.generate_task(),
+                default_top_k=validator_eval_top_k,
+            )
         except RuntimeError as retry_exc:
             bt.logging.warning(
                 f"Skipping validation step because no accessible validator task was found after retry: {retry_exc}"
             )
             bt.logging.info("=" * 50)
             return []
-    request_id = f"validation-{uuid4()}"
+    request_id = normalized_task.request_id or f"validation-{uuid4()}"
+    video_url = normalized_task.video_url
+    query = normalized_task.query
+    ground_truths = normalized_task.ground_truths
+    clip_duration = normalized_task.clip_duration
+    artifact_host = urlparse(video_url).netloc or "unknown"
 
     bt.logging.info("-" * 40)
     bt.logging.info(f"Request ID:  {request_id}")
-    bt.logging.info(f"Video URL:   {video_url}")
-    bt.logging.info(f"Query:       {query}")
-    bt.logging.info(f"Ground Truths: {ground_truths}")
+    bt.logging.info(f"Task ID:     {normalized_task.task_id or 'legacy-task'}")
+    bt.logging.info(f"Artifact Host: {artifact_host}")
+    bt.logging.info(f"Query Variant: {normalized_task.query_variant_id or 'legacy-query'}")
+    bt.logging.info(f"Clip Duration: {clip_duration if clip_duration is not None else 'unknown'}")
+    bt.logging.info(f"Ground Truth Count: {len(ground_truths)}")
     bt.logging.info("-" * 40)
 
     request_model = VideoSearchRequest(
         request_id=request_id,
         video={"url": video_url},
         query=query,
+        top_k=normalized_task.top_k,
     )
 
     scores = []
@@ -266,6 +293,8 @@ async def run_step(
                 wallet,
                 ground_truths,
                 miner_timeout_seconds,
+                clip_duration=clip_duration,
+                max_prediction_duration_seconds=max_prediction_duration_seconds,
                 extra_headers=provider_headers,
             )
         )

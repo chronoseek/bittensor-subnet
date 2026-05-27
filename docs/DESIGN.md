@@ -139,7 +139,7 @@ Validators remain only the scoring and chain-update layer.
 
 They should:
 
-- generate synthetic tasks exactly as today
+- generate synthetic tasks, using hardened private ActivityNet-derived clips when enabled for anti-gaming protection
 - stop treating miners as the production serving path
 - resolve miner deployment metadata from chain state
 - query private Chutes directly for evaluation
@@ -244,9 +244,8 @@ It should:
 
 The following can remain unchanged in the first `v2.0` implementation step:
 
-- synthetic task generation approach
 - scoring function
 - moving-average weight aggregation
 - protocol request and response shape where possible
 
-The main change is not the reward function. It is the serving and deployment boundary.
+Task generation is still ActivityNet-based, but hardened mode now clips, re-encodes, and uploads private task artifacts so miners no longer receive the original ActivityNet URL. The main architectural change is not the reward function. It is the serving and deployment boundary.
