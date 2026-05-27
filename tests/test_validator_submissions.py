@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner, run_step
 from chronoseek.chain.submissions import (
+    DuplicateMinerSubmissionError,
     MinerSubmission,
+    PERMANENT_SUBMISSION_ERROR,
+    commit_miner_submission,
     load_chain_submissions,
 )
 from chronoseek.chutes.runtime import (
@@ -101,7 +104,7 @@ def test_submission_endpoint_map_uses_registered_hotkeys_only():
 
 
 class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
-    async def test_load_chain_submissions_uses_latest_commit_by_hotkey(self):
+    async def test_load_chain_submissions_uses_first_commit_by_hotkey(self):
         class FakeSubtensor:
             def get_all_revealed_commitments(self, netuid):
                 assert netuid == 1
@@ -136,8 +139,62 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
             metagraph=DummyMetagraph(),
         )
 
-        assert submissions["hk-1"].chute_slug == "new-runtime"
-        assert submissions["hk-1"].created_at_block == 20
+        assert submissions["hk-1"].chute_slug == "old-runtime"
+        assert submissions["hk-1"].created_at_block == 10
+
+    async def test_load_chain_submissions_ignores_later_retry_after_invalid_first_commit(self):
+        class FakeSubtensor:
+            def get_all_revealed_commitments(self, netuid):
+                assert netuid == 1
+                return {
+                    "hk-1": (
+                        (10, "not-json"),
+                        (
+                            20,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "retry-runtime",
+                                }
+                            ),
+                        ),
+                    )
+                }
+
+        submissions = await load_chain_submissions(
+            FakeSubtensor(),
+            netuid=1,
+            metagraph=DummyMetagraph(),
+        )
+
+        assert "hk-1" not in submissions
+
+    async def test_commit_miner_submission_rejects_second_commit_for_hotkey(self):
+        class FakeSubtensor:
+            def get_all_revealed_commitments(self, netuid):
+                assert netuid == 1
+                return {"hk-1": ((10, "{}"),)}
+
+            def set_reveal_commitment(self, **kwargs):
+                raise AssertionError("duplicate submission must not be committed")
+
+        wallet = MagicMock()
+        wallet.hotkey.ss58_address = "hk-1"
+
+        with self.assertRaises(DuplicateMinerSubmissionError) as exc:
+            await commit_miner_submission(
+                subtensor=FakeSubtensor(),
+                wallet=wallet,
+                netuid=1,
+                submission=MinerSubmission(
+                    hotkey="hk-1",
+                    endpoint="https://runtime.example.com",
+                ),
+                blocks_until_reveal=1,
+            )
+
+        assert str(exc.exception) == PERMANENT_SUBMISSION_ERROR
 
     @patch("chronoseek.validator.forward.generate_header")
     async def test_query_miner_adds_provider_headers(self, mock_generate_header):

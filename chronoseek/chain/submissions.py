@@ -15,6 +15,15 @@ from pydantic import (
 
 
 CHRONOSEEK_RUNTIME_PROTOCOL = "chronoseek-runtime-v2"
+PERMANENT_SUBMISSION_ERROR = (
+    "This hotkey has already submitted a ChronoSeek miner commitment. "
+    "Miner submissions are permanent and cannot be edited or replaced. "
+    "If this miner was disqualified or needs a different runtime, register a new hotkey and submit again."
+)
+
+
+class DuplicateMinerSubmissionError(RuntimeError):
+    """Raised when a hotkey tries to submit more than one permanent commitment."""
 
 
 class MinerSubmission(BaseModel):
@@ -90,6 +99,14 @@ async def commit_miner_submission(
     submission: MinerSubmission,
     blocks_until_reveal: int,
 ) -> bool:
+    wallet_hotkey = getattr(getattr(wallet, "hotkey", None), "ss58_address", None)
+    if wallet_hotkey and await hotkey_has_revealed_commitment(
+        subtensor=subtensor,
+        netuid=netuid,
+        hotkey=wallet_hotkey,
+    ):
+        raise DuplicateMinerSubmissionError(PERMANENT_SUBMISSION_ERROR)
+
     result = subtensor.set_reveal_commitment(
         wallet=wallet,
         netuid=int(netuid),
@@ -98,6 +115,56 @@ async def commit_miner_submission(
     )
     response = await maybe_await(result)
     return bool(getattr(response, "success", response))
+
+
+def _sorted_hotkey_commits(hotkey_commits: Any) -> list[tuple[int, Any]]:
+    if not hotkey_commits:
+        return []
+
+    commits = []
+    for item in hotkey_commits:
+        try:
+            block, commit_data = item
+            commits.append((int(block), commit_data))
+        except (TypeError, ValueError):
+            continue
+    return sorted(commits, key=lambda pair: pair[0])
+
+
+async def get_hotkey_revealed_commitments(
+    *,
+    subtensor: Any,
+    netuid: int,
+    hotkey: str,
+) -> list[tuple[int, Any]]:
+    if not hasattr(subtensor, "get_all_revealed_commitments"):
+        return []
+
+    _patch_bittensor_commit_decoder()
+    try:
+        commits = await maybe_await(subtensor.get_all_revealed_commitments(int(netuid)))
+    except Exception as exc:
+        bt.logging.warning(f"Failed to read miner submissions from chain: {exc}")
+        return []
+
+    if not isinstance(commits, dict):
+        return []
+    return _sorted_hotkey_commits(commits.get(hotkey))
+
+
+async def hotkey_has_revealed_commitment(
+    *,
+    subtensor: Any,
+    netuid: int,
+    hotkey: str,
+) -> bool:
+    return bool(
+        await get_hotkey_revealed_commitments(
+            subtensor=subtensor,
+            netuid=netuid,
+            hotkey=hotkey,
+        )
+    )
 
 
 def _patch_bittensor_commit_decoder() -> None:
@@ -188,7 +255,12 @@ async def load_chain_submissions(
     netuid: int,
     metagraph: bt.Metagraph,
 ) -> dict[str, MinerSubmission]:
-    """Read latest revealed v2 miner submissions from chain by hotkey."""
+    """Read first revealed v2 miner submissions from chain by hotkey.
+
+    Miner submissions are permanent: validators intentionally ignore later
+    commitments from the same hotkey so a miner cannot edit, replace, or retry a
+    submitted runtime without registering a new hotkey.
+    """
 
     if not hasattr(subtensor, "get_all_revealed_commitments"):
         bt.logging.warning(
@@ -210,7 +282,14 @@ async def load_chain_submissions(
         if not hotkey_commits:
             continue
         try:
-            block, commit_data = hotkey_commits[-1]
+            sorted_commits = _sorted_hotkey_commits(hotkey_commits)
+            if not sorted_commits:
+                continue
+            block, commit_data = sorted_commits[0]
+            if len(sorted_commits) > 1:
+                bt.logging.warning(
+                    f"Ignoring {len(sorted_commits) - 1} replacement commitment(s) for hotkey {hotkey}; miner submissions are permanent."
+                )
             submission = _coerce_submission(
                 raw=commit_data,
                 hotkey=hotkey,
