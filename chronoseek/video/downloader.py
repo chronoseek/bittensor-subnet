@@ -422,7 +422,8 @@ class VideoDownloader:
                         "YouTube blocked this download (bot check). Export cookies from a "
                         "logged-in browser and set "
                         f"{cls._ENV_YTDLP_COOKIES_FILE} to the cookies.txt path, or set "
-                        f"{cls._ENV_YTDLP_COOKIES_BROWSER} (default: chrome:Default). See "
+                        f"{cls._ENV_YTDLP_COOKIES_BROWSER} explicitly, for example "
+                        "chrome:Default on a machine with a readable Chrome profile. See "
                         "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
                     )
                 else:

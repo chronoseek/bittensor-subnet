@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
 from pathlib import Path
 
 import pytest
 
 from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.video.downloader import VideoDownloader
-from live_helpers import env_bool, env_value, require_live
+from live_helpers import env_value, require_live
 
 
 pytestmark = pytest.mark.live

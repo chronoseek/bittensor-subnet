@@ -26,6 +26,22 @@ Standard unit tests live under `tests/unit/`. Default pytest discovery is config
 poetry run pytest tests/unit
 ```
 
+## Local Verification Scripts
+
+Inspect hardened validator task generation without querying miners:
+
+```bash
+poetry run python scripts/verify_hardened_task_generation.py --use-smoke-dataset --no-require-accessible-videos
+```
+
+Use real ActivityNet/Hippius configuration by omitting `--use-smoke-dataset` and adding `--upload-to-hippius` when you want to test the public S3 upload path. The script prints the original source task, generated `ValidationTask`, miner-facing request, and local artifact paths.
+
+Run the local reference miner retrieval pipeline against a sampled or custom task:
+
+```bash
+poetry run python scripts/verify_miner_retrieval.py
+```
+
 ## Local Chutes Runtime Testing
 
 Local Chutes checks avoid production Chutes API calls and should be used before production build/deploy.
@@ -124,7 +140,7 @@ poetry run pytest tests/live/test_video_download.py::test_live_video_download -s
 
 ### Hippius Upload/Download
 
-This check is split into two explicit steps: ensure the bucket exists and has the public-read policy, upload with validator credentials, then download the public Hippius URL through the miner downloader path without Hippius credentials. Uploaded objects are kept by default. Set `CHRONOSEEK_LIVE_HIPPIUS_DELETE=1` only when cleanup is desired.
+This check is split into two explicit steps: ensure the bucket exists and has the public-read policy, upload with validator credentials, then download the public Hippius URL through the miner downloader path without Hippius credentials. Uploaded objects are kept for later inspection.
 
 ```bash
 CHRONOSEEK_LIVE_TESTS=1 \
@@ -215,7 +231,6 @@ poetry run pytest tests/live/test_vidaio.py::test_live_vidaio_compress -s
 | `CHRONOSEEK_LIVE_TESTS=1` | Enables live tests globally. |
 | `CHRONOSEEK_LIVE_VIDEO_DOWNLOAD=1` | Video downloader live check. |
 | `CHRONOSEEK_LIVE_HIPPIUS=1` | Hippius upload/download live check. |
-| `CHRONOSEEK_LIVE_HIPPIUS_DELETE=1` | Delete uploaded Hippius object after the check. |
 | `CHRONOSEEK_LIVE_CHUTES=1` | Chutes live checks. |
 | `CHRONOSEEK_LIVE_CHUTES_BUILD=1` | Chutes build check. |
 | `CHRONOSEEK_LIVE_CHUTES_DEPLOY=1` | Chutes deploy check. |

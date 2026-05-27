@@ -192,7 +192,7 @@ The runtime handoff mechanism inside DESA is Evaluation-Guided Runtime Promotion
 3. Resolve direct endpoints and `chute_slug` values to Chutes endpoints. `Implemented`
 4. Resolve `chute_id` through Chutes metadata when provider lookup is available. `Pending`
 5. Add synthetic validator routing to Chutes endpoints. `Implemented`
-6. Keep scoring and task generation unchanged. `Implemented`
+6. Keep scoring unchanged while enhancing task generation with hardened ActivityNet-derived clips for anti-gaming protection. `Implemented`
 7. Remove local validator serving and local miner serving paths. `Implemented`
 8. Add platform configuration for promoted serving backend selection.
 9. Add owner-admin promotion records and rollback selection.

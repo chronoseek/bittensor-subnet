@@ -199,13 +199,11 @@ def test_ytdlp_cookie_options_prefers_file_over_browser(monkeypatch, tmp_path):
     assert "cookiesfrombrowser" not in opts
 
 
-def test_ytdlp_cookie_options_uses_default_chrome_profile(monkeypatch):
+def test_ytdlp_cookie_options_is_empty_without_cookie_config(monkeypatch):
     monkeypatch.delenv("YTDLP_COOKIES", raising=False)
     monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
 
-    assert VideoDownloader._ytdlp_cookie_options() == {
-        "cookiesfrombrowser": ("chrome", "Default")
-    }
+    assert VideoDownloader._ytdlp_cookie_options() == {}
 
 
 def test_ytdlp_js_runtime_options_uses_configured_paths(monkeypatch, tmp_path):

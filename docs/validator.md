@@ -128,7 +128,7 @@ For restricted videos, configure cookies:
 | Variable | Notes |
 | --- | --- |
 | `YTDLP_COOKIES` | Absolute path to a Netscape `cookies.txt` file. |
-| `YTDLP_COOKIES_BROWSER` | Browser cookie source when no cookie file is configured. Defaults to `chrome:Default`; use only where that browser profile is available. |
+| `YTDLP_COOKIES_BROWSER` | Optional browser cookie source, for example `chrome:Default`, for local testing on machines where that browser profile is installed and readable. Empty by default. |
 | `YTDLP_DENO_PATH` | Deno path used by yt-dlp challenge solving. |
 | `YTDLP_NODE_PATH` | Optional Node.js path if you prefer Node for challenge solving. |
 
