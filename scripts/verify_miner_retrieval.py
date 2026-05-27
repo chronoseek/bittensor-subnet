@@ -1,4 +1,4 @@
-"""Run a local end-to-end smoke check for the ChronoSeek MVP pipeline.
+"""Run a local end-to-end smoke check for ChronoSeek miner retrieval.
 
 This script is intended for developer/operator verification, not validator
 scoring. It loads either the curated smoke-test task manifest or a supplied
@@ -42,7 +42,9 @@ DEFAULT_SMOKE_TEST_DATASET_PATH = str(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ChronoSeek end-to-end verifier")
+    parser = argparse.ArgumentParser(
+        description="ChronoSeek miner retrieval verifier"
+    )
     parser.add_argument(
         "--dataset-path",
         type=str,
@@ -123,7 +125,7 @@ def verify_protocol_response(request_id: str, results) -> VideoSearchResponse:
         request_id=request_id,
         status="completed",
         results=results,
-        miner_metadata={"source": "verify_mvp"},
+        miner_metadata={"source": "verify_miner_retrieval"},
     )
     print("Protocol response validation: ok")
     return response

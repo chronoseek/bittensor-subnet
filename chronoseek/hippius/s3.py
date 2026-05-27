@@ -259,10 +259,15 @@ class HippiusS3StorageClient:
         policy before any hardened task uploads.
         """
         self.ensure_bucket_exists()
-        self._client.set_bucket_policy(
-            self.config.bucket,
-            self.public_read_bucket_policy(),
-        )
+        try:
+            self._client.set_bucket_policy(
+                self.config.bucket,
+                self.public_read_bucket_policy(),
+            )
+        except S3Error as exc:
+            if exc.code == "PolicyAlreadyExists":
+                return
+            raise
 
     def public_url(self, object_key: str) -> str:
         base_url = (self.config.public_base_url or self.config.endpoint_url).rstrip("/")

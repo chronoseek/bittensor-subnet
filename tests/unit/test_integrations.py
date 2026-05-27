@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from minio.error import S3Error
 
 from chronoseek.hippius.s3 import (
     HippiusS3Config,
@@ -225,6 +226,46 @@ def test_hippius_storage_ensures_bucket_exists_and_public(monkeypatch):
                 }
             ],
         },
+    }
+
+
+def test_hippius_storage_accepts_existing_public_bucket_policy(monkeypatch):
+    captured = {}
+
+    class FakeMinio:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def bucket_exists(self, bucket_name):
+            captured["bucket_exists"] = bucket_name
+            return True
+
+        def set_bucket_policy(self, bucket_name, policy):
+            captured["set_bucket_policy"] = bucket_name
+            raise S3Error(
+                None,
+                "PolicyAlreadyExists",
+                "The bucket policy already exists and bucket is public",
+                None,
+                "request-id",
+                "hippius-s3",
+                bucket_name=bucket_name,
+            )
+
+    monkeypatch.setattr("chronoseek.hippius.s3.Minio", FakeMinio)
+
+    client = HippiusS3StorageClient(
+        HippiusS3Config(
+            bucket="chronoseek",
+            access_key_id="access",
+            secret_access_key="secret",
+        )
+    )
+    client.ensure_bucket_public()
+
+    assert captured == {
+        "bucket_exists": "chronoseek",
+        "set_bucket_policy": "chronoseek",
     }
 
 
