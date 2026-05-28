@@ -178,6 +178,22 @@ async def refresh_responsive_miners_from_submissions(
         netuid=netuid,
         metagraph=metagraph,
     )
+    duplicate_hotkeys = set()
+    get_duplicate_hotkeys = getattr(
+        submission_resolver,
+        "get_duplicate_hotkeys",
+        None,
+    )
+    if callable(get_duplicate_hotkeys):
+        raw_duplicate_hotkeys = get_duplicate_hotkeys()
+        if isinstance(raw_duplicate_hotkeys, (set, list, tuple)):
+            duplicate_hotkeys = set(raw_duplicate_hotkeys)
+    hotkeys = getattr(metagraph, "hotkeys", [])
+    disqualified_uids = {
+        int(uid)
+        for uid, hotkey in enumerate(hotkeys)
+        if str(hotkey) in duplicate_hotkeys
+    }
     endpoint_map = build_submission_endpoint_map(
         metagraph=metagraph,
         submissions_by_hotkey=submissions,
@@ -195,6 +211,7 @@ async def refresh_responsive_miners_from_submissions(
     with runtime.responsive_lock:
         runtime.responsive_uids = set(responsive_uids)
         runtime.miner_endpoints = dict(healthy_endpoint_map)
+        runtime.disqualified_uids = set(disqualified_uids)
         runtime.responsive_initialized = True
         runtime.responsive_last_refresh_at = refreshed_at
 
@@ -202,6 +219,7 @@ async def refresh_responsive_miners_from_submissions(
         "Submission metadata refresh completed | "
         f"metadata={len(endpoint_map)}/{len(getattr(metagraph, 'hotkeys', []))} | "
         f"responsive={len(responsive_uids)}/{len(getattr(metagraph, 'hotkeys', []))} | "
+        f"disqualified={len(disqualified_uids)} | "
         f"uids={sorted(responsive_uids)}"
     )
     return responsive_uids
@@ -217,6 +235,17 @@ def apply_responsive_miner_filter(
         if uid not in responsive_set:
             filtered_scores[uid] = 0.0
     return filtered_scores
+
+
+def apply_disqualified_miner_penalty(
+    scores: np.ndarray,
+    disqualified_uids: list[int] | set[int],
+) -> np.ndarray:
+    penalized_scores = np.array(scores, copy=True)
+    for uid in {int(uid) for uid in disqualified_uids}:
+        if 0 <= uid < len(penalized_scores):
+            penalized_scores[uid] = 0.0
+    return penalized_scores
 
 
 def build_emission_weights(
@@ -511,12 +540,17 @@ async def run_validator_loop(
                 candidate_uids = sorted(
                     uid for uid in runtime.responsive_uids if uid in endpoint_map
                 )
+                disqualified_uids = set(runtime.disqualified_uids)
 
             miner_endpoints = build_runtime_endpoints_from_map(
                 metagraph=metagraph,
                 endpoint_map=endpoint_map,
                 candidate_uids=candidate_uids,
             )
+            if disqualified_uids:
+                scores = apply_disqualified_miner_penalty(scores, disqualified_uids)
+                with runtime.score_lock:
+                    runtime.scores = np.array(scores, copy=True)
             scores = apply_responsive_miner_filter(scores, candidate_uids)
 
             if not candidate_uids:
@@ -1035,7 +1069,10 @@ def main():
             )
         )
         runtime.scores = apply_responsive_miner_filter(
-            runtime.scores,
+            apply_disqualified_miner_penalty(
+                runtime.scores,
+                runtime.disqualified_uids,
+            ),
             sorted(initial_responsive_uids),
         )
         bt.logging.info(

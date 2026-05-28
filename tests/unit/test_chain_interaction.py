@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from miner import main as miner_main
+from chronoseek.chain.submissions import PERMANENT_SUBMISSION_ERROR
 
 
 class TestChainInteraction(unittest.TestCase):
@@ -87,6 +88,47 @@ class TestChainInteraction(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         mock_subtensor.set_reveal_commitment.assert_not_called()
+
+    @patch("bittensor.Wallet")
+    @patch("bittensor.Subtensor")
+    @patch("bittensor.Metagraph")
+    def test_miner_rejects_second_submission_for_same_hotkey(
+        self,
+        mock_metagraph_cls,
+        mock_subtensor_cls,
+        mock_wallet_cls,
+    ):
+        mock_wallet = MagicMock()
+        mock_wallet.hotkey.ss58_address = "5FakeAddress"
+        mock_wallet_cls.return_value = mock_wallet
+
+        mock_subtensor = MagicMock()
+        mock_subtensor.network = "test"
+        mock_subtensor.get_all_revealed_commitments.return_value = {
+            "5FakeAddress": ((100, "{}"),)
+        }
+        mock_subtensor_cls.return_value = mock_subtensor
+
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["5FakeAddress"]
+        mock_metagraph_cls.return_value = mock_metagraph
+
+        test_args = [
+            "miner.py",
+            "--netuid",
+            "298",
+            "--chute-slug",
+            "replacement-runtime",
+        ]
+
+        with patch.object(sys, "argv", test_args), patch("builtins.print"), patch(
+            "bittensor.logging.error"
+        ) as mock_log_error:
+            exit_code = miner_main()
+
+        self.assertEqual(exit_code, 1)
+        mock_subtensor.set_reveal_commitment.assert_not_called()
+        mock_log_error.assert_any_call(PERMANENT_SUBMISSION_ERROR)
 
 if __name__ == "__main__":
     unittest.main()

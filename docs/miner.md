@@ -2,7 +2,7 @@
 
 This guide is for operators running a ChronoSeek miner.
 
-In `v2.0`, a miner does not serve a local HTTP endpoint from `miner.py`. A miner deploys a retrieval runtime to Chutes, then commits the runtime metadata on-chain. Validators read the latest valid submission for each registered hotkey and query the submitted Chutes runtime for synthetic scoring.
+In `v2.0`, a miner does not serve a local HTTP endpoint from `miner.py`. A miner deploys a retrieval runtime to Chutes, then commits the runtime metadata on-chain. Validators read one permanent submission for each registered hotkey and query the submitted Chutes runtime for synthetic scoring.
 
 ## Prerequisites
 
@@ -123,6 +123,8 @@ poetry run python miner.py \
   --chute-slug alice-chronoseek-runtime-<timestamp> \
   --artifact-revision <immutable-revision>
 ```
+
+Miner runtime submissions are permanent per hotkey. A hotkey can submit only once; to submit a different runtime later, register and use a new miner hotkey. Validators disqualify hotkeys with multiple revealed submissions and assign them zero score.
 
 You can also include Chutes and artifact metadata:
 

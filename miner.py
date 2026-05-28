@@ -15,6 +15,7 @@ import bittensor as bt
 from dotenv import load_dotenv
 
 from chronoseek.chain.submissions import (
+    DuplicateMinerSubmissionError,
     MinerSubmission,
     commit_miner_submission,
 )
@@ -166,13 +167,18 @@ async def submit_runtime_metadata(config) -> int:
     bt.logging.info(
         f"Committing ChronoSeek v2 runtime metadata for {wallet_hotkey} on netuid={config.netuid}"
     )
-    success = await commit_miner_submission(
-        subtensor=subtensor,
-        wallet=wallet,
-        netuid=int(config.netuid),
-        submission=submission,
-        blocks_until_reveal=int(config.blocks_until_reveal),
-    )
+    try:
+        success = await commit_miner_submission(
+            subtensor=subtensor,
+            wallet=wallet,
+            netuid=int(config.netuid),
+            submission=submission,
+            blocks_until_reveal=int(config.blocks_until_reveal),
+        )
+    except DuplicateMinerSubmissionError as exc:
+        bt.logging.error(str(exc))
+        return 1
+
     if not success:
         bt.logging.error("Chain rejected v2 miner submission commitment.")
         return 1
