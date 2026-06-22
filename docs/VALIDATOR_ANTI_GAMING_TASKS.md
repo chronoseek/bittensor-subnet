@@ -21,6 +21,8 @@ The target flow is:
    internal canaries for absent, hard-negative, or repeated-moment probes.
 9. The validator records report-only miner telemetry for score, latency,
    failures, task family, canaries, transforms, and repeated prediction shapes.
+10. The artifact manifest tracks active exposure counts so validators can limit
+    reuse of source videos, captions, query variants, and transform profiles.
 
 ActivityNet remains the source of truth. Original ActivityNet source URLs, source video IDs, raw captions, and ground-truth timestamps must not be sent to miners or logged at INFO level.
 
@@ -369,6 +371,8 @@ Tests:
   report-only until a weight aggregation policy explicitly consumes them.
 - Score aggregation exposes quality, reliability, consistency, and suspicion
   components with opt-in post-quality multiplier weights.
+- Active task exposure limits can block repeated source/caption/query/transform
+  use while previous artifacts remain live.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.

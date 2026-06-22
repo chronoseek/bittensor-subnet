@@ -447,6 +447,16 @@ def build_validator_task_generator(
                 if query.strip()
             )
             or HardenedTaskGeneratorConfig.absent_canary_queries,
+            max_active_tasks_per_source_video=int(
+                config.max_active_tasks_per_source_video
+            ),
+            max_active_tasks_per_source_caption=int(
+                config.max_active_tasks_per_source_caption
+            ),
+            max_active_tasks_per_query_variant=int(
+                config.max_active_tasks_per_query_variant
+            ),
+            max_active_tasks_per_transform=int(config.max_active_tasks_per_transform),
         ),
     )
     hardened_gen.cleanup_expired(force=True)
@@ -928,6 +938,30 @@ def get_config():
         type=str,
         default=os.getenv("ABSENT_CANARY_QUERIES", ""),
         help="Pipe-separated absent-query canary prompts. Defaults to built-in unlikely prompts.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-source-video",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO", "0")),
+        help="Maximum active hardened artifacts per source video. 0 disables the limit.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-source-caption",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION", "0")),
+        help="Maximum active hardened artifacts per source caption. 0 disables the limit.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-query-variant",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_QUERY_VARIANT", "0")),
+        help="Maximum active hardened artifacts per query variant. 0 disables the limit.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-transform",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_TRANSFORM", "0")),
+        help="Maximum active hardened artifacts per encoding transform. 0 disables the limit.",
     )
     parser.add_argument(
         "--validator-eval-top-k",

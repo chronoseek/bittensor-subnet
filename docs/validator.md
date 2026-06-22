@@ -154,6 +154,10 @@ For restricted videos, configure cookies:
 | `ENABLE_TASK_ENCODING_PROFILE_VARIANTS` | `1` | Enables compact/detail encoding variants for hardened clips. |
 | `CANARY_TASK_RATE` | `0` | Fraction of hardened tasks converted into internal canary tasks. |
 | `ABSENT_CANARY_QUERIES` | Empty | Optional pipe-separated absent-query canary prompts. |
+| `MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO` | `0` | Maximum active hardened artifacts per source video; `0` disables the limit. |
+| `MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION` | `0` | Maximum active hardened artifacts per source caption; `0` disables the limit. |
+| `MAX_ACTIVE_TASKS_PER_QUERY_VARIANT` | `0` | Maximum active hardened artifacts per query variant; `0` disables the limit. |
+| `MAX_ACTIVE_TASKS_PER_TRANSFORM` | `0` | Maximum active hardened artifacts per transform profile; `0` disables the limit. |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
 | `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
 | `SCORE_EMA_ALPHA` | `0.1` | EMA alpha used for instant miner quality scores. |
@@ -228,6 +232,14 @@ Canaries are internal validator probes sampled from hardened tasks at
 
 Timeouts, protocol errors, and failed requests are never rewarded as absent
 canaries; only a successful empty response can receive the absent-canary score.
+
+## Task Exposure Controls
+
+The artifact manifest records source video, source caption, query variant,
+transform profile, crop bucket, and task family for active generated clips.
+Validators can set `MAX_ACTIVE_TASKS_PER_*` limits to reduce repeated exposure
+while task artifacts remain active. The local hardened-task verifier prints an
+exposure summary so operators can inspect active task-bank freshness.
 
 ## Telemetry
 

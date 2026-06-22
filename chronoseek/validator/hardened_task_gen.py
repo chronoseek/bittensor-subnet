@@ -61,6 +61,10 @@ class HardenedTaskGeneratorConfig:
         "a person juggling five glowing green pineapples underwater",
         "the exact phrase chronoseek absent canary appears on screen",
     )
+    max_active_tasks_per_source_video: int = 0
+    max_active_tasks_per_source_caption: int = 0
+    max_active_tasks_per_query_variant: int = 0
+    max_active_tasks_per_transform: int = 0
 
 
 class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
@@ -243,6 +247,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
         }
 
     def _maybe_apply_canary(self, *, task: ValidationTask, sample, rng) -> ValidationTask:
+        del sample
         rate = max(0.0, min(1.0, float(self.config.canary_task_rate)))
         if rate <= 0.0 or rng.random() >= rate:
             return task
@@ -286,6 +291,56 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
         )
 
     @staticmethod
+    def _limit_exceeded(*, current_count: int, limit: int) -> bool:
+        return int(limit) > 0 and int(current_count) >= int(limit)
+
+    def _exposure_limit_exceeded(
+        self,
+        *,
+        now: float,
+        source_video_id: str,
+        source_caption_id: str,
+        query_variant_id: str,
+        transform_id: str,
+    ) -> bool:
+        checks = [
+            (
+                "source_video_id",
+                source_video_id,
+                self.config.max_active_tasks_per_source_video,
+            ),
+            (
+                "source_caption_id",
+                source_caption_id,
+                self.config.max_active_tasks_per_source_caption,
+            ),
+            (
+                "query_variant_id",
+                query_variant_id,
+                self.config.max_active_tasks_per_query_variant,
+            ),
+            (
+                "transform_id",
+                transform_id,
+                self.config.max_active_tasks_per_transform,
+            ),
+        ]
+        for field_name, value, limit in checks:
+            if not value or int(limit) <= 0:
+                continue
+            count = self.manifest.exposure_counts(field_name=field_name, now=now).get(
+                value,
+                0,
+            )
+            if self._limit_exceeded(current_count=count, limit=limit):
+                bt.logging.debug(
+                    "Skipping hardened task candidate due to exposure limit | "
+                    f"field={field_name} | value={value} | count={count} | limit={limit}"
+                )
+                return True
+        return False
+
+    @staticmethod
     def _remove_local_file(path: str | None) -> None:
         if not path:
             return
@@ -320,6 +375,14 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                 selected_profile = self._select_encoding_profile(rng=rng)
                 self._apply_encoding_profile(self.clipper, selected_profile)
                 self._apply_encoding_profile(self.compressor, selected_profile)
+                if self._exposure_limit_exceeded(
+                    now=now,
+                    source_video_id=sample.source_video_id,
+                    source_caption_id=sample.source_caption_id,
+                    query_variant_id=query_variant.variant_id,
+                    transform_id=selected_profile.name,
+                ):
+                    continue
                 task_seed = stable_hash(
                     self.validator_hotkey,
                     block,
@@ -389,8 +452,15 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                         encoding_profile=compression_result.profile_name,
                         created_at=now,
                         expires_at=expires_at,
+                        source_video_id=sample.source_video_id,
+                        source_caption_id=sample.source_caption_id,
+                        query_variant_id=query_variant.variant_id,
+                        crop_bucket=clip_result.crop_bucket,
+                        transform_id=selected_profile.name,
+                        task_family="hardened-activitynet",
                     )
                 )
+                exposure = self.manifest.exposure_summary(now=now)
                 bt.logging.info(
                     "Generated hardened validator task | "
                     f"task_id={task_id} | request_id=validation-{task_id} | "
@@ -398,7 +468,8 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                     f"query_variant={query_variant.variant_id} | "
                     f"gt_count={len(clip_result.crop_plan.shifted_ground_truths)} | "
                     f"transform={selected_profile.name} | "
-                    f"hard_negatives={len(hard_negative_ids)}"
+                    f"hard_negatives={len(hard_negative_ids)} | "
+                    f"active_artifacts={exposure['active_artifacts']}"
                 )
                 task = ValidationTask(
                     task_id=task_id,
@@ -424,7 +495,11 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                     hard_negative_count=len(hard_negative_ids),
                     hard_negative_source_caption_ids=hard_negative_ids,
                 )
-                return self._maybe_apply_canary(task=task, sample=sample, rng=rng)
+                task = self._maybe_apply_canary(task=task, sample=sample, rng=rng)
+                manifest_entry = self.manifest.entries.get(task_id)
+                if manifest_entry is not None and manifest_entry.task_family != task.task_family:
+                    self.manifest.add(replace(manifest_entry, task_family=task.task_family))
+                return task
             except Exception as exc:
                 self._remove_local_file(clip_path)
                 self._remove_local_file(compressed_path)

@@ -249,6 +249,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pipe-separated absent-query canary prompts.",
     )
     parser.add_argument(
+        "--max-active-tasks-per-source-video",
+        type=int,
+        default=env_int("MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO", 0),
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-source-caption",
+        type=int,
+        default=env_int("MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION", 0),
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-query-variant",
+        type=int,
+        default=env_int("MAX_ACTIVE_TASKS_PER_QUERY_VARIANT", 0),
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-transform",
+        type=int,
+        default=env_int("MAX_ACTIVE_TASKS_PER_TRANSFORM", 0),
+    )
+    parser.add_argument(
         "--use-vidaio",
         action="store_true",
         default=env_bool("VIDAIO_COMPRESSION_ENABLED", False),
@@ -452,6 +472,10 @@ def build_generator(args: argparse.Namespace):
                 if query.strip()
             )
             or HardenedTaskGeneratorConfig.absent_canary_queries,
+            max_active_tasks_per_source_video=args.max_active_tasks_per_source_video,
+            max_active_tasks_per_source_caption=args.max_active_tasks_per_source_caption,
+            max_active_tasks_per_query_variant=args.max_active_tasks_per_query_variant,
+            max_active_tasks_per_transform=args.max_active_tasks_per_transform,
         ),
     )
     return {
@@ -521,6 +545,7 @@ def main() -> int:
                 "adversarial_transforms": args.enable_adversarial_task_transforms,
                 "encoding_profile_variants": args.enable_task_encoding_profile_variants,
                 "canary_task_rate": args.canary_task_rate,
+                "exposure_summary": manifest.exposure_summary(now=time.time()),
                 "generated_at": iso_timestamp(time.time()),
             },
         )

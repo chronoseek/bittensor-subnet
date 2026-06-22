@@ -228,6 +228,34 @@ def test_artifact_manifest_records_active_hashes_and_cleans_expired(tmp_path):
     assert deleted_remote == ["task-clips/expired-task.mp4"]
 
 
+def test_artifact_manifest_exposure_counts_and_summary(tmp_path):
+    manifest = TaskArtifactManifest(tmp_path / "manifest.json")
+    now = time.time()
+    manifest.add(
+        ArtifactManifestEntry(
+            task_id="active-task",
+            object_key="task-clips/active-task.mp4",
+            public_url="https://public.example/active-task.mp4",
+            local_path=str(tmp_path / "active-task.mp4"),
+            source_task_hash="source-hash",
+            encoding_profile="h264-720p-v1",
+            created_at=now,
+            expires_at=now + 3600,
+            source_video_id="video-1",
+            source_caption_id="caption-1",
+            query_variant_id="private:caption-1:0",
+            crop_bucket="10-20",
+            transform_id="h264-720p-v1:base",
+            task_family="canary-absent",
+        )
+    )
+
+    assert manifest.exposure_counts(field_name="source_video_id", now=now) == {
+        "video-1": 1
+    }
+    assert manifest.exposure_summary(now=now)["task_families"] == 1
+
+
 class FakeClipper:
     def __init__(self, root: Path):
         self.root = root
@@ -446,6 +474,63 @@ def test_hardened_generator_can_emit_absent_canary_task(tmp_path):
     assert task.query == "absent verifier event"
     assert normalized.expects_empty_response is True
     assert normalized.canary_kind == "absent"
+    assert generator.manifest.entries[task.task_id].task_family == "canary-absent"
+
+
+def test_hardened_generator_respects_active_source_caption_limit(tmp_path):
+    manifest = TaskArtifactManifest(tmp_path / "manifest.json")
+    now = time.time()
+    manifest.add(
+        ArtifactManifestEntry(
+            task_id="active-task",
+            object_key="task-clips/active-task.mp4",
+            public_url="https://public.example/active-task.mp4",
+            local_path=str(tmp_path / "active-task.mp4"),
+            source_task_hash="source-hash",
+            encoding_profile="h264-720p-v1",
+            created_at=now,
+            expires_at=now + 3600,
+            source_video_id="video-1",
+            source_caption_id="caption-1",
+        )
+    )
+
+    class FixedSampler:
+        def sample(self, **kwargs):
+            from chronoseek.validator.task_sampler import SampledActivityNetMoment
+
+            return (
+                SampledActivityNetMoment(
+                    source_video_id="video-1",
+                    source_url="https://example.com/source.mp4",
+                    source_caption_id="caption-1",
+                    caption="raw caption",
+                    ground_truths=[(12, 15)],
+                ),
+                __import__("random").Random(1),
+            )
+
+    generator = HardenedActivityNetTaskGenerator(
+        sampler=FixedSampler(),
+        query_selector=QueryVariantSelector(None),
+        clipper=FakeClipper(tmp_path),
+        compressor=FakeCompressor(),
+        storage=FakeStorage(),
+        manifest=manifest,
+        validator_hotkey="hotkey",
+        current_block_provider=lambda: 123,
+        config=HardenedTaskGeneratorConfig(
+            max_generation_attempts=1,
+            max_active_tasks_per_source_caption=1,
+        ),
+    )
+
+    try:
+        generator.generate_task()
+    except RuntimeError as exc:
+        assert "Unable to generate hardened validator task" in str(exc)
+    else:
+        raise AssertionError("source caption exposure limit should block generation")
 
 
 def test_run_step_accepts_validation_task_and_sends_top_k_one(monkeypatch):

@@ -15,6 +15,12 @@ class ArtifactManifestEntry:
     encoding_profile: str
     created_at: float
     expires_at: float
+    source_video_id: str = ""
+    source_caption_id: str = ""
+    query_variant_id: str = ""
+    crop_bucket: str = ""
+    transform_id: str = ""
+    task_family: str = "hardened-activitynet"
 
 
 class TaskArtifactManifest:
@@ -56,6 +62,57 @@ class TaskArtifactManifest:
             entry.source_task_hash
             for entry in self.entries.values()
             if entry.expires_at > current_time
+        }
+
+    def active_entries(self, now: float | None = None) -> list[ArtifactManifestEntry]:
+        current_time = time.time() if now is None else float(now)
+        return [
+            entry
+            for entry in self.entries.values()
+            if entry.expires_at > current_time
+        ]
+
+    def exposure_counts(
+        self,
+        *,
+        field_name: str,
+        now: float | None = None,
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for entry in self.active_entries(now=now):
+            value = str(getattr(entry, field_name, "") or "")
+            if not value:
+                continue
+            counts[value] = counts.get(value, 0) + 1
+        return counts
+
+    def exposure_summary(self, now: float | None = None) -> dict[str, int]:
+        active_entries = self.active_entries(now=now)
+        return {
+            "active_artifacts": len(active_entries),
+            "source_videos": len(
+                {entry.source_video_id for entry in active_entries if entry.source_video_id}
+            ),
+            "source_captions": len(
+                {
+                    entry.source_caption_id
+                    for entry in active_entries
+                    if entry.source_caption_id
+                }
+            ),
+            "query_variants": len(
+                {
+                    entry.query_variant_id
+                    for entry in active_entries
+                    if entry.query_variant_id
+                }
+            ),
+            "transforms": len(
+                {entry.transform_id for entry in active_entries if entry.transform_id}
+            ),
+            "task_families": len(
+                {entry.task_family for entry in active_entries if entry.task_family}
+            ),
         }
 
     def cleanup_expired(
