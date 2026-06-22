@@ -326,7 +326,11 @@ Tests:
 
 ### 9. Harden Scoring
 
-- Keep continuous IoU as the primary score.
+- Keep continuous IoU as the primary score, but dampen it with interval-shape
+  penalties so loose overlapping windows do not score as well as tight
+  localizations.
+- Apply boundary, center, and duration alignment penalties after selecting the
+  best valid top-1 prediction/ground-truth pair.
 - Score only the first valid result.
 - Ignore confidence for validator weights.
 - Zero invalid responses:
@@ -344,6 +348,10 @@ Tests:
 Tests:
 
 - Correct clip-local prediction scores by IoU.
+- Broad center-aligned intervals score below tighter intervals with comparable
+  overlap.
+- Center-missed intervals score below center-aligned intervals with comparable
+  overlap.
 - Original ActivityNet timestamp does not score correctly after clipping.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.

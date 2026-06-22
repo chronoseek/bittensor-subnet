@@ -180,6 +180,21 @@ For restricted videos, configure cookies:
 ## Operational Notes
 
 - Do not send original ActivityNet source URLs, source video IDs, raw captions, or ground-truth timestamps to miners.
+
+## Interval Scoring
+
+Validator scoring is still accuracy-first and protocol-compatible, but the
+default score is now shape-aware interval quality rather than raw IoU alone.
+The best valid top-1 prediction/ground-truth pair is scored by IoU, then
+dampened for sloppy interval shape:
+
+- center alignment: prediction center should land near the target moment center
+- boundary alignment: start and end should closely match the ground truth
+- duration alignment: broad windows are penalized even when they overlap
+
+Malformed intervals, empty responses, timeouts, out-of-clip intervals, and
+oversized intervals still score zero. Extra results beyond the validator's
+configured top-k do not improve the score.
 - Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
 - Hardened task generation increases validator-side CPU, disk, network, and storage usage.
 - See [Owner and development guide](./development.md) for live module checks.
