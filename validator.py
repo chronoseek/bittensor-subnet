@@ -23,6 +23,10 @@ from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
 from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
+from chronoseek.validator.aggregation import (
+    ScoreAggregationConfig,
+    update_miner_score,
+)
 from chronoseek.validator.clipper import FfmpegClipper
 from chronoseek.validator.compression import (
     CompositeCompressor,
@@ -592,11 +596,37 @@ async def run_validator_loop(
                 telemetry_recorder=runtime.telemetry.record,
             )
 
-            # Update moving average scores
-            alpha = 0.1
+            # Update aggregate scores. Component weights default to zero, which
+            # preserves the historical quality-only EMA behavior.
+            aggregation_config = ScoreAggregationConfig(
+                alpha=get_config_float(config, "score_ema_alpha", 0.1),
+                reliability_weight=get_config_float(
+                    config,
+                    "score_reliability_weight",
+                    0.0,
+                ),
+                consistency_weight=get_config_float(
+                    config,
+                    "score_consistency_weight",
+                    0.0,
+                ),
+                suspicion_weight=get_config_float(
+                    config,
+                    "score_suspicion_weight",
+                    0.0,
+                ),
+            )
+            aggregate_components = {}
             for uid, score in step_scores:
                 if uid < len(scores):
-                    scores[uid] = alpha * score + (1 - alpha) * scores[uid]
+                    components = update_miner_score(
+                        previous_score=float(scores[uid]),
+                        instant_score=float(score),
+                        telemetry_summary=runtime.telemetry.summaries.get(int(uid)),
+                        config=aggregation_config,
+                    )
+                    scores[uid] = components.final_score
+                    aggregate_components[int(uid)] = components
             with runtime.score_lock:
                 runtime.scores = np.array(scores, copy=True)
 
@@ -623,6 +653,17 @@ async def run_validator_loop(
                     for uid, score in ranked_moving_scores[:10]
                 )
                 bt.logging.info(f"Moving scores: {moving_summary}")
+                if aggregate_components:
+                    component_summary = ", ".join(
+                        (
+                            f"UID {uid}: quality={components.quality_score:.4f} "
+                            f"reliability={components.reliability_score:.2f} "
+                            f"consistency={components.consistency_score:.2f} "
+                            f"suspicion={components.suspicion_score:.2f}"
+                        )
+                        for uid, components in sorted(aggregate_components.items())[:10]
+                    )
+                    bt.logging.info(f"Score components: {component_summary}")
 
                 telemetry_path = get_config_str(
                     config,
@@ -893,6 +934,30 @@ def get_config():
         type=int,
         default=int(os.getenv("VALIDATOR_EVAL_TOP_K", "1")),
         help="Number of miner results requested and scored for synthetic evaluation.",
+    )
+    parser.add_argument(
+        "--score-ema-alpha",
+        type=float,
+        default=float(os.getenv("SCORE_EMA_ALPHA", "0.1")),
+        help="EMA alpha used for instant miner quality scores.",
+    )
+    parser.add_argument(
+        "--score-reliability-weight",
+        type=float,
+        default=float(os.getenv("SCORE_RELIABILITY_WEIGHT", "0")),
+        help="Optional reliability multiplier weight applied after quality scoring.",
+    )
+    parser.add_argument(
+        "--score-consistency-weight",
+        type=float,
+        default=float(os.getenv("SCORE_CONSISTENCY_WEIGHT", "0")),
+        help="Optional consistency multiplier weight applied after quality scoring.",
+    )
+    parser.add_argument(
+        "--score-suspicion-weight",
+        type=float,
+        default=float(os.getenv("SCORE_SUSPICION_WEIGHT", "0")),
+        help="Optional suspicion multiplier weight applied after quality scoring.",
     )
     parser.add_argument(
         "--task-max-prediction-duration-seconds",

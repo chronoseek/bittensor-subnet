@@ -367,6 +367,8 @@ Tests:
   timeouts, protocol errors, or ordinary empty responses.
 - Miner telemetry summaries and suspicion flags are deterministic and
   report-only until a weight aggregation policy explicitly consumes them.
+- Score aggregation exposes quality, reliability, consistency, and suspicion
+  components with opt-in post-quality multiplier weights.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.

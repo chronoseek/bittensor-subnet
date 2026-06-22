@@ -1,4 +1,5 @@
 import json
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -38,6 +39,7 @@ class MinerTelemetrySummary:
     failures: int = 0
     timeouts: int = 0
     total_score: float = 0.0
+    total_score_squared: float = 0.0
     total_latency: float = 0.0
     canary_attempts: int = 0
     canary_score: float = 0.0
@@ -46,7 +48,9 @@ class MinerTelemetrySummary:
 
     def record(self, event: MinerTelemetryEvent) -> None:
         self.attempts += 1
-        self.total_score += float(event.score)
+        score = float(event.score)
+        self.total_score += score
+        self.total_score_squared += score * score
         self.total_latency += max(0.0, float(event.latency))
         if event.failed:
             self.failures += 1
@@ -66,6 +70,14 @@ class MinerTelemetrySummary:
     @property
     def average_score(self) -> float:
         return self.total_score / self.attempts if self.attempts else 0.0
+
+    @property
+    def score_stddev(self) -> float:
+        if self.attempts <= 1:
+            return 0.0
+        mean = self.average_score
+        variance = max(0.0, (self.total_score_squared / self.attempts) - (mean * mean))
+        return math.sqrt(variance)
 
     @property
     def average_latency(self) -> float:
@@ -112,6 +124,7 @@ class MinerTelemetrySummary:
             "failures": self.failures,
             "timeouts": self.timeouts,
             "average_score": self.average_score,
+            "score_stddev": self.score_stddev,
             "average_latency": self.average_latency,
             "error_rate": self.error_rate,
             "timeout_rate": self.timeout_rate,

@@ -156,6 +156,10 @@ For restricted videos, configure cookies:
 | `ABSENT_CANARY_QUERIES` | Empty | Optional pipe-separated absent-query canary prompts. |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
 | `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
+| `SCORE_EMA_ALPHA` | `0.1` | EMA alpha used for instant miner quality scores. |
+| `SCORE_RELIABILITY_WEIGHT` | `0` | Optional post-quality reliability multiplier weight. |
+| `SCORE_CONSISTENCY_WEIGHT` | `0` | Optional post-quality consistency multiplier weight. |
+| `SCORE_SUSPICION_WEIGHT` | `0` | Optional post-quality suspicion multiplier weight. |
 | `MINER_REQUEST_TIMEOUT_SECONDS` | `150` | Per-miner `/search` timeout. |
 | `MINER_SUBMISSION_CACHE_TTL_SECONDS` | `300` | Chain submission cache TTL. |
 | `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS` | `60` | Miner submission refresh interval. |
@@ -232,3 +236,12 @@ to `VALIDATOR_TELEMETRY_PATH`. The snapshot includes per-miner score, latency,
 failure, timeout, task-family, canary, hard-negative, and repeated-duration
 signals. Suspicion flags are logged for visibility but do not affect weights
 until an aggregation policy explicitly consumes them.
+
+## Score Aggregation
+
+The validator now computes explicit quality, reliability, consistency, and
+suspicion components before updating moving scores. By default only the quality
+EMA is active, matching the previous `alpha = 0.1` behavior. Setting
+`SCORE_RELIABILITY_WEIGHT`, `SCORE_CONSISTENCY_WEIGHT`, or
+`SCORE_SUSPICION_WEIGHT` above zero turns on post-quality multipliers based on
+the telemetry summary for each miner.
