@@ -1,9 +1,11 @@
 import unittest
 from chronoseek.scoring import (
+    LatencyScoringConfig,
     STRICT_IOU_THRESHOLD,
     PURE_IOU_SCORING,
     best_iou,
     calculate_iou,
+    calculate_latency_multiplier,
     interval_quality_score,
     passes_strict_iou,
     score_response,
@@ -109,6 +111,50 @@ class TestScoring(unittest.TestCase):
             0.0,
         )
         self.assertEqual(score_response([], [], 0.1), 0.0)
+
+    def test_latency_multiplier_is_optional_and_gentle(self):
+        disabled = LatencyScoringConfig(enabled=False)
+        enabled = LatencyScoringConfig(
+            enabled=True,
+            grace_seconds=10.0,
+            timeout_seconds=100.0,
+            min_multiplier=0.8,
+        )
+
+        self.assertEqual(calculate_latency_multiplier(100.0, config=disabled), 1.0)
+        self.assertEqual(calculate_latency_multiplier(5.0, config=enabled), 1.0)
+        self.assertEqual(calculate_latency_multiplier(100.0, config=enabled), 0.8)
+        self.assertGreater(calculate_latency_multiplier(55.0, config=enabled), 0.8)
+
+    def test_latency_multiplier_preserves_quality_ordering(self):
+        latency_config = LatencyScoringConfig(
+            enabled=True,
+            grace_seconds=0.0,
+            timeout_seconds=100.0,
+            min_multiplier=0.85,
+        )
+        slow_perfect = [
+            VideoSearchResult(start=10.0, end=20.0, confidence=0.9),
+        ]
+        fast_poor = [
+            VideoSearchResult(start=0.0, end=12.0, confidence=0.9),
+        ]
+
+        slow_score = score_response(
+            slow_perfect,
+            (10.0, 20.0),
+            100.0,
+            latency_scoring_config=latency_config,
+        )
+        fast_score = score_response(
+            fast_poor,
+            (10.0, 20.0),
+            0.1,
+            latency_scoring_config=latency_config,
+        )
+
+        self.assertEqual(score_response([], (10.0, 20.0), 0.1), 0.0)
+        self.assertGreater(slow_score, fast_score)
 
     def test_strict_threshold_helper(self):
         self.assertTrue(passes_strict_iou(STRICT_IOU_THRESHOLD))

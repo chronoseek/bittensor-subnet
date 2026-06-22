@@ -160,6 +160,9 @@ For restricted videos, configure cookies:
 | `MAX_ACTIVE_TASKS_PER_TRANSFORM` | `0` | Maximum active hardened artifacts per transform profile; `0` disables the limit. |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
 | `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
+| `ENABLE_LATENCY_MULTIPLIER` | `0` | Applies a gentle post-quality latency multiplier when enabled. |
+| `LATENCY_GRACE_SECONDS` | `30` | Latency before the optional multiplier begins decaying. |
+| `LATENCY_MIN_MULTIPLIER` | `0.85` | Lowest optional multiplier near the miner request timeout. |
 | `SCORE_EMA_ALPHA` | `0.1` | EMA alpha used for instant miner quality scores. |
 | `SCORE_RELIABILITY_WEIGHT` | `0` | Optional post-quality reliability multiplier weight. |
 | `SCORE_CONSISTENCY_WEIGHT` | `0` | Optional post-quality consistency multiplier weight. |
@@ -211,6 +214,12 @@ dampened for sloppy interval shape:
 Malformed intervals, empty responses, timeouts, out-of-clip intervals, and
 oversized intervals still score zero. Extra results beyond the validator's
 configured top-k do not improve the score.
+
+When `ENABLE_LATENCY_MULTIPLIER=1`, the interval quality score is multiplied by
+a gentle latency factor. The multiplier is `1.0` through
+`LATENCY_GRACE_SECONDS`, then decays toward `LATENCY_MIN_MULTIPLIER` near
+`MINER_REQUEST_TIMEOUT_SECONDS`. A zero-quality response remains zero
+regardless of latency.
 
 ## Adversarial Task Transforms
 

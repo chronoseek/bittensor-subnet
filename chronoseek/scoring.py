@@ -30,6 +30,17 @@ DEFAULT_INTERVAL_SCORING = IntervalScoringConfig()
 PURE_IOU_SCORING = IntervalScoringConfig(enabled=False)
 
 
+@dataclass(frozen=True)
+class LatencyScoringConfig:
+    enabled: bool = False
+    grace_seconds: float = 30.0
+    timeout_seconds: float = 150.0
+    min_multiplier: float = 0.85
+
+
+DEFAULT_LATENCY_SCORING = LatencyScoringConfig()
+
+
 def calculate_iou(
     pred_start: float, pred_end: float, gt_start: float, gt_end: float
 ) -> float:
@@ -180,6 +191,34 @@ def best_interval_quality(
     return max_score
 
 
+def calculate_latency_multiplier(
+    latency: float,
+    *,
+    config: LatencyScoringConfig = DEFAULT_LATENCY_SCORING,
+) -> float:
+    if not config.enabled:
+        return 1.0
+
+    try:
+        latency_value = float(latency)
+    except (TypeError, ValueError):
+        latency_value = float("inf")
+
+    min_multiplier = max(0.0, min(1.0, float(config.min_multiplier)))
+    if not math.isfinite(latency_value) or latency_value < 0:
+        return min_multiplier
+
+    grace_seconds = max(0.0, float(config.grace_seconds))
+    timeout_seconds = max(grace_seconds, float(config.timeout_seconds))
+    if latency_value <= grace_seconds:
+        return 1.0
+    if timeout_seconds <= grace_seconds:
+        return min_multiplier
+
+    progress = min(1.0, (latency_value - grace_seconds) / (timeout_seconds - grace_seconds))
+    return max(min_multiplier, 1.0 - (progress * (1.0 - min_multiplier)))
+
+
 def _ground_truth_list(
     ground_truth: GroundTruthInterval | GroundTruthIntervals,
 ) -> list[GroundTruthInterval]:
@@ -260,13 +299,18 @@ def score_response(
     score_top_k: int | None = None,
     interval_scoring_config: IntervalScoringConfig = DEFAULT_INTERVAL_SCORING,
     expects_empty_response: bool = False,
+    latency_scoring_config: LatencyScoringConfig = DEFAULT_LATENCY_SCORING,
 ) -> float:
     """
     Score a miner's response using the best interval quality across predictions and ground truths.
     This returns a continuous value in [0, 1].
     """
     if expects_empty_response:
-        return 1.0 if not predictions else 0.0
+        base_score = 1.0 if not predictions else 0.0
+        return base_score * calculate_latency_multiplier(
+            latency,
+            config=latency_scoring_config,
+        )
 
     if not predictions:
         return 0.0
@@ -282,10 +326,14 @@ def score_response(
     if not filtered_predictions:
         return 0.0
 
-    return best_interval_quality(
+    quality_score = best_interval_quality(
         filtered_predictions,
         ground_truths,
         config=interval_scoring_config,
+    )
+    return quality_score * calculate_latency_multiplier(
+        latency,
+        config=latency_scoring_config,
     )
 
 

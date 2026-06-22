@@ -14,7 +14,7 @@ from chronoseek.protocol_models import (
     VideoSearchRequest,
     VideoSearchResponse,
 )
-from chronoseek.scoring import score_response
+from chronoseek.scoring import LatencyScoringConfig, score_response
 from chronoseek.epistula import generate_header
 from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
 from chronoseek.validator.task_models import normalize_generated_task
@@ -150,6 +150,7 @@ async def query_uid(
     canary_kind: str | None = None,
     transform_id: str | None = None,
     hard_negative_count: int = 0,
+    latency_scoring_config: LatencyScoringConfig | None = None,
     telemetry_recorder=None,
 ) -> Tuple[int, float]:
     async with semaphore:
@@ -172,11 +173,19 @@ async def query_uid(
 
         if not resp.results:
             if expects_empty_response and result.failure is None:
+                score = score_response(
+                    [],
+                    [],
+                    latency,
+                    expects_empty_response=True,
+                    latency_scoring_config=latency_scoring_config
+                    or LatencyScoringConfig(),
+                )
                 if telemetry_recorder is not None:
                     telemetry_recorder(
                         MinerTelemetryEvent(
                             uid=int(uid),
-                            score=1.0,
+                            score=score,
                             latency=latency,
                             task_family=task_family,
                             canary_kind=canary_kind,
@@ -187,9 +196,9 @@ async def query_uid(
                 bt.logging.success(
                     f"[UID {uid}] Empty canary response accepted | "
                     f"Request: {request_model.request_id} | "
-                    f"Latency: {latency:.2f}s | Score: 1.0000"
+                    f"Latency: {latency:.2f}s | Score: {score:.4f}"
                 )
-                return int(uid), 1.0
+                return int(uid), score
 
             failure_suffix = ""
             if result.failure is not None:
@@ -239,6 +248,7 @@ async def query_uid(
             max_prediction_duration_seconds=max_prediction_duration_seconds,
             score_top_k=1,
             expects_empty_response=expects_empty_response,
+            latency_scoring_config=latency_scoring_config or LatencyScoringConfig(),
         )
         result = resp.results[0]
         res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
@@ -272,6 +282,7 @@ async def run_step(
     provider_headers: dict[str, str] | None = None,
     validator_eval_top_k: int = 1,
     max_prediction_duration_seconds: float = 60.0,
+    latency_scoring_config: LatencyScoringConfig | None = None,
     telemetry_recorder=None,
 ) -> List[Tuple[int, float]]:
     """
@@ -375,6 +386,7 @@ async def run_step(
                 canary_kind=normalized_task.canary_kind,
                 transform_id=normalized_task.transform_id,
                 hard_negative_count=normalized_task.hard_negative_count,
+                latency_scoring_config=latency_scoring_config,
                 telemetry_recorder=telemetry_recorder,
             )
         )

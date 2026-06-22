@@ -21,6 +21,7 @@ load_dotenv()
 
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.scoring import LatencyScoringConfig
 from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
 from chronoseek.validator.aggregation import (
@@ -603,6 +604,20 @@ async def run_validator_loop(
                 max_prediction_duration_seconds=float(
                     config.task_max_prediction_duration_seconds
                 ),
+                latency_scoring_config=LatencyScoringConfig(
+                    enabled=get_config_bool(config, "enable_latency_multiplier", False),
+                    grace_seconds=get_config_float(
+                        config,
+                        "latency_grace_seconds",
+                        30.0,
+                    ),
+                    timeout_seconds=float(config.miner_request_timeout_seconds),
+                    min_multiplier=get_config_float(
+                        config,
+                        "latency_min_multiplier",
+                        0.85,
+                    ),
+                ),
                 telemetry_recorder=runtime.telemetry.record,
             )
 
@@ -998,6 +1013,24 @@ def get_config():
         type=float,
         default=float(os.getenv("TASK_MAX_PREDICTION_DURATION_SECONDS", "60")),
         help="Maximum scored miner interval duration unless the ground-truth interval is longer.",
+    )
+    parser.add_argument(
+        "--enable-latency-multiplier",
+        action="store_true",
+        default=env_bool("ENABLE_LATENCY_MULTIPLIER", False),
+        help="Apply a gentle latency multiplier after interval quality scoring.",
+    )
+    parser.add_argument(
+        "--latency-grace-seconds",
+        type=float,
+        default=float(os.getenv("LATENCY_GRACE_SECONDS", "30")),
+        help="Latency before the optional multiplier begins decaying.",
+    )
+    parser.add_argument(
+        "--latency-min-multiplier",
+        type=float,
+        default=float(os.getenv("LATENCY_MIN_MULTIPLIER", "0.85")),
+        help="Lowest multiplier applied near the miner request timeout.",
     )
     parser.add_argument(
         "--hippius-s3-endpoint-url",

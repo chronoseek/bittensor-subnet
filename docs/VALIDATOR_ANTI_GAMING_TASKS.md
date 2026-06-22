@@ -339,6 +339,8 @@ Tests:
   localizations.
 - Apply boundary, center, and duration alignment penalties after selecting the
   best valid top-1 prediction/ground-truth pair.
+- Optionally apply a gentle latency multiplier after quality scoring; fast bad
+  answers must not outrank accurate answers by speed alone.
 - Score only the first valid result.
 - Ignore confidence for validator weights.
 - Zero invalid responses:
@@ -373,6 +375,8 @@ Tests:
   components with opt-in post-quality multiplier weights.
 - Active task exposure limits can block repeated source/caption/query/transform
   use while previous artifacts remain live.
+- Optional latency multipliers preserve zero scores and only dampen otherwise
+  valid quality scores.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.
