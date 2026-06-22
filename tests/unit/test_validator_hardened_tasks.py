@@ -172,6 +172,31 @@ def test_task_sampler_is_secret_seeded_and_respects_caption_cooldown():
         raise AssertionError("caption cooldown should block immediate replay")
 
 
+def test_task_sampler_collects_same_video_hard_negative_candidates():
+    sampler = ActivityNetTaskSampler(
+        [
+            {
+                "task_id": "video-1",
+                "video_url": "https://example.com/source.mp4",
+                "caption_intervals": {
+                    "person opens a door": [(12, 15)],
+                    "person closes a door": [(18, 20)],
+                },
+            }
+        ],
+        validator_hotkey="hotkey",
+        task_secret="secret",
+        video_cooldown_seconds=0,
+        caption_cooldown_seconds=0,
+    )
+
+    sample, _ = sampler.sample(block=100, nonce=1)
+
+    assert len(sample.hard_negatives) == 1
+    assert sample.hard_negatives[0].caption != sample.caption
+    assert sample.hard_negatives[0].ground_truths in ([(12.0, 15.0)], [(18.0, 20.0)])
+
+
 def test_artifact_manifest_records_active_hashes_and_cleans_expired(tmp_path):
     local_file = tmp_path / "artifact.mp4"
     local_file.write_bytes(b"video")
@@ -207,8 +232,10 @@ class FakeClipper:
     def __init__(self, root: Path):
         self.root = root
         self.encoding_profile = EncodingProfile()
+        self.calls = []
 
     def create_clip(self, **kwargs):
+        self.calls.append(kwargs)
         task_id = kwargs["task_id"]
         path = self.root / f"{task_id}.mp4"
         path.write_bytes(b"clip")
@@ -312,13 +339,23 @@ def test_hardened_cleanup_can_delete_remote_artifacts_when_enabled(tmp_path):
 
 def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
     variants_path = tmp_path / "variants.json"
-    variants_path.write_text(json.dumps({"raw caption": ["private query"]}))
+    variants_path.write_text(
+        json.dumps(
+            {
+                "raw caption": ["private query"],
+                "distractor caption": ["private distractor query"],
+            }
+        )
+    )
     sampler = ActivityNetTaskSampler(
         [
             {
                 "task_id": "video-1",
                 "video_url": "https://example.com/source.mp4",
-                "caption_intervals": {"raw caption": [(12, 15)]},
+                "caption_intervals": {
+                    "raw caption": [(12, 15)],
+                    "distractor caption": [(18, 20)],
+                },
             }
         ],
         validator_hotkey="hotkey",
@@ -328,10 +365,11 @@ def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
     )
     manifest = TaskArtifactManifest(tmp_path / "manifest.json")
     storage = FakeStorage()
+    clipper = FakeClipper(tmp_path)
     generator = HardenedActivityNetTaskGenerator(
         sampler=sampler,
         query_selector=QueryVariantSelector(str(variants_path)),
-        clipper=FakeClipper(tmp_path),
+        clipper=clipper,
         compressor=FakeCompressor(),
         storage=storage,
         manifest=manifest,
@@ -350,12 +388,17 @@ def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
     assert isinstance(task, ValidationTask)
     assert task.video_url.startswith("https://hippius.example/task-clips/")
     assert task.artifact_key == f"task-clips/{task.task_id}.mp4"
-    assert task.query == "private query"
+    assert task.query in {"private query", "private distractor query"}
     assert task.ground_truths == [(2.0, 5.0)]
     assert task.clip_duration == 15.0
     assert task.source_video_id == "video-1"
     assert storage.uploads[0][1] == task.artifact_key
     assert task.task_id in manifest.entries
+    assert clipper.calls[0]["hard_negative_intervals"]
+    assert task.transform_id.startswith("h264-720p-v1:")
+    assert task.transform_metadata["encoding_profile"] == task.transform_id
+    assert task.hard_negative_count == 1
+    assert len(task.hard_negative_source_caption_ids) == 1
 
 
 def test_run_step_accepts_validation_task_and_sends_top_k_one(monkeypatch):

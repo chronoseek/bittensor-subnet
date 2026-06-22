@@ -426,6 +426,16 @@ def build_validator_task_generator(
                 "task_delete_remote_artifacts",
                 False,
             ),
+            enable_adversarial_transforms=get_config_bool(
+                config,
+                "enable_adversarial_task_transforms",
+                True,
+            ),
+            enable_encoding_profile_variants=get_config_bool(
+                config,
+                "enable_task_encoding_profile_variants",
+                True,
+            ),
         ),
     )
     hardened_gen.cleanup_expired(force=True)
@@ -815,6 +825,30 @@ def get_config():
         type=str,
         default=os.getenv("TASK_CLIP_AUDIO_BITRATE", "96k"),
         help="Generated task clip audio bitrate.",
+    )
+    parser.add_argument(
+        "--enable-adversarial-task-transforms",
+        action="store_true",
+        default=env_bool("ENABLE_ADVERSARIAL_TASK_TRANSFORMS", True),
+        help="Enable randomized hardened task transforms such as context and encoding variation.",
+    )
+    parser.add_argument(
+        "--disable-adversarial-task-transforms",
+        action="store_false",
+        dest="enable_adversarial_task_transforms",
+        help="Disable randomized hardened task transforms.",
+    )
+    parser.add_argument(
+        "--enable-task-encoding-profile-variants",
+        action="store_true",
+        default=env_bool("ENABLE_TASK_ENCODING_PROFILE_VARIANTS", True),
+        help="Enable randomized encoding profile variants for hardened task clips.",
+    )
+    parser.add_argument(
+        "--disable-task-encoding-profile-variants",
+        action="store_false",
+        dest="enable_task_encoding_profile_variants",
+        help="Disable randomized encoding profile variants for hardened task clips.",
     )
     parser.add_argument(
         "--validator-eval-top-k",

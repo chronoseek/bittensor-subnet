@@ -10,8 +10,10 @@ The target flow is:
 
 1. The validator samples ActivityNet internally.
 2. The validator selects one caption group and its ground-truth intervals.
-3. The validator creates a private cropped clip around the target moment.
-4. The validator re-encodes/compresses the clip to strip metadata and reduce size.
+3. The validator creates a private cropped clip around the target moment, adding
+   same-video hard negatives when they fit inside the configured duration budget.
+4. The validator re-encodes/compresses the clip with a randomized transform
+   profile to strip metadata, vary resolution/bitrate, and reduce size.
 5. The validator uploads the task clip to Hippius public S3.
 6. The validator sends miners only the Hippius URL, query variant, request ID, protocol version, and `top_k=1`.
 7. The validator scores miner responses against clip-local shifted ground truths.
@@ -353,6 +355,10 @@ Tests:
 - Center-missed intervals score below center-aligned intervals with comparable
   overlap.
 - Original ActivityNet timestamp does not score correctly after clipping.
+- Same-video hard-negative candidates are tracked internally and can be included
+  in cropped task clips.
+- Randomized encoding transform IDs are recorded on internal tasks and included
+  in replay identity.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.

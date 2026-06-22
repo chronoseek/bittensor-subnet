@@ -150,6 +150,8 @@ For restricted videos, configure cookies:
 | `TASK_MIN_CLIP_DURATION_SECONDS` | `30` | Minimum generated clip duration. |
 | `TASK_MAX_CLIP_DURATION_SECONDS` | `180` | Maximum generated clip duration. |
 | `TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS` | `120` | Source download timeout for clipping. |
+| `ENABLE_ADVERSARIAL_TASK_TRANSFORMS` | `1` | Enables randomized context and encoding transforms for hardened tasks. |
+| `ENABLE_TASK_ENCODING_PROFILE_VARIANTS` | `1` | Enables compact/detail encoding variants for hardened clips. |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
 | `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
 | `MINER_REQUEST_TIMEOUT_SECONDS` | `150` | Per-miner `/search` timeout. |
@@ -180,6 +182,9 @@ For restricted videos, configure cookies:
 ## Operational Notes
 
 - Do not send original ActivityNet source URLs, source video IDs, raw captions, or ground-truth timestamps to miners.
+- Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
+- Hardened task generation increases validator-side CPU, disk, network, and storage usage.
+- See [Owner and development guide](./development.md) for live module checks.
 
 ## Interval Scoring
 
@@ -195,6 +200,11 @@ dampened for sloppy interval shape:
 Malformed intervals, empty responses, timeouts, out-of-clip intervals, and
 oversized intervals still score zero. Extra results beyond the validator's
 configured top-k do not improve the score.
-- Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
-- Hardened task generation increases validator-side CPU, disk, network, and storage usage.
-- See [Owner and development guide](./development.md) for live module checks.
+
+## Adversarial Task Transforms
+
+Hardened task generation can include same-video hard-negative moments in the
+clip when another annotated moment fits inside the configured maximum duration.
+The generator also records the selected encoding transform profile and context
+padding metadata on the internal `ValidationTask`. Miners still receive only
+the artifact URL, query, request ID, protocol version, and `top_k`.

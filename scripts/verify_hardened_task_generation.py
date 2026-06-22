@@ -214,6 +214,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("TASK_CLIP_AUDIO_BITRATE", "96k"),
     )
     parser.add_argument(
+        "--enable-adversarial-task-transforms",
+        action="store_true",
+        default=env_bool("ENABLE_ADVERSARIAL_TASK_TRANSFORMS", True),
+        help="Enable randomized hardened task transforms.",
+    )
+    parser.add_argument(
+        "--disable-adversarial-task-transforms",
+        action="store_false",
+        dest="enable_adversarial_task_transforms",
+        help="Disable randomized hardened task transforms.",
+    )
+    parser.add_argument(
+        "--enable-task-encoding-profile-variants",
+        action="store_true",
+        default=env_bool("ENABLE_TASK_ENCODING_PROFILE_VARIANTS", True),
+        help="Enable randomized encoding profile variants.",
+    )
+    parser.add_argument(
+        "--disable-task-encoding-profile-variants",
+        action="store_false",
+        dest="enable_task_encoding_profile_variants",
+        help="Disable randomized encoding profile variants.",
+    )
+    parser.add_argument(
         "--use-vidaio",
         action="store_true",
         default=env_bool("VIDAIO_COMPRESSION_ENABLED", False),
@@ -408,6 +432,8 @@ def build_generator(args: argparse.Namespace):
             cleanup_interval_seconds=0,
             max_generation_attempts=args.max_generation_attempts,
             delete_remote_artifacts=False,
+            enable_adversarial_transforms=args.enable_adversarial_task_transforms,
+            enable_encoding_profile_variants=args.enable_task_encoding_profile_variants,
         ),
     )
     return {
@@ -474,6 +500,8 @@ def main() -> int:
                 "ephemeral_secret_used": context["ephemeral_secret"],
                 "manifest_path": str(manifest.path),
                 "storage": "hippius" if args.upload_to_hippius else "local-dry-run",
+                "adversarial_transforms": args.enable_adversarial_task_transforms,
+                "encoding_profile_variants": args.enable_task_encoding_profile_variants,
                 "generated_at": iso_timestamp(time.time()),
             },
         )
