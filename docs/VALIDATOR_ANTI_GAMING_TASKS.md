@@ -19,6 +19,8 @@ The target flow is:
 7. The validator scores miner responses against clip-local shifted ground truths.
 8. At a configurable low rate, the validator converts hardened tasks into
    internal canaries for absent, hard-negative, or repeated-moment probes.
+9. The validator records report-only miner telemetry for score, latency,
+   failures, task family, canaries, transforms, and repeated prediction shapes.
 
 ActivityNet remains the source of truth. Original ActivityNet source URLs, source video IDs, raw captions, and ground-truth timestamps must not be sent to miners or logged at INFO level.
 
@@ -363,6 +365,8 @@ Tests:
   in replay identity.
 - Absent canaries can reward successful empty responses without rewarding
   timeouts, protocol errors, or ordinary empty responses.
+- Miner telemetry summaries and suspicion flags are deterministic and
+  report-only until a weight aggregation policy explicitly consumes them.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.

@@ -486,8 +486,9 @@ def test_run_step_accepts_validation_task_and_sends_top_k_one(monkeypatch):
     monkeypatch.setattr("chronoseek.validator.forward.query_miner", fake_query_miner)
 
     async def execute():
+        telemetry_events = []
         async with httpx.AsyncClient() as client:
-            return await run_step(
+            scores = await run_step(
                 StaticTaskGenerator(),
                 SimpleNamespace(uids=[0], hotkeys=["hotkey-1"]),
                 wallet=SimpleNamespace(),
@@ -501,15 +502,21 @@ def test_run_step_accepts_validation_task_and_sends_top_k_one(monkeypatch):
                 ],
                 validator_eval_top_k=1,
                 max_prediction_duration_seconds=60.0,
+                telemetry_recorder=telemetry_events.append,
             )
+        return scores, telemetry_events
 
-    scores = asyncio.run(execute())
+    scores, telemetry_events = asyncio.run(execute())
 
     assert scores == [(0, 1.0)]
     assert captured["request"].video_url == "https://hippius.example/task.mp4"
     assert captured["request"].query == "private query"
     assert captured["request"].top_k == 1
     assert captured["request"].request_id == "request-1"
+    assert telemetry_events[0].uid == 0
+    assert telemetry_events[0].score == 1.0
+    assert telemetry_events[0].task_family == "hardened-activitynet"
+    assert telemetry_events[0].top_start == 2.0
 
 
 def test_run_step_rewards_successful_empty_absent_canary_response(monkeypatch):

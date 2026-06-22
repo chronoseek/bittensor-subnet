@@ -4,6 +4,8 @@ from threading import Lock
 import bittensor as bt
 import numpy as np
 
+from chronoseek.validator.telemetry import ValidatorTelemetryState
+
 
 @dataclass
 class ValidatorRuntimeState:
@@ -20,3 +22,4 @@ class ValidatorRuntimeState:
     responsive_initialized: bool = False
     responsive_last_refresh_at: float | None = None
     last_metagraph_sync_block: int | None = None
+    telemetry: ValidatorTelemetryState = field(default_factory=ValidatorTelemetryState)

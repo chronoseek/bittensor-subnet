@@ -589,6 +589,7 @@ async def run_validator_loop(
                 max_prediction_duration_seconds=float(
                     config.task_max_prediction_duration_seconds
                 ),
+                telemetry_recorder=runtime.telemetry.record,
             )
 
             # Update moving average scores
@@ -622,6 +623,24 @@ async def run_validator_loop(
                     for uid, score in ranked_moving_scores[:10]
                 )
                 bt.logging.info(f"Moving scores: {moving_summary}")
+
+                telemetry_path = get_config_str(
+                    config,
+                    "validator_telemetry_path",
+                    "",
+                ).strip()
+                if telemetry_path:
+                    runtime.telemetry.save_json(telemetry_path)
+
+                telemetry_snapshot = runtime.telemetry.snapshot()
+                summary_items = telemetry_snapshot.get("summaries", {})
+                flagged = [
+                    (uid, payload.get("suspicion_flags", []))
+                    for uid, payload in summary_items.items()
+                    if payload.get("suspicion_flags")
+                ]
+                if flagged:
+                    bt.logging.warning(f"Telemetry suspicion flags: {flagged[:10]}")
 
             # --- 2. Set Weights ---
             blocks_since_last = current_block - last_weight_block
@@ -982,6 +1001,12 @@ def get_config():
         type=float,
         default=float(os.getenv("MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS", "10")),
         help="Per-runtime timeout for /health checks during responsive miner refresh.",
+    )
+    parser.add_argument(
+        "--validator-telemetry-path",
+        type=str,
+        default=os.getenv("VALIDATOR_TELEMETRY_PATH", ""),
+        help="Optional JSON path for validator miner behavior telemetry snapshots.",
     )
     parser.add_argument(
         "--chutes-base-domain",

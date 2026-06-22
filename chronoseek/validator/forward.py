@@ -18,6 +18,7 @@ from chronoseek.scoring import score_response
 from chronoseek.epistula import generate_header
 from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
 from chronoseek.validator.task_models import normalize_generated_task
+from chronoseek.validator.telemetry import MinerTelemetryEvent
 
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
@@ -145,6 +146,11 @@ async def query_uid(
     max_prediction_duration_seconds: float | None = None,
     extra_headers: dict[str, str] | None = None,
     expects_empty_response: bool = False,
+    task_family: str = "legacy-activitynet",
+    canary_kind: str | None = None,
+    transform_id: str | None = None,
+    hard_negative_count: int = 0,
+    telemetry_recorder=None,
 ) -> Tuple[int, float]:
     async with semaphore:
         uid = miner_endpoint.uid
@@ -166,6 +172,18 @@ async def query_uid(
 
         if not resp.results:
             if expects_empty_response and result.failure is None:
+                if telemetry_recorder is not None:
+                    telemetry_recorder(
+                        MinerTelemetryEvent(
+                            uid=int(uid),
+                            score=1.0,
+                            latency=latency,
+                            task_family=task_family,
+                            canary_kind=canary_kind,
+                            transform_id=transform_id,
+                            hard_negative_count=hard_negative_count,
+                        )
+                    )
                 bt.logging.success(
                     f"[UID {uid}] Empty canary response accepted | "
                     f"Request: {request_model.request_id} | "
@@ -186,6 +204,31 @@ async def query_uid(
             bt.logging.warning(
                 f"[UID {uid}] No results | Request: {request_model.request_id} | Latency: {latency:.2f}s | Score: 0.0000{failure_suffix}"
             )
+            if telemetry_recorder is not None:
+                telemetry_recorder(
+                    MinerTelemetryEvent(
+                        uid=int(uid),
+                        score=0.0,
+                        latency=latency,
+                        task_family=task_family,
+                        canary_kind=canary_kind,
+                        transform_id=transform_id,
+                        hard_negative_count=hard_negative_count,
+                        failure_kind=(
+                            result.failure.kind if result.failure is not None else None
+                        ),
+                        protocol_code=(
+                            result.failure.protocol_code
+                            if result.failure is not None
+                            else None
+                        ),
+                        status_code=(
+                            result.failure.status_code
+                            if result.failure is not None
+                            else None
+                        ),
+                    )
+                )
             return int(uid), 0.0
 
         score = score_response(
@@ -199,6 +242,20 @@ async def query_uid(
         )
         result = resp.results[0]
         res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
+        if telemetry_recorder is not None:
+            telemetry_recorder(
+                MinerTelemetryEvent(
+                    uid=int(uid),
+                    score=score,
+                    latency=latency,
+                    task_family=task_family,
+                    canary_kind=canary_kind,
+                    transform_id=transform_id,
+                    hard_negative_count=hard_negative_count,
+                    top_start=float(result.start),
+                    top_end=float(result.end),
+                )
+            )
         bt.logging.success(
             f"[UID {uid}] Request: {request_model.request_id} | Score: {score:.4f} | Latency: {latency:.2f}s | Result: {res_str}"
         )
@@ -215,6 +272,7 @@ async def run_step(
     provider_headers: dict[str, str] | None = None,
     validator_eval_top_k: int = 1,
     max_prediction_duration_seconds: float = 60.0,
+    telemetry_recorder=None,
 ) -> List[Tuple[int, float]]:
     """
     Run a single validation step:
@@ -264,6 +322,7 @@ async def run_step(
     ground_truths = normalized_task.ground_truths
     clip_duration = normalized_task.clip_duration
     artifact_host = urlparse(video_url).netloc or "unknown"
+    task_family = normalized_task.task_family or "legacy-activitynet"
 
     bt.logging.info("-" * 40)
     bt.logging.info(f"Request ID:  {request_id}")
@@ -312,6 +371,11 @@ async def run_step(
                 max_prediction_duration_seconds=max_prediction_duration_seconds,
                 extra_headers=provider_headers,
                 expects_empty_response=normalized_task.expects_empty_response,
+                task_family=task_family,
+                canary_kind=normalized_task.canary_kind,
+                transform_id=normalized_task.transform_id,
+                hard_negative_count=normalized_task.hard_negative_count,
+                telemetry_recorder=telemetry_recorder,
             )
         )
 

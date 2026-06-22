@@ -160,6 +160,7 @@ For restricted videos, configure cookies:
 | `MINER_SUBMISSION_CACHE_TTL_SECONDS` | `300` | Chain submission cache TTL. |
 | `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS` | `60` | Miner submission refresh interval. |
 | `MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS` | `10` | Per-runtime `/health` timeout. |
+| `VALIDATOR_TELEMETRY_PATH` | Empty | Optional JSON path for miner behavior telemetry snapshots. |
 | `MINER_EMISSION_BURN_PERCENT` | `0` | Percent of emissions assigned to UID 0 burn. |
 
 ## Hippius Configuration
@@ -223,3 +224,11 @@ Canaries are internal validator probes sampled from hardened tasks at
 
 Timeouts, protocol errors, and failed requests are never rewarded as absent
 canaries; only a successful empty response can receive the absent-canary score.
+
+## Telemetry
+
+Validators keep report-only miner behavior telemetry in memory and can write it
+to `VALIDATOR_TELEMETRY_PATH`. The snapshot includes per-miner score, latency,
+failure, timeout, task-family, canary, hard-negative, and repeated-duration
+signals. Suspicion flags are logged for visibility but do not affect weights
+until an aggregation policy explicitly consumes them.
