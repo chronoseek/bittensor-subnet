@@ -259,11 +259,15 @@ def score_response(
     max_prediction_duration_seconds: float | None = None,
     score_top_k: int | None = None,
     interval_scoring_config: IntervalScoringConfig = DEFAULT_INTERVAL_SCORING,
+    expects_empty_response: bool = False,
 ) -> float:
     """
     Score a miner's response using the best interval quality across predictions and ground truths.
     This returns a continuous value in [0, 1].
     """
+    if expects_empty_response:
+        return 1.0 if not predictions else 0.0
+
     if not predictions:
         return 0.0
 

@@ -97,6 +97,19 @@ class TestScoring(unittest.TestCase):
             interval_quality_score(broad_centered, gt),
         )
 
+    def test_absent_canary_scoring_rewards_only_empty_predictions(self):
+        pred = [VideoSearchResult(start=10.0, end=20.0, confidence=0.9)]
+
+        self.assertEqual(
+            score_response([], [], 0.1, expects_empty_response=True),
+            1.0,
+        )
+        self.assertEqual(
+            score_response(pred, [], 0.1, expects_empty_response=True),
+            0.0,
+        )
+        self.assertEqual(score_response([], [], 0.1), 0.0)
+
     def test_strict_threshold_helper(self):
         self.assertTrue(passes_strict_iou(STRICT_IOU_THRESHOLD))
         self.assertFalse(passes_strict_iou(STRICT_IOU_THRESHOLD - 0.01))

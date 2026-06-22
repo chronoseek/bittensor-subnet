@@ -57,6 +57,8 @@ class ValidationTask:
     transform_metadata: dict[str, Any] = field(default_factory=dict)
     hard_negative_count: int = 0
     hard_negative_source_caption_ids: tuple[str, ...] = ()
+    canary_kind: str | None = None
+    expects_empty_response: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,8 @@ class NormalizedValidationTask:
     task_family: str | None = None
     transform_id: str | None = None
     hard_negative_count: int = 0
+    canary_kind: str | None = None
+    expects_empty_response: bool = False
 
 
 def _normalize_intervals(raw_ground_truths: Any) -> GroundTruthIntervals:
@@ -99,6 +103,8 @@ def normalize_generated_task(
             task_family=generated_task.task_family,
             transform_id=generated_task.transform_id,
             hard_negative_count=generated_task.hard_negative_count,
+            canary_kind=generated_task.canary_kind,
+            expects_empty_response=generated_task.expects_empty_response,
         )
 
     if isinstance(generated_task, tuple) and len(generated_task) == 3:

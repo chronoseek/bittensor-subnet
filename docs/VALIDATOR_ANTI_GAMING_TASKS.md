@@ -17,6 +17,8 @@ The target flow is:
 5. The validator uploads the task clip to Hippius public S3.
 6. The validator sends miners only the Hippius URL, query variant, request ID, protocol version, and `top_k=1`.
 7. The validator scores miner responses against clip-local shifted ground truths.
+8. At a configurable low rate, the validator converts hardened tasks into
+   internal canaries for absent, hard-negative, or repeated-moment probes.
 
 ActivityNet remains the source of truth. Original ActivityNet source URLs, source video IDs, raw captions, and ground-truth timestamps must not be sent to miners or logged at INFO level.
 
@@ -359,6 +361,8 @@ Tests:
   in cropped task clips.
 - Randomized encoding transform IDs are recorded on internal tasks and included
   in replay identity.
+- Absent canaries can reward successful empty responses without rewarding
+  timeouts, protocol errors, or ordinary empty responses.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.

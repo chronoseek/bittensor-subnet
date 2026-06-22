@@ -152,6 +152,8 @@ For restricted videos, configure cookies:
 | `TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS` | `120` | Source download timeout for clipping. |
 | `ENABLE_ADVERSARIAL_TASK_TRANSFORMS` | `1` | Enables randomized context and encoding transforms for hardened tasks. |
 | `ENABLE_TASK_ENCODING_PROFILE_VARIANTS` | `1` | Enables compact/detail encoding variants for hardened clips. |
+| `CANARY_TASK_RATE` | `0` | Fraction of hardened tasks converted into internal canary tasks. |
+| `ABSENT_CANARY_QUERIES` | Empty | Optional pipe-separated absent-query canary prompts. |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
 | `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
 | `MINER_REQUEST_TIMEOUT_SECONDS` | `150` | Per-miner `/search` timeout. |
@@ -208,3 +210,16 @@ clip when another annotated moment fits inside the configured maximum duration.
 The generator also records the selected encoding transform profile and context
 padding metadata on the internal `ValidationTask`. Miners still receive only
 the artifact URL, query, request ID, protocol version, and `top_k`.
+
+## Canary Tasks
+
+Canaries are internal validator probes sampled from hardened tasks at
+`CANARY_TASK_RATE`. The initial canary types are:
+
+- `absent`: replaces the query with an unlikely absent event, clears ground
+  truth, and expects an empty successful response.
+- `hard-negative`: tags clips containing same-video distractor moments.
+- `repeated`: tags tasks with multiple valid target intervals.
+
+Timeouts, protocol errors, and failed requests are never rewarded as absent
+canaries; only a successful empty response can receive the absent-canary score.

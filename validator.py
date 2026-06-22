@@ -436,6 +436,13 @@ def build_validator_task_generator(
                 "enable_task_encoding_profile_variants",
                 True,
             ),
+            canary_task_rate=float(config.canary_task_rate),
+            absent_canary_queries=tuple(
+                query.strip()
+                for query in str(config.absent_canary_queries or "").split("|")
+                if query.strip()
+            )
+            or HardenedTaskGeneratorConfig.absent_canary_queries,
         ),
     )
     hardened_gen.cleanup_expired(force=True)
@@ -849,6 +856,18 @@ def get_config():
         action="store_false",
         dest="enable_task_encoding_profile_variants",
         help="Disable randomized encoding profile variants for hardened task clips.",
+    )
+    parser.add_argument(
+        "--canary-task-rate",
+        type=float,
+        default=float(os.getenv("CANARY_TASK_RATE", "0")),
+        help="Fraction of hardened tasks converted into internal validator canaries.",
+    )
+    parser.add_argument(
+        "--absent-canary-queries",
+        type=str,
+        default=os.getenv("ABSENT_CANARY_QUERIES", ""),
+        help="Pipe-separated absent-query canary prompts. Defaults to built-in unlikely prompts.",
     )
     parser.add_argument(
         "--validator-eval-top-k",

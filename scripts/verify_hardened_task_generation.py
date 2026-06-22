@@ -238,6 +238,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable randomized encoding profile variants.",
     )
     parser.add_argument(
+        "--canary-task-rate",
+        type=float,
+        default=env_float("CANARY_TASK_RATE", 0.0),
+        help="Fraction of hardened tasks converted into internal validator canaries.",
+    )
+    parser.add_argument(
+        "--absent-canary-queries",
+        default=os.getenv("ABSENT_CANARY_QUERIES", ""),
+        help="Pipe-separated absent-query canary prompts.",
+    )
+    parser.add_argument(
         "--use-vidaio",
         action="store_true",
         default=env_bool("VIDAIO_COMPRESSION_ENABLED", False),
@@ -434,6 +445,13 @@ def build_generator(args: argparse.Namespace):
             delete_remote_artifacts=False,
             enable_adversarial_transforms=args.enable_adversarial_task_transforms,
             enable_encoding_profile_variants=args.enable_task_encoding_profile_variants,
+            canary_task_rate=args.canary_task_rate,
+            absent_canary_queries=tuple(
+                query.strip()
+                for query in str(args.absent_canary_queries or "").split("|")
+                if query.strip()
+            )
+            or HardenedTaskGeneratorConfig.absent_canary_queries,
         ),
     )
     return {
@@ -502,6 +520,7 @@ def main() -> int:
                 "storage": "hippius" if args.upload_to_hippius else "local-dry-run",
                 "adversarial_transforms": args.enable_adversarial_task_transforms,
                 "encoding_profile_variants": args.enable_task_encoding_profile_variants,
+                "canary_task_rate": args.canary_task_rate,
                 "generated_at": iso_timestamp(time.time()),
             },
         )

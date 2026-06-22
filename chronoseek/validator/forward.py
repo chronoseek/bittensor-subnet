@@ -144,6 +144,7 @@ async def query_uid(
     clip_duration: float | None = None,
     max_prediction_duration_seconds: float | None = None,
     extra_headers: dict[str, str] | None = None,
+    expects_empty_response: bool = False,
 ) -> Tuple[int, float]:
     async with semaphore:
         uid = miner_endpoint.uid
@@ -164,6 +165,14 @@ async def query_uid(
         latency = result.latency
 
         if not resp.results:
+            if expects_empty_response and result.failure is None:
+                bt.logging.success(
+                    f"[UID {uid}] Empty canary response accepted | "
+                    f"Request: {request_model.request_id} | "
+                    f"Latency: {latency:.2f}s | Score: 1.0000"
+                )
+                return int(uid), 1.0
+
             failure_suffix = ""
             if result.failure is not None:
                 parts = [result.failure.kind]
@@ -186,6 +195,7 @@ async def query_uid(
             clip_duration=clip_duration,
             max_prediction_duration_seconds=max_prediction_duration_seconds,
             score_top_k=1,
+            expects_empty_response=expects_empty_response,
         )
         result = resp.results[0]
         res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
@@ -260,6 +270,11 @@ async def run_step(
     bt.logging.info(f"Task ID:     {normalized_task.task_id or 'legacy-task'}")
     bt.logging.info(f"Artifact Host: {artifact_host}")
     bt.logging.info(f"Query Variant: {normalized_task.query_variant_id or 'legacy-query'}")
+    if normalized_task.canary_kind:
+        bt.logging.info(
+            f"Canary: {normalized_task.canary_kind} | "
+            f"expects_empty={normalized_task.expects_empty_response}"
+        )
     bt.logging.info(f"Clip Duration: {clip_duration if clip_duration is not None else 'unknown'}")
     bt.logging.info(f"Ground Truth Count: {len(ground_truths)}")
     bt.logging.info("-" * 40)
@@ -296,6 +311,7 @@ async def run_step(
                 clip_duration=clip_duration,
                 max_prediction_duration_seconds=max_prediction_duration_seconds,
                 extra_headers=provider_headers,
+                expects_empty_response=normalized_task.expects_empty_response,
             )
         )
 

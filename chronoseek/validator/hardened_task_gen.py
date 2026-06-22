@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -55,6 +55,12 @@ class HardenedTaskGeneratorConfig:
     delete_remote_artifacts: bool = False
     enable_adversarial_transforms: bool = True
     enable_encoding_profile_variants: bool = True
+    canary_task_rate: float = 0.0
+    absent_canary_queries: tuple[str, ...] = (
+        "a blue whale playing chess on a snow-covered tennis court",
+        "a person juggling five glowing green pineapples underwater",
+        "the exact phrase chronoseek absent canary appears on screen",
+    )
 
 
 class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
@@ -236,6 +242,49 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
             "hard_negative_count": int(hard_negative_count),
         }
 
+    def _maybe_apply_canary(self, *, task: ValidationTask, sample, rng) -> ValidationTask:
+        rate = max(0.0, min(1.0, float(self.config.canary_task_rate)))
+        if rate <= 0.0 or rng.random() >= rate:
+            return task
+
+        candidates = ["absent"]
+        if task.hard_negative_count > 0:
+            candidates.append("hard-negative")
+        if len(task.ground_truths) > 1:
+            candidates.append("repeated")
+
+        canary_kind = rng.choice(candidates)
+        metadata = {
+            **task.transform_metadata,
+            "canary_kind": canary_kind,
+            "canary_source": "validator",
+        }
+
+        if canary_kind == "absent":
+            absent_queries = tuple(
+                query.strip()
+                for query in self.config.absent_canary_queries
+                if query.strip()
+            )
+            query = rng.choice(absent_queries or ("an event that is not present",))
+            return replace(
+                task,
+                task_family="canary-absent",
+                query=query,
+                ground_truths=[],
+                canary_kind=canary_kind,
+                expects_empty_response=True,
+                transform_metadata=metadata,
+            )
+
+        return replace(
+            task,
+            task_family=f"canary-{canary_kind}",
+            canary_kind=canary_kind,
+            expects_empty_response=False,
+            transform_metadata=metadata,
+        )
+
     @staticmethod
     def _remove_local_file(path: str | None) -> None:
         if not path:
@@ -351,7 +400,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                     f"transform={selected_profile.name} | "
                     f"hard_negatives={len(hard_negative_ids)}"
                 )
-                return ValidationTask(
+                task = ValidationTask(
                     task_id=task_id,
                     request_id=f"validation-{task_id}",
                     video_url=artifact_url,
@@ -375,6 +424,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                     hard_negative_count=len(hard_negative_ids),
                     hard_negative_source_caption_ids=hard_negative_ids,
                 )
+                return self._maybe_apply_canary(task=task, sample=sample, rng=rng)
             except Exception as exc:
                 self._remove_local_file(clip_path)
                 self._remove_local_file(compressed_path)
