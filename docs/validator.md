@@ -150,12 +150,28 @@ For restricted videos, configure cookies:
 | `TASK_MIN_CLIP_DURATION_SECONDS` | `30` | Minimum generated clip duration. |
 | `TASK_MAX_CLIP_DURATION_SECONDS` | `180` | Maximum generated clip duration. |
 | `TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS` | `120` | Source download timeout for clipping. |
+| `ENABLE_ADVERSARIAL_TASK_TRANSFORMS` | `1` | Enables randomized context and encoding transforms for hardened tasks. |
+| `ENABLE_TASK_ENCODING_PROFILE_VARIANTS` | `1` | Enables compact/detail encoding variants for hardened clips. |
+| `CANARY_TASK_RATE` | `0` | Fraction of hardened tasks converted into internal canary tasks. |
+| `ABSENT_CANARY_QUERIES` | Empty | Optional pipe-separated absent-query canary prompts. |
+| `MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO` | `0` | Maximum active hardened artifacts per source video; `0` disables the limit. |
+| `MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION` | `0` | Maximum active hardened artifacts per source caption; `0` disables the limit. |
+| `MAX_ACTIVE_TASKS_PER_QUERY_VARIANT` | `0` | Maximum active hardened artifacts per query variant; `0` disables the limit. |
+| `MAX_ACTIVE_TASKS_PER_TRANSFORM` | `0` | Maximum active hardened artifacts per transform profile; `0` disables the limit. |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
 | `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
+| `ENABLE_LATENCY_MULTIPLIER` | `0` | Applies a gentle post-quality latency multiplier when enabled. |
+| `LATENCY_GRACE_SECONDS` | `30` | Latency before the optional multiplier begins decaying. |
+| `LATENCY_MIN_MULTIPLIER` | `0.85` | Lowest optional multiplier near the miner request timeout. |
+| `SCORE_EMA_ALPHA` | `0.1` | EMA alpha used for instant miner quality scores. |
+| `SCORE_RELIABILITY_WEIGHT` | `0` | Optional post-quality reliability multiplier weight. |
+| `SCORE_CONSISTENCY_WEIGHT` | `0` | Optional post-quality consistency multiplier weight. |
+| `SCORE_SUSPICION_WEIGHT` | `0` | Optional post-quality suspicion multiplier weight. |
 | `MINER_REQUEST_TIMEOUT_SECONDS` | `150` | Per-miner `/search` timeout. |
 | `MINER_SUBMISSION_CACHE_TTL_SECONDS` | `300` | Chain submission cache TTL. |
 | `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS` | `60` | Miner submission refresh interval. |
 | `MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS` | `10` | Per-runtime `/health` timeout. |
+| `VALIDATOR_TELEMETRY_PATH` | Empty | Optional JSON path for miner behavior telemetry snapshots. |
 | `MINER_EMISSION_BURN_PERCENT` | `0` | Percent of emissions assigned to UID 0 burn. |
 
 ## Hippius Configuration
@@ -183,3 +199,70 @@ For restricted videos, configure cookies:
 - Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
 - Hardened task generation increases validator-side CPU, disk, network, and storage usage.
 - See [Owner and development guide](./development.md) for live module checks.
+
+## Interval Scoring
+
+Validator scoring is still accuracy-first and protocol-compatible, but the
+default score is now shape-aware interval quality rather than raw IoU alone.
+The best valid top-1 prediction/ground-truth pair is scored by IoU, then
+dampened for sloppy interval shape:
+
+- center alignment: prediction center should land near the target moment center
+- boundary alignment: start and end should closely match the ground truth
+- duration alignment: broad windows are penalized even when they overlap
+
+Malformed intervals, empty responses, timeouts, out-of-clip intervals, and
+oversized intervals still score zero. Extra results beyond the validator's
+configured top-k do not improve the score.
+
+When `ENABLE_LATENCY_MULTIPLIER=1`, the interval quality score is multiplied by
+a gentle latency factor. The multiplier is `1.0` through
+`LATENCY_GRACE_SECONDS`, then decays toward `LATENCY_MIN_MULTIPLIER` near
+`MINER_REQUEST_TIMEOUT_SECONDS`. A zero-quality response remains zero
+regardless of latency.
+
+## Adversarial Task Transforms
+
+Hardened task generation can include same-video hard-negative moments in the
+clip when another annotated moment fits inside the configured maximum duration.
+The generator also records the selected encoding transform profile and context
+padding metadata on the internal `ValidationTask`. Miners still receive only
+the artifact URL, query, request ID, protocol version, and `top_k`.
+
+## Canary Tasks
+
+Canaries are internal validator probes sampled from hardened tasks at
+`CANARY_TASK_RATE`. The initial canary types are:
+
+- `absent`: replaces the query with an unlikely absent event, clears ground
+  truth, and expects an empty successful response.
+- `hard-negative`: tags clips containing same-video distractor moments.
+- `repeated`: tags tasks with multiple valid target intervals.
+
+Timeouts, protocol errors, and failed requests are never rewarded as absent
+canaries; only a successful empty response can receive the absent-canary score.
+
+## Task Exposure Controls
+
+The artifact manifest records source video, source caption, query variant,
+transform profile, crop bucket, and task family for active generated clips.
+Validators can set `MAX_ACTIVE_TASKS_PER_*` limits to reduce repeated exposure
+while task artifacts remain active. The local hardened-task verifier prints an
+exposure summary so operators can inspect active task-bank freshness.
+
+## Telemetry
+
+Validators keep report-only miner behavior telemetry in memory and can write it
+to `VALIDATOR_TELEMETRY_PATH`. The snapshot includes per-miner score, latency,
+failure, timeout, task-family, canary, hard-negative, and repeated-duration
+signals. Suspicion flags are logged for visibility but do not affect weights
+until an aggregation policy explicitly consumes them.
+
+## Score Aggregation
+
+The validator now computes explicit quality, reliability, consistency, and
+suspicion components before updating moving scores. By default only the quality
+EMA is active, matching the previous `alpha = 0.1` behavior. Setting
+`SCORE_RELIABILITY_WEIGHT`, `SCORE_CONSISTENCY_WEIGHT`, or
+`SCORE_SUSPICION_WEIGHT` above zero turns on post-quality multipliers based on
+the telemetry summary for each miner.

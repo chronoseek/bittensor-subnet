@@ -41,6 +41,13 @@ def build_source_task_hash(
 
 
 @dataclass(frozen=True)
+class HardNegativeMoment:
+    source_caption_id: str
+    caption: str
+    ground_truths: GroundTruthIntervals
+
+
+@dataclass(frozen=True)
 class SampledActivityNetMoment:
     source_video_id: str
     source_url: str
@@ -48,6 +55,7 @@ class SampledActivityNetMoment:
     caption: str
     ground_truths: GroundTruthIntervals
     difficulty: str | None = None
+    hard_negatives: tuple[HardNegativeMoment, ...] = ()
 
 
 class ActivityNetTaskSampler:
@@ -183,6 +191,18 @@ class ActivityNetTaskSampler:
                     source_caption_id=source_caption_id,
                     now=now,
                 )
+                hard_negatives = tuple(
+                    HardNegativeMoment(
+                        source_caption_id=build_source_caption_id(
+                            source_video_id,
+                            other_caption,
+                        ),
+                        caption=other_caption,
+                        ground_truths=other_ground_truths,
+                    )
+                    for other_caption, other_ground_truths in captions
+                    if other_caption != caption
+                )
                 return (
                     SampledActivityNetMoment(
                         source_video_id=source_video_id,
@@ -191,6 +211,7 @@ class ActivityNetTaskSampler:
                         caption=caption,
                         ground_truths=ground_truths,
                         difficulty=video.get("difficulty"),
+                        hard_negatives=hard_negatives,
                     ),
                     rng,
                 )

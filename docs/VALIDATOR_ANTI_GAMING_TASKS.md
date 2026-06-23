@@ -10,11 +10,19 @@ The target flow is:
 
 1. The validator samples ActivityNet internally.
 2. The validator selects one caption group and its ground-truth intervals.
-3. The validator creates a private cropped clip around the target moment.
-4. The validator re-encodes/compresses the clip to strip metadata and reduce size.
+3. The validator creates a private cropped clip around the target moment, adding
+   same-video hard negatives when they fit inside the configured duration budget.
+4. The validator re-encodes/compresses the clip with a randomized transform
+   profile to strip metadata, vary resolution/bitrate, and reduce size.
 5. The validator uploads the task clip to Hippius public S3.
 6. The validator sends miners only the Hippius URL, query variant, request ID, protocol version, and `top_k=1`.
 7. The validator scores miner responses against clip-local shifted ground truths.
+8. At a configurable low rate, the validator converts hardened tasks into
+   internal canaries for absent, hard-negative, or repeated-moment probes.
+9. The validator records report-only miner telemetry for score, latency,
+   failures, task family, canaries, transforms, and repeated prediction shapes.
+10. The artifact manifest tracks active exposure counts so validators can limit
+    reuse of source videos, captions, query variants, and transform profiles.
 
 ActivityNet remains the source of truth. Original ActivityNet source URLs, source video IDs, raw captions, and ground-truth timestamps must not be sent to miners or logged at INFO level.
 
@@ -326,7 +334,13 @@ Tests:
 
 ### 9. Harden Scoring
 
-- Keep continuous IoU as the primary score.
+- Keep continuous IoU as the primary score, but dampen it with interval-shape
+  penalties so loose overlapping windows do not score as well as tight
+  localizations.
+- Apply boundary, center, and duration alignment penalties after selecting the
+  best valid top-1 prediction/ground-truth pair.
+- Optionally apply a gentle latency multiplier after quality scoring; fast bad
+  answers must not outrank accurate answers by speed alone.
 - Score only the first valid result.
 - Ignore confidence for validator weights.
 - Zero invalid responses:
@@ -344,7 +358,25 @@ Tests:
 Tests:
 
 - Correct clip-local prediction scores by IoU.
+- Broad center-aligned intervals score below tighter intervals with comparable
+  overlap.
+- Center-missed intervals score below center-aligned intervals with comparable
+  overlap.
 - Original ActivityNet timestamp does not score correctly after clipping.
+- Same-video hard-negative candidates are tracked internally and can be included
+  in cropped task clips.
+- Randomized encoding transform IDs are recorded on internal tasks and included
+  in replay identity.
+- Absent canaries can reward successful empty responses without rewarding
+  timeouts, protocol errors, or ordinary empty responses.
+- Miner telemetry summaries and suspicion flags are deterministic and
+  report-only until a weight aggregation policy explicitly consumes them.
+- Score aggregation exposes quality, reliability, consistency, and suspicion
+  components with opt-in post-quality multiplier weights.
+- Active task exposure limits can block repeated source/caption/query/transform
+  use while previous artifacts remain live.
+- Optional latency multipliers preserve zero scores and only dampen otherwise
+  valid quality scores.
 - Invalid intervals score zero.
 - Oversized intervals score zero unless the matching ground-truth span is longer.
 - Extra results beyond top-1 do not improve score.

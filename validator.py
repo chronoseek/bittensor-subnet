@@ -21,8 +21,13 @@ load_dotenv()
 
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.scoring import LatencyScoringConfig
 from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
+from chronoseek.validator.aggregation import (
+    ScoreAggregationConfig,
+    update_miner_score,
+)
 from chronoseek.validator.clipper import FfmpegClipper
 from chronoseek.validator.compression import (
     CompositeCompressor,
@@ -426,6 +431,33 @@ def build_validator_task_generator(
                 "task_delete_remote_artifacts",
                 False,
             ),
+            enable_adversarial_transforms=get_config_bool(
+                config,
+                "enable_adversarial_task_transforms",
+                True,
+            ),
+            enable_encoding_profile_variants=get_config_bool(
+                config,
+                "enable_task_encoding_profile_variants",
+                True,
+            ),
+            canary_task_rate=float(config.canary_task_rate),
+            absent_canary_queries=tuple(
+                query.strip()
+                for query in str(config.absent_canary_queries or "").split("|")
+                if query.strip()
+            )
+            or HardenedTaskGeneratorConfig.absent_canary_queries,
+            max_active_tasks_per_source_video=int(
+                config.max_active_tasks_per_source_video
+            ),
+            max_active_tasks_per_source_caption=int(
+                config.max_active_tasks_per_source_caption
+            ),
+            max_active_tasks_per_query_variant=int(
+                config.max_active_tasks_per_query_variant
+            ),
+            max_active_tasks_per_transform=int(config.max_active_tasks_per_transform),
         ),
     )
     hardened_gen.cleanup_expired(force=True)
@@ -572,13 +604,54 @@ async def run_validator_loop(
                 max_prediction_duration_seconds=float(
                     config.task_max_prediction_duration_seconds
                 ),
+                latency_scoring_config=LatencyScoringConfig(
+                    enabled=get_config_bool(config, "enable_latency_multiplier", False),
+                    grace_seconds=get_config_float(
+                        config,
+                        "latency_grace_seconds",
+                        30.0,
+                    ),
+                    timeout_seconds=float(config.miner_request_timeout_seconds),
+                    min_multiplier=get_config_float(
+                        config,
+                        "latency_min_multiplier",
+                        0.85,
+                    ),
+                ),
+                telemetry_recorder=runtime.telemetry.record,
             )
 
-            # Update moving average scores
-            alpha = 0.1
+            # Update aggregate scores. Component weights default to zero, which
+            # preserves the historical quality-only EMA behavior.
+            aggregation_config = ScoreAggregationConfig(
+                alpha=get_config_float(config, "score_ema_alpha", 0.1),
+                reliability_weight=get_config_float(
+                    config,
+                    "score_reliability_weight",
+                    0.0,
+                ),
+                consistency_weight=get_config_float(
+                    config,
+                    "score_consistency_weight",
+                    0.0,
+                ),
+                suspicion_weight=get_config_float(
+                    config,
+                    "score_suspicion_weight",
+                    0.0,
+                ),
+            )
+            aggregate_components = {}
             for uid, score in step_scores:
                 if uid < len(scores):
-                    scores[uid] = alpha * score + (1 - alpha) * scores[uid]
+                    components = update_miner_score(
+                        previous_score=float(scores[uid]),
+                        instant_score=float(score),
+                        telemetry_summary=runtime.telemetry.summaries.get(int(uid)),
+                        config=aggregation_config,
+                    )
+                    scores[uid] = components.final_score
+                    aggregate_components[int(uid)] = components
             with runtime.score_lock:
                 runtime.scores = np.array(scores, copy=True)
 
@@ -605,6 +678,35 @@ async def run_validator_loop(
                     for uid, score in ranked_moving_scores[:10]
                 )
                 bt.logging.info(f"Moving scores: {moving_summary}")
+                if aggregate_components:
+                    component_summary = ", ".join(
+                        (
+                            f"UID {uid}: quality={components.quality_score:.4f} "
+                            f"reliability={components.reliability_score:.2f} "
+                            f"consistency={components.consistency_score:.2f} "
+                            f"suspicion={components.suspicion_score:.2f}"
+                        )
+                        for uid, components in sorted(aggregate_components.items())[:10]
+                    )
+                    bt.logging.info(f"Score components: {component_summary}")
+
+                telemetry_path = get_config_str(
+                    config,
+                    "validator_telemetry_path",
+                    "",
+                ).strip()
+                if telemetry_path:
+                    runtime.telemetry.save_json(telemetry_path)
+
+                telemetry_snapshot = runtime.telemetry.snapshot()
+                summary_items = telemetry_snapshot.get("summaries", {})
+                flagged = [
+                    (uid, payload.get("suspicion_flags", []))
+                    for uid, payload in summary_items.items()
+                    if payload.get("suspicion_flags")
+                ]
+                if flagged:
+                    bt.logging.warning(f"Telemetry suspicion flags: {flagged[:10]}")
 
             # --- 2. Set Weights ---
             blocks_since_last = current_block - last_weight_block
@@ -817,16 +919,118 @@ def get_config():
         help="Generated task clip audio bitrate.",
     )
     parser.add_argument(
+        "--enable-adversarial-task-transforms",
+        action="store_true",
+        default=env_bool("ENABLE_ADVERSARIAL_TASK_TRANSFORMS", True),
+        help="Enable randomized hardened task transforms such as context and encoding variation.",
+    )
+    parser.add_argument(
+        "--disable-adversarial-task-transforms",
+        action="store_false",
+        dest="enable_adversarial_task_transforms",
+        help="Disable randomized hardened task transforms.",
+    )
+    parser.add_argument(
+        "--enable-task-encoding-profile-variants",
+        action="store_true",
+        default=env_bool("ENABLE_TASK_ENCODING_PROFILE_VARIANTS", True),
+        help="Enable randomized encoding profile variants for hardened task clips.",
+    )
+    parser.add_argument(
+        "--disable-task-encoding-profile-variants",
+        action="store_false",
+        dest="enable_task_encoding_profile_variants",
+        help="Disable randomized encoding profile variants for hardened task clips.",
+    )
+    parser.add_argument(
+        "--canary-task-rate",
+        type=float,
+        default=float(os.getenv("CANARY_TASK_RATE", "0")),
+        help="Fraction of hardened tasks converted into internal validator canaries.",
+    )
+    parser.add_argument(
+        "--absent-canary-queries",
+        type=str,
+        default=os.getenv("ABSENT_CANARY_QUERIES", ""),
+        help="Pipe-separated absent-query canary prompts. Defaults to built-in unlikely prompts.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-source-video",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO", "0")),
+        help="Maximum active hardened artifacts per source video. 0 disables the limit.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-source-caption",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION", "0")),
+        help="Maximum active hardened artifacts per source caption. 0 disables the limit.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-query-variant",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_QUERY_VARIANT", "0")),
+        help="Maximum active hardened artifacts per query variant. 0 disables the limit.",
+    )
+    parser.add_argument(
+        "--max-active-tasks-per-transform",
+        type=int,
+        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_TRANSFORM", "0")),
+        help="Maximum active hardened artifacts per encoding transform. 0 disables the limit.",
+    )
+    parser.add_argument(
         "--validator-eval-top-k",
         type=int,
         default=int(os.getenv("VALIDATOR_EVAL_TOP_K", "1")),
         help="Number of miner results requested and scored for synthetic evaluation.",
     )
     parser.add_argument(
+        "--score-ema-alpha",
+        type=float,
+        default=float(os.getenv("SCORE_EMA_ALPHA", "0.1")),
+        help="EMA alpha used for instant miner quality scores.",
+    )
+    parser.add_argument(
+        "--score-reliability-weight",
+        type=float,
+        default=float(os.getenv("SCORE_RELIABILITY_WEIGHT", "0")),
+        help="Optional reliability multiplier weight applied after quality scoring.",
+    )
+    parser.add_argument(
+        "--score-consistency-weight",
+        type=float,
+        default=float(os.getenv("SCORE_CONSISTENCY_WEIGHT", "0")),
+        help="Optional consistency multiplier weight applied after quality scoring.",
+    )
+    parser.add_argument(
+        "--score-suspicion-weight",
+        type=float,
+        default=float(os.getenv("SCORE_SUSPICION_WEIGHT", "0")),
+        help="Optional suspicion multiplier weight applied after quality scoring.",
+    )
+    parser.add_argument(
         "--task-max-prediction-duration-seconds",
         type=float,
         default=float(os.getenv("TASK_MAX_PREDICTION_DURATION_SECONDS", "60")),
         help="Maximum scored miner interval duration unless the ground-truth interval is longer.",
+    )
+    parser.add_argument(
+        "--enable-latency-multiplier",
+        action="store_true",
+        default=env_bool("ENABLE_LATENCY_MULTIPLIER", False),
+        help="Apply a gentle latency multiplier after interval quality scoring.",
+    )
+    parser.add_argument(
+        "--latency-grace-seconds",
+        type=float,
+        default=float(os.getenv("LATENCY_GRACE_SECONDS", "30")),
+        help="Latency before the optional multiplier begins decaying.",
+    )
+    parser.add_argument(
+        "--latency-min-multiplier",
+        type=float,
+        default=float(os.getenv("LATENCY_MIN_MULTIPLIER", "0.85")),
+        help="Lowest multiplier applied near the miner request timeout.",
     )
     parser.add_argument(
         "--hippius-s3-endpoint-url",
@@ -929,6 +1133,12 @@ def get_config():
         type=float,
         default=float(os.getenv("MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS", "10")),
         help="Per-runtime timeout for /health checks during responsive miner refresh.",
+    )
+    parser.add_argument(
+        "--validator-telemetry-path",
+        type=str,
+        default=os.getenv("VALIDATOR_TELEMETRY_PATH", ""),
+        help="Optional JSON path for validator miner behavior telemetry snapshots.",
     )
     parser.add_argument(
         "--chutes-base-domain",

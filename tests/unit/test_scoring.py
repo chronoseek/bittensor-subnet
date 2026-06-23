@@ -1,8 +1,12 @@
 import unittest
 from chronoseek.scoring import (
+    LatencyScoringConfig,
     STRICT_IOU_THRESHOLD,
+    PURE_IOU_SCORING,
     best_iou,
     calculate_iou,
+    calculate_latency_multiplier,
+    interval_quality_score,
     passes_strict_iou,
     score_response,
 )
@@ -35,23 +39,20 @@ class TestScoring(unittest.TestCase):
         self.assertAlmostEqual(calculate_iou(10, 15, 0, 20), 0.25)
 
     def test_scoring_rules(self):
-        """Test continuous IoU scoring rules"""
+        """Test continuous shape-aware interval scoring rules"""
 
         gt = (10.0, 20.0)
 
-        # Case A: High IoU (>0.5) -> score equals best IoU
-        # Pred: 11-19 (IoU should be high)
-        # Int: 8, Union: 10. IoU=0.8
+        # Case A: High IoU, center-aligned, slightly trimmed boundaries.
         pred_pass = [VideoSearchResult(start=11.0, end=19.0, confidence=0.9)]
-        self.assertAlmostEqual(score_response(pred_pass, gt, 0.1), 0.8)
+        self.assertGreater(score_response(pred_pass, gt, 0.1), 0.75)
+        self.assertLess(score_response(pred_pass, gt, 0.1), 0.8)
 
-        # Case B: Low IoU (<0.5) -> score equals best IoU
-        # Pred: 0-12
-        # Int: 2 (10-12), Union: 20 (0-20). IoU=0.1
+        # Case B: Low IoU is dampened further by center and boundary misses.
         pred_fail = [VideoSearchResult(start=0.0, end=12.0, confidence=0.9)]
-        self.assertAlmostEqual(score_response(pred_fail, gt, 0.1), 0.1)
+        self.assertLess(score_response(pred_fail, gt, 0.1), 0.1)
 
-        # Case C: Multiple predictions, take max IoU
+        # Case C: Multiple predictions, take max quality
         preds_mixed = [
             VideoSearchResult(start=0.0, end=5.0, confidence=0.5),  # IoU 0
             VideoSearchResult(start=10.0, end=20.0, confidence=0.8),  # IoU 1.0
@@ -65,8 +66,95 @@ class TestScoring(unittest.TestCase):
         preds = [VideoSearchResult(start=30.0, end=40.0, confidence=0.9)]
         ground_truths = [(10.0, 20.0), (31.0, 39.0)]
 
-        self.assertAlmostEqual(score_response(preds, ground_truths, 0.1), 0.8)
+        self.assertGreater(score_response(preds, ground_truths, 0.1), 0.75)
+        self.assertLess(score_response(preds, ground_truths, 0.1), 0.8)
         self.assertAlmostEqual(best_iou(preds, ground_truths), 0.8)
+
+    def test_pure_iou_scoring_config_keeps_legacy_score(self):
+        preds = [VideoSearchResult(start=11.0, end=19.0, confidence=0.9)]
+
+        self.assertAlmostEqual(
+            score_response(
+                preds,
+                (10.0, 20.0),
+                0.1,
+                interval_scoring_config=PURE_IOU_SCORING,
+            ),
+            0.8,
+        )
+
+    def test_shape_penalties_lower_broad_and_center_missed_intervals(self):
+        gt = (10.0, 20.0)
+        perfect = VideoSearchResult(start=10.0, end=20.0, confidence=0.9)
+        broad_centered = VideoSearchResult(start=5.0, end=25.0, confidence=0.9)
+        center_missed = VideoSearchResult(start=5.0, end=15.0, confidence=0.9)
+
+        self.assertEqual(interval_quality_score(perfect, gt), 1.0)
+        self.assertLess(
+            interval_quality_score(broad_centered, gt),
+            calculate_iou(5.0, 25.0, 10.0, 20.0),
+        )
+        self.assertLess(
+            interval_quality_score(center_missed, gt),
+            interval_quality_score(broad_centered, gt),
+        )
+
+    def test_absent_canary_scoring_rewards_only_empty_predictions(self):
+        pred = [VideoSearchResult(start=10.0, end=20.0, confidence=0.9)]
+
+        self.assertEqual(
+            score_response([], [], 0.1, expects_empty_response=True),
+            1.0,
+        )
+        self.assertEqual(
+            score_response(pred, [], 0.1, expects_empty_response=True),
+            0.0,
+        )
+        self.assertEqual(score_response([], [], 0.1), 0.0)
+
+    def test_latency_multiplier_is_optional_and_gentle(self):
+        disabled = LatencyScoringConfig(enabled=False)
+        enabled = LatencyScoringConfig(
+            enabled=True,
+            grace_seconds=10.0,
+            timeout_seconds=100.0,
+            min_multiplier=0.8,
+        )
+
+        self.assertEqual(calculate_latency_multiplier(100.0, config=disabled), 1.0)
+        self.assertEqual(calculate_latency_multiplier(5.0, config=enabled), 1.0)
+        self.assertEqual(calculate_latency_multiplier(100.0, config=enabled), 0.8)
+        self.assertGreater(calculate_latency_multiplier(55.0, config=enabled), 0.8)
+
+    def test_latency_multiplier_preserves_quality_ordering(self):
+        latency_config = LatencyScoringConfig(
+            enabled=True,
+            grace_seconds=0.0,
+            timeout_seconds=100.0,
+            min_multiplier=0.85,
+        )
+        slow_perfect = [
+            VideoSearchResult(start=10.0, end=20.0, confidence=0.9),
+        ]
+        fast_poor = [
+            VideoSearchResult(start=0.0, end=12.0, confidence=0.9),
+        ]
+
+        slow_score = score_response(
+            slow_perfect,
+            (10.0, 20.0),
+            100.0,
+            latency_scoring_config=latency_config,
+        )
+        fast_score = score_response(
+            fast_poor,
+            (10.0, 20.0),
+            0.1,
+            latency_scoring_config=latency_config,
+        )
+
+        self.assertEqual(score_response([], (10.0, 20.0), 0.1), 0.0)
+        self.assertGreater(slow_score, fast_score)
 
     def test_strict_threshold_helper(self):
         self.assertTrue(passes_strict_iou(STRICT_IOU_THRESHOLD))

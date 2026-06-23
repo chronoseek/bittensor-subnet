@@ -73,6 +73,7 @@ class FfmpegClipper:
         ground_truths: GroundTruthIntervals,
         rng,
         source_duration: float | None = None,
+        hard_negative_intervals: GroundTruthIntervals | None = None,
     ) -> CropPlan:
         if not ground_truths:
             raise RuntimeError("Cannot crop a task without ground-truth intervals.")
@@ -82,13 +83,32 @@ class FfmpegClipper:
         anchor_end = max(anchor_start + 0.1, float(anchor_end))
         anchor_duration = anchor_end - anchor_start
 
+        hard_negative_intervals = list(hard_negative_intervals or [])
+        combined_start = anchor_start
+        combined_end = anchor_end
+        usable_negative_intervals = [
+            (max(0.0, float(start)), max(float(start) + 0.1, float(end)))
+            for start, end in hard_negative_intervals
+        ]
+        if usable_negative_intervals:
+            negative_start, negative_end = rng.choice(usable_negative_intervals)
+            candidate_start = min(anchor_start, negative_start)
+            candidate_end = max(anchor_end, negative_end)
+            if candidate_end - candidate_start <= self.max_clip_duration_seconds:
+                combined_start = candidate_start
+                combined_end = candidate_end
+
+        combined_duration = combined_end - combined_start
         desired_duration = max(
             self.min_clip_duration_seconds,
-            min(self.max_clip_duration_seconds, anchor_duration + rng.uniform(12.0, 45.0)),
+            min(
+                self.max_clip_duration_seconds,
+                combined_duration + rng.uniform(12.0, 45.0),
+            ),
         )
-        leading_context_max = max(0.0, desired_duration - anchor_duration)
+        leading_context_max = max(0.0, desired_duration - combined_duration)
         leading_context = rng.uniform(0.0, leading_context_max)
-        crop_start = max(0.0, anchor_start - leading_context)
+        crop_start = max(0.0, combined_start - leading_context)
         crop_end = crop_start + desired_duration
 
         if source_duration is not None and crop_end > source_duration:
@@ -176,6 +196,7 @@ class FfmpegClipper:
         source_video_id: str,
         ground_truths: GroundTruthIntervals,
         rng,
+        hard_negative_intervals: GroundTruthIntervals | None = None,
     ) -> ClipResult:
         downloaded_video = VideoDownloader.download_video(
             source_video_url,
@@ -190,6 +211,7 @@ class FfmpegClipper:
                 ground_truths=ground_truths,
                 rng=rng,
                 source_duration=source_duration,
+                hard_negative_intervals=hard_negative_intervals,
             )
             source_dir = self.cache_dir / source_video_id.replace("/", "_")
             source_dir.mkdir(parents=True, exist_ok=True)
