@@ -14,7 +14,10 @@ local copy must live in the subnet root and is referenced as
 """
 
 import os
+import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from chutes.chute import Chute, NodeSelector
@@ -53,6 +56,41 @@ def resolve_image_name(base_name: str, runtime_revision: str) -> str:
     return f"{base_name}-{short_rev}"
 
 
+def repair_cyscale_namespace() -> None:
+    """Prefer vendored cyscale and hide py-scale-codec metadata."""
+
+    if os.getenv("CHUTES_EXECUTION_CONTEXT") != "REMOTE":
+        return
+
+    vendor_dir = Path(CYSCALE_VENDOR_DIR)
+    vendor_resolved = vendor_dir.resolve()
+    if not vendor_dir.exists():
+        return
+    if str(vendor_dir) not in sys.path:
+        sys.path.insert(0, str(vendor_dir))
+
+    candidates = []
+    for raw_path in sys.path:
+        if not raw_path:
+            continue
+        parent = Path(raw_path)
+        candidates.extend(parent.glob("scalecodec*.dist-info"))
+        candidates.extend(parent.glob("scalecodec*.egg-info"))
+        candidates.extend(parent.glob("scalecodec"))
+
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+            if resolved == vendor_resolved or vendor_resolved in resolved.parents:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
+        except Exception:
+            pass
+
+
 # Required by Chutes SDK image/chute object construction. This is not part of
 # ChronoSeek miner identity.
 CHUTES_ACCOUNT = "CHANGE_ME"
@@ -70,6 +108,7 @@ IMAGE_TAG = RUNTIME_REVISION[:32]
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 IMAGE_YTDLP_DENO_PATH = "/opt/deno/bin/deno"
+CYSCALE_VENDOR_DIR = "/opt/chronoseek/vendor"
 YTDLP_COOKIES_BROWSER = (
     os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
     or "chrome:Default"
@@ -97,13 +136,20 @@ image = (
     .with_env("HF_HOME", "/data/huggingface")
     .with_env("DENO_INSTALL", "/opt/deno")
     .with_env("PATH", "/opt/deno/bin:$PATH")
+    .with_env("PYTHONPATH", f"{CYSCALE_VENDOR_DIR}:$PYTHONPATH")
     .with_env("YTDLP_COOKIES_BROWSER", YTDLP_COOKIES_BROWSER)
     .with_env("YTDLP_DENO_PATH", YTDLP_DENO_PATH)
     .run_command(
         "apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && "
         "apt-get install -y --no-install-recommends "
         "ca-certificates curl ffmpeg git libgl1 libglib2.0-0 unzip && "
+        "apt-get autoremove -y && "
+        "apt-get clean && "
         "rm -rf /var/lib/apt/lists/*"
+    )
+    .run_command(
+        "rm -rf /opt/nvidia/nsight-compute /opt/nvidia/nsight-systems"
     )
     .run_command(
         "curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/opt/deno sh && "
@@ -113,7 +159,17 @@ image = (
         "mkdir -p /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data/huggingface && "
         "chmod -R a+rwx /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data"
     )
+    .run_command(
+        f"mkdir -p {CYSCALE_VENDOR_DIR} && "
+        f"chmod -R a+rx {CYSCALE_VENDOR_DIR}"
+    )
     .run_command("pip install --upgrade pip")
+    .run_command("pip install --only-binary=:all: 'cyscale>=0.3.3,<1.0.0'")
+    .run_command(
+        "pip install --only-binary=:all: "
+        f"--target {CYSCALE_VENDOR_DIR} 'cyscale>=0.3.3,<1.0.0' && "
+        f"chmod -R a+rX {CYSCALE_VENDOR_DIR}"
+    )
     .run_command(f"pip install '{CHRONOSEEK_PACKAGE}'")
     # Chutes later adds the `chutes` user to group root, then runs another
     # package install as that user. Make root-installed packages group-writable
@@ -140,9 +196,9 @@ chute = Chute(
     node_selector=NodeSelector(
         gpu_count=1,
         min_vram_gb_per_gpu=16,
+        include=["pro_6000"],
         # Optional cost/scheduling controls:
         # max_hourly_price_per_gpu=1.50,
-        # include=["a100"],
         # exclude=["k80"],
     ),
     concurrency=1,
@@ -159,8 +215,6 @@ chute._chronoseek_logo_url = CHRONOSEEK_LOGO_URL
 async def initialize_chronoseek(self):
     """Initialize ChronoSeek once per Chutes instance."""
 
-    import sys
-
     for env_name in ("HF_TOKEN", "HF_HOME"):
         env_value = os.getenv(env_name)
         if env_value:
@@ -174,24 +228,11 @@ async def initialize_chronoseek(self):
     if node_path and not os.path.exists(node_path):
         os.environ.pop("YTDLP_NODE_PATH", None)
 
-    # Chutes finalization installs substrate-interface, which brings in
-    # scalecodec. Bittensor's async substrate stack expects cyscale in that
-    # namespace, so repair the shared package namespace before importing runtime.
-    subprocess.run(
-        [sys.executable, "-m", "pip", "uninstall", "-y", "scalecodec", "cyscale"],
-        check=False,
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--force-reinstall",
-            "cyscale>=0.3.3,<1.0.0",
-        ],
-        check=True,
-    )
+    # Chutes finalization can install substrate-interface, which brings
+    # scalecodec. async-substrate-interface refuses to import while that
+    # distribution is present, so repair the namespace before importing
+    # bittensor through the runtime module.
+    repair_cyscale_namespace()
 
     from chronoseek.miner import runtime as chronoseek_runtime
 

@@ -64,7 +64,7 @@ Create your local Chutes definition:
 cp chronoseek_chute.example.py chronoseek_chute.py
 ```
 
-Edit `chronoseek_chute.py` before deployment. The examples assume Chutes account `alice`.
+Edit `chronoseek_chute.py` before deployment. This file is ignored by git and is where miner-specific Chutes account, package, GPU, and revision settings belong. The examples assume Chutes account `alice`.
 
 Important fields:
 
@@ -73,7 +73,7 @@ Important fields:
 | `CHUTES_ACCOUNT` | Chutes account namespace, for example `alice`. This is not your Bittensor identity. |
 | `CHUTE_BASE_NAME` | Defaults to `chronoseek-runtime`. |
 | `CHRONOSEEK_PACKAGE` | Package or git URL installed into the Chutes image. Use your fork if you changed runtime code. |
-| `RUNTIME_REVISION` | Git SHA, image version, or immutable runtime label. |
+| `RUNTIME_REVISION` | Git SHA, image version, or immutable runtime label. If unset, the template uses the current git commit when available. |
 | `node_selector` | GPU requirements. Start conservatively. |
 | `concurrency` | Keep low initially because video retrieval is resource-heavy. |
 | `allow_external_egress=True` | Required so the runtime can fetch validator task videos. |
@@ -84,6 +84,18 @@ The example runtime exposes:
 - `/search`
 
 Both are native Chutes cords. The runtime does not start a separate FastAPI server inside Chutes.
+
+## Local-First Checklist
+
+Run these checks before calling production Chutes APIs:
+
+```bash
+poetry run pytest tests/unit
+poetry run python scripts/verify_miner_retrieval.py
+poetry run python scripts/test_chutes_runtime_local.py --print-commands
+```
+
+For local container testing, `scripts/test_chutes_runtime_local.py` defaults to `chronoseek_chute_local:chute`. That local template installs the current working-tree source into the test image, so it is useful for checking uncommitted runtime changes. The production deployment helper defaults to `chronoseek_chute:chute`, which should point at the immutable package or git revision you intend to commit on-chain.
 
 ## Deploy Runtime
 
@@ -103,6 +115,13 @@ alice-chronoseek-runtime-<timestamp>
 ```
 
 Use the exact slug printed by the deployment helper.
+
+You can print the metadata and suggested commit command without deploying by omitting `--build` and `--deploy`:
+
+```bash
+poetry run python scripts/deploy_chutes_runtime.py \
+  --chute-ref chronoseek_chute:chute
+```
 
 If the image already exists, the deploy helper prompts before deleting and rebuilding it. For non-interactive behavior:
 

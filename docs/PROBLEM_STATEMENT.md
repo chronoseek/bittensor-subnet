@@ -2,7 +2,7 @@
 
 ## The Gap in Video Search
 
-Users often remember *what happens* in a video, but not *when it happens*. 
+Users often remember *what happens* in a video, but not *when it happens*.
 
 Existing tools rely on metadata, subtitles, or manual chaptering and cannot reliably answer semantic queries such as:
 

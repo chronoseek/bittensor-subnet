@@ -21,6 +21,8 @@ poetry install
 cp .env.example .env
 ```
 
+Use `.env.example` as the complete default reference. The tables below separate the required production settings from the optional tuning knobs.
+
 ## Required Environment Variables
 
 Base validator:
@@ -52,6 +54,12 @@ Optional Vidaio compression:
 | `VIDAIO_COMPRESSION_ENABLED=1` | Enabling Vidaio | Tries Vidaio before local ffmpeg compression. |
 | `VIDAIO_API_BASE_URL` | `VIDAIO_COMPRESSION_ENABLED=1` | Vidaio compression API base URL. |
 | `VIDAIO_API_KEY` | If required by Vidaio | Bearer token sent to Vidaio. |
+
+Runtime routing:
+
+| Variable | Required when | Notes |
+| --- | --- | --- |
+| `CHUTES_BASE_DOMAIN` | Optional | Defaults to `chutes.ai`; used to resolve submitted `chute_slug` values as `https://{slug}.${CHUTES_BASE_DOMAIN}`. |
 
 Minimal `.env` shape:
 
@@ -90,6 +98,12 @@ poetry run python validator.py \
 ```
 
 The validator checks that the hotkey is registered, loads permanent miner submissions from chain, disqualifies hotkeys with multiple revealed submissions, health-checks eligible Chutes runtimes, then enters the scoring loop.
+
+For a local preflight that does not query miners or set weights, generate one hardened task with the bundled smoke manifest:
+
+```bash
+poetry run python scripts/verify_hardened_task_generation.py --use-smoke-dataset --no-require-accessible-videos
+```
 
 ## Hardened Task Flow
 
@@ -132,24 +146,53 @@ For restricted videos, configure cookies:
 | `YTDLP_DENO_PATH` | Deno path used by yt-dlp challenge solving. |
 | `YTDLP_NODE_PATH` | Optional Node.js path if you prefer Node for challenge solving. |
 
-## Common Configuration
+## Configuration Reference
+
+`.env.example` is the source of truth for default values. The tables below group the validator settings by operator concern.
+
+Dataset and availability:
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `TASK_DATASET_PATH` | Empty | Local ActivityNet-style dataset path. If unset, Hugging Face is used. |
 | `TASK_SPLIT` | `validation` | Dataset split. |
+| `HF_HOME` | `~/.cache/huggingface` | Hugging Face cache path. |
+| `HF_ACTIVITYNET_FILENAME` | Empty | Optional ActivityNet JSON filename override inside the downloaded snapshot. |
 | `REQUIRE_ACCESSIBLE_VIDEOS` | `1` | Skip inaccessible source videos. |
 | `TASK_MAX_SAMPLING_ATTEMPTS` | `50` | Attempts to find an accessible task. |
+| `VIDEO_AVAILABILITY_CACHE_PATH` | Empty | Legacy base cache path used to derive specific accessibility cache files when the specific paths are unset. |
+| `ACCESSIBLE_VIDEO_CACHE_PATH` | Empty | JSON cache path for videos confirmed accessible. |
+| `INACCESSIBLE_VIDEO_CACHE_PATH` | Empty | JSON cache path for videos confirmed inaccessible. |
+| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | `24` | TTL for video accessibility cache entries. |
+| `VIDEO_AVAILABILITY_TIMEOUT` | `20` | Timeout in seconds for accessibility checks. |
+
+Hardened task artifacts:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `HARDENED_TASK_MAX_GENERATION_ATTEMPTS` | `5` | Attempts to produce one hardened task before skipping the validator step. |
+| `TASK_QUERY_VARIANTS_PATH` | Empty | Private query variant manifest path. Do not commit this file. |
 | `TASK_CLIP_CACHE_DIR` | `~/.cache/chronoseek/task-clips` | Local generated clip cache. |
 | `TASK_ARTIFACT_MANIFEST_PATH` | Empty | Local uploaded artifact manifest path. |
 | `TASK_ARTIFACT_PREFIX` | `task-clips` | Hippius object-key prefix. |
 | `TASK_CLIP_TTL_HOURS` | `6` | Local manifest/cache expiry. |
+| `TASK_CLIP_CLEANUP_INTERVAL_SECONDS` | `900` | Minimum seconds between expired-artifact cleanup passes. |
 | `TASK_DELETE_REMOTE_ARTIFACTS` | `0` | Remote Hippius deletion is opt-in. |
 | `TASK_VIDEO_COOLDOWN_HOURS` | `24` | Cooldown before reusing a source video. |
 | `TASK_CAPTION_COOLDOWN_HOURS` | `168` | Cooldown before reusing a source caption. |
 | `TASK_MIN_CLIP_DURATION_SECONDS` | `30` | Minimum generated clip duration. |
 | `TASK_MAX_CLIP_DURATION_SECONDS` | `180` | Maximum generated clip duration. |
 | `TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS` | `120` | Source download timeout for clipping. |
+
+Encoding and anti-gaming:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TASK_ENCODING_PROFILE_NAME` | `h264-720p-v1` | Base encoding profile name recorded in the artifact manifest. |
+| `TASK_CLIP_MAX_WIDTH` | `1280` | Maximum generated clip width. |
+| `TASK_CLIP_MAX_HEIGHT` | `720` | Maximum generated clip height. |
+| `TASK_CLIP_VIDEO_BITRATE` | `1500k` | Generated clip video bitrate. |
+| `TASK_CLIP_AUDIO_BITRATE` | `96k` | Generated clip audio bitrate. |
 | `ENABLE_ADVERSARIAL_TASK_TRANSFORMS` | `1` | Enables randomized context and encoding transforms for hardened tasks. |
 | `ENABLE_TASK_ENCODING_PROFILE_VARIANTS` | `1` | Enables compact/detail encoding variants for hardened clips. |
 | `CANARY_TASK_RATE` | `0` | Fraction of hardened tasks converted into internal canary tasks. |
@@ -158,8 +201,13 @@ For restricted videos, configure cookies:
 | `MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION` | `0` | Maximum active hardened artifacts per source caption; `0` disables the limit. |
 | `MAX_ACTIVE_TASKS_PER_QUERY_VARIANT` | `0` | Maximum active hardened artifacts per query variant; `0` disables the limit. |
 | `MAX_ACTIVE_TASKS_PER_TRANSFORM` | `0` | Maximum active hardened artifacts per transform profile; `0` disables the limit. |
+
+Scoring and miner routing:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
 | `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
-| `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored prediction duration unless ground truth is longer. |
+| `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored miner interval duration unless ground truth is longer. |
 | `ENABLE_LATENCY_MULTIPLIER` | `0` | Applies a gentle post-quality latency multiplier when enabled. |
 | `LATENCY_GRACE_SECONDS` | `30` | Latency before the optional multiplier begins decaying. |
 | `LATENCY_MIN_MULTIPLIER` | `0.85` | Lowest optional multiplier near the miner request timeout. |
@@ -172,7 +220,8 @@ For restricted videos, configure cookies:
 | `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS` | `60` | Miner submission refresh interval. |
 | `MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS` | `10` | Per-runtime `/health` timeout. |
 | `VALIDATOR_TELEMETRY_PATH` | Empty | Optional JSON path for miner behavior telemetry snapshots. |
-| `MINER_EMISSION_BURN_PERCENT` | `0` | Percent of emissions assigned to UID 0 burn. |
+| `CHUTES_BASE_DOMAIN` | `chutes.ai` | Base domain used to resolve submitted `chute_slug` values. |
+| `MINER_EMISSION_BURN_PERCENT` | `0` | Percent of miner emissions assigned to UID 0 burn. |
 
 ## Hippius Configuration
 

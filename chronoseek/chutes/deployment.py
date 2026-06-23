@@ -5,6 +5,7 @@ deploy are executed through Chutes HTTP APIs using `CHUTES_API_KEY`. This avoids
 requiring miners to run `chutes login` or maintain local Chutes SDK configs.
 """
 
+import asyncio
 import base64
 import importlib
 import os
@@ -47,6 +48,43 @@ class ChutesImageFile:
     source_path: Path
     staged_path: Path
     image_path: str
+
+
+class ChutesWarmupTimeout(RuntimeError):
+    """Raised when Chutes warmup stays cold past the configured timeout."""
+
+    def __init__(
+        self,
+        *,
+        target: str,
+        timeout_seconds: float,
+        last_payload: dict[str, Any],
+    ) -> None:
+        self.target = target
+        self.timeout_seconds = timeout_seconds
+        self.last_payload = last_payload
+        super().__init__(
+            "Chutes runtime warmup timed out before the chute became hot. "
+            f"Target: {target}. Timeout: {timeout_seconds:g}s. "
+            f"Last response: {last_payload}"
+        )
+
+
+class ChutesWarmupInterrupted(RuntimeError):
+    """Raised when Chutes warmup is interrupted by the user."""
+
+    def __init__(
+        self,
+        *,
+        target: str,
+        last_payload: dict[str, Any],
+    ) -> None:
+        self.target = target
+        self.last_payload = last_payload
+        super().__init__(
+            "Chutes runtime warmup was interrupted before the chute became hot. "
+            f"Target: {target}. Last response: {last_payload}"
+        )
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -1043,6 +1081,84 @@ async def deploy_chute_via_api(
         )
         _raise_for_status_with_body(response)
         return response.json()
+
+
+async def warmup_chute_via_api(
+    *,
+    api_base_url: str,
+    chute_id_or_name: str,
+    timeout_seconds: float = 3600.0,
+    poll_interval_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Warm up a deployed Chutes runtime until Chutes reports it is hot."""
+
+    target = str(chute_id_or_name or "").strip()
+    if not target:
+        raise ValueError("chute_id_or_name is required for Chutes warmup.")
+
+    timeout = max(1.0, float(timeout_seconds))
+    poll_interval = max(1.0, float(poll_interval_seconds))
+    deadline = asyncio.get_running_loop().time() + timeout
+    url = f"{api_base_url.rstrip('/')}/chutes/warmup/{target}"
+    last_payload: dict[str, Any] = {}
+
+    try:
+        bt.logging.info(f"Warming up Chutes runtime through API: GET {url}")
+        async with httpx.AsyncClient(timeout=min(60.0, timeout)) as client:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+
+                response = await client.get(
+                    url,
+                    params={"quick": "true"},
+                    headers=chutes_auth_headers_from_env(require_token=True),
+                    timeout=max(1.0, min(60.0, remaining)),
+                )
+                _raise_for_status_with_body(response)
+                last_payload = _json_or_empty(response)
+
+                status = str(last_payload.get("status") or "").strip().lower()
+                instance_count = last_payload.get("instance_count")
+                if status == "hot":
+                    bt.logging.success(
+                        f"Chutes runtime is hot: {target} "
+                        f"({instance_count or 0} instances)."
+                    )
+                    return last_payload
+
+                bounty = _mapping(last_payload.get("bounty"))
+                bounty_suffix = ""
+                if bounty:
+                    bounty_suffix = (
+                        f", bounty={bounty.get('amount', 0)}, "
+                        f"boost={bounty.get('boost', 1.0)}x"
+                    )
+                bt.logging.info(
+                    f"Chutes runtime warmup status for {target}: "
+                    f"{status or 'unknown'} ({instance_count or 0} instances"
+                    f"{bounty_suffix})."
+                )
+
+                sleep_seconds = min(
+                    poll_interval,
+                    max(0.0, deadline - asyncio.get_running_loop().time()),
+                )
+                if sleep_seconds <= 0:
+                    break
+                await asyncio.sleep(sleep_seconds)
+    except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+        raise ChutesWarmupInterrupted(
+            target=target,
+            last_payload=last_payload,
+        ) from exc
+
+    raise ChutesWarmupTimeout(
+        target=target,
+        timeout_seconds=timeout,
+        last_payload=last_payload,
+    )
 
 
 async def get_chute_via_api(

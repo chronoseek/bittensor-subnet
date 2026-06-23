@@ -2,6 +2,19 @@
 
 This guide is for owner-operated workflows, development checks, and live integration tests. Commands here may call external services, mutate remote state, or consume credits. Run them intentionally.
 
+## Safety Boundary
+
+Use these commands freely for local development:
+
+```bash
+poetry run pytest tests/unit
+poetry run python scripts/verify_miner_retrieval.py
+poetry run python scripts/verify_hardened_task_generation.py --use-smoke-dataset --no-require-accessible-videos
+poetry run python scripts/test_chutes_runtime_local.py --print-commands
+```
+
+Commands in [Production Chutes Helper](#production-chutes-helper) and [Live Module Tests](#live-module-tests) are intentionally live. They may use Chutes credits, write to Hippius, or commit/fetch chain state.
+
 ## Module Boundaries
 
 ChronoSeek keeps provider and domain logic separated:
@@ -45,6 +58,8 @@ poetry run python scripts/verify_miner_retrieval.py
 ## Local Chutes Runtime Testing
 
 Local Chutes checks avoid production Chutes API calls and should be used before production build/deploy.
+
+The local helper defaults to `chronoseek_chute_local:chute`, which installs the current working tree into the container so local runtime edits are exercised. Production deploys should use `chronoseek_chute:chute`, copied from `chronoseek_chute.example.py` and edited for the immutable package or revision you intend to publish.
 
 Print local build/run commands:
 

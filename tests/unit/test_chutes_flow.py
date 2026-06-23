@@ -5,6 +5,8 @@ from zipfile import ZipFile
 import chronoseek.chutes.deployment as chutes_deployment
 from chronoseek.chain.submissions import MinerSubmission
 from chronoseek.chutes.deployment import (
+    ChutesWarmupInterrupted,
+    ChutesWarmupTimeout,
     RuntimeMetadata,
     apply_runtime_name,
     build_image_via_api,
@@ -22,6 +24,7 @@ from chronoseek.chutes.deployment import (
     resolve_chute_logo_url,
     resolve_chute_slug,
     upload_logo_via_api,
+    warmup_chute_via_api,
 )
 from chronoseek.chutes.runtime import resolve_submission_endpoint
 import scripts.deploy_chutes_runtime as deploy_chutes_runtime
@@ -350,6 +353,99 @@ def test_upload_logo_via_api_downloads_and_uploads_logo(monkeypatch):
     assert calls[2][2]["logo"][1] == b"png-bytes"
     assert calls[2][2]["logo"][2] == "image/png"
     assert calls[2][3] == {"Authorization": "cpk_test"}
+
+
+def test_warmup_chute_via_api_polls_until_hot(monkeypatch):
+    calls = []
+    responses = [
+        {
+            "status": "cold",
+            "instance_count": 0,
+            "bounty": {"amount": 1, "boost": 1.5},
+        },
+        {"status": "hot", "instance_count": 1},
+    ]
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            calls.append(("client", kwargs))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params, headers, timeout):
+            calls.append(("get", url, params, headers, timeout))
+            return chutes_deployment.httpx.Response(
+                200,
+                json=responses.pop(0),
+                request=chutes_deployment.httpx.Request("GET", url),
+            )
+
+    async def fake_sleep(seconds):
+        calls.append(("sleep", seconds))
+
+    monkeypatch.setattr(chutes_deployment.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(chutes_deployment.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        chutes_deployment,
+        "chutes_auth_headers_from_env",
+        lambda **kwargs: {"Authorization": "cpk_test"},
+    )
+
+    result = asyncio.run(
+        warmup_chute_via_api(
+            api_base_url="https://api.chutes.ai",
+            chute_id_or_name="chute-123",
+            timeout_seconds=30,
+            poll_interval_seconds=1,
+        )
+    )
+
+    assert result == {"status": "hot", "instance_count": 1}
+    assert [call[0] for call in calls] == ["client", "get", "sleep", "get"]
+    assert calls[1][1] == "https://api.chutes.ai/chutes/warmup/chute-123"
+    assert calls[1][2] == {"quick": "true"}
+    assert calls[1][3] == {"Authorization": "cpk_test"}
+
+
+def test_warmup_chute_via_api_converts_interruption(monkeypatch):
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, params, headers, timeout):
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(chutes_deployment.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        chutes_deployment,
+        "chutes_auth_headers_from_env",
+        lambda **kwargs: {"Authorization": "cpk_test"},
+    )
+
+    try:
+        asyncio.run(
+            warmup_chute_via_api(
+                api_base_url="https://api.chutes.ai",
+                chute_id_or_name="chute-123",
+                timeout_seconds=30,
+                poll_interval_seconds=1,
+            )
+        )
+    except ChutesWarmupInterrupted as exc:
+        assert exc.target == "chute-123"
+        assert exc.last_payload == {}
+    else:
+        raise AssertionError("warmup interruption should be reported explicitly")
 
 
 def test_apply_runtime_name_updates_chute_and_image_ids():
@@ -836,7 +932,7 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
                 "include_cwd": True,
                 "public": True,
                 "overwrite_existing": None,
-                "timeout_seconds": 900.0,
+                "timeout_seconds": 3600.0,
                 "chute_name": "ChronoSeek-runtime-20260510143015999",
                 "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
                 "chute_display_name": "ChronoSeek Runtime",
@@ -848,7 +944,7 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
             {
                 "api_base_url": "https://api.chutes.ai",
                 "image_id": "image-123",
-                "timeout_seconds": 900.0,
+                "timeout_seconds": 3600.0,
             },
         ),
         (
@@ -858,7 +954,7 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
                 "chute_ref": "chronoseek_chute:chute",
                 "public": True,
                 "accept_fee": True,
-                "timeout_seconds": 900.0,
+                "timeout_seconds": 3600.0,
                 "chute_name": "ChronoSeek-runtime-20260510143015999",
                 "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
                 "chute_display_name": "ChronoSeek Runtime",
@@ -873,3 +969,306 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
     assert "--chute-slug chronoseek-chronoseek-runtime-20260510143015999" in output
     assert "--wallet.name" not in output
     assert "--wallet.hotkey" not in output
+
+
+def test_deploy_wrapper_warms_up_after_deploy_when_requested(monkeypatch):
+    calls = []
+
+    async def fake_upload_logo_via_api(**kwargs):
+        calls.append(("logo", kwargs))
+        return "logo-123"
+
+    async def fake_deploy_chute_via_api(**kwargs):
+        calls.append(("deploy", kwargs))
+        return {
+            "chute_id": "chute-123",
+            "slug": "chronoseek-chronoseek-runtime",
+            "image": "image-123",
+            "revision": "rev-1",
+        }
+
+    async def fake_warmup_chute_via_api(**kwargs):
+        calls.append(("warmup", kwargs))
+        return {"status": "hot", "instance_count": 1}
+
+    def fake_metadata_from_chute_definition(*args, **kwargs):
+        return RuntimeMetadata(
+            chute_id="chute-123",
+            chute_slug=kwargs.get("chute_slug") or "chronoseek-runtime",
+            artifact_id="image-123",
+            artifact_revision="rev-1",
+        )
+
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "metadata_from_chute_definition",
+        fake_metadata_from_chute_definition,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "upload_logo_via_api",
+        fake_upload_logo_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "deploy_chute_via_api",
+        fake_deploy_chute_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "warmup_chute_via_api",
+        fake_warmup_chute_via_api,
+    )
+
+    class DummyLoadedChute:
+        _username = "chronoseek"
+        name = "chronoseek-runtime"
+        _chronoseek_logo_url = "https://chronoseek.org/logo.png"
+
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "load_chute_object",
+        lambda *args, **kwargs: DummyLoadedChute(),
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "resolve_runtime_timestamp",
+        lambda: "20260510143015999",
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime.sys,
+        "argv",
+        [
+            "deploy_chutes_runtime.py",
+            "--deploy",
+            "--warmup",
+            "--chute-ref",
+            "chronoseek_chute:chute",
+            "--accept-fee",
+        ],
+    )
+
+    assert asyncio.run(deploy_chutes_runtime.main_async()) == 0
+
+    assert calls == [
+        (
+            "logo",
+            {
+                "api_base_url": "https://api.chutes.ai",
+                "logo_url": "https://chronoseek.org/logo.png",
+                "timeout_seconds": 120.0,
+            },
+        ),
+        (
+            "deploy",
+            {
+                "api_base_url": "https://api.chutes.ai",
+                "chute_ref": "chronoseek_chute:chute",
+                "public": False,
+                "accept_fee": True,
+                "timeout_seconds": 3600.0,
+                "chute_name": "ChronoSeek-runtime-20260510143015999",
+                "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
+                "chute_display_name": "ChronoSeek Runtime",
+                "logo_id": "logo-123",
+            },
+        ),
+        (
+            "warmup",
+            {
+                "api_base_url": "https://api.chutes.ai",
+                "chute_id_or_name": "chute-123",
+                "timeout_seconds": 3600.0,
+            },
+        ),
+    ]
+
+
+def test_deploy_wrapper_reports_manual_warmup_after_warmup_timeout(
+    monkeypatch,
+    capsys,
+):
+    calls = []
+
+    async def fake_upload_logo_via_api(**kwargs):
+        calls.append(("logo", kwargs))
+        return "logo-123"
+
+    async def fake_deploy_chute_via_api(**kwargs):
+        calls.append(("deploy", kwargs))
+        return {
+            "chute_id": "chute-123",
+            "slug": "chronoseek-chronoseek-runtime",
+            "image": "image-123",
+            "revision": "rev-1",
+        }
+
+    async def fake_warmup_chute_via_api(**kwargs):
+        calls.append(("warmup", kwargs))
+        raise ChutesWarmupTimeout(
+            target=kwargs["chute_id_or_name"],
+            timeout_seconds=kwargs["timeout_seconds"],
+            last_payload={"status": "cold", "instance_count": 0},
+        )
+
+    def fake_metadata_from_chute_definition(*args, **kwargs):
+        return RuntimeMetadata(
+            chute_id="chute-123",
+            chute_slug=kwargs.get("chute_slug") or "chronoseek-runtime",
+            artifact_id="image-123",
+            artifact_revision="rev-1",
+        )
+
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "metadata_from_chute_definition",
+        fake_metadata_from_chute_definition,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "upload_logo_via_api",
+        fake_upload_logo_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "deploy_chute_via_api",
+        fake_deploy_chute_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "warmup_chute_via_api",
+        fake_warmup_chute_via_api,
+    )
+
+    class DummyLoadedChute:
+        _username = "chronoseek"
+        name = "chronoseek-runtime"
+        _chronoseek_logo_url = "https://chronoseek.org/logo.png"
+
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "load_chute_object",
+        lambda *args, **kwargs: DummyLoadedChute(),
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "resolve_runtime_timestamp",
+        lambda: "20260510143015999",
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime.sys,
+        "argv",
+        [
+            "deploy_chutes_runtime.py",
+            "--deploy",
+            "--warmup",
+            "--chute-ref",
+            "chronoseek_chute:chute",
+            "--accept-fee",
+        ],
+    )
+
+    assert asyncio.run(deploy_chutes_runtime.main_async()) == 0
+
+    output = capsys.readouterr().out
+    assert [call[0] for call in calls] == ["logo", "deploy", "warmup"]
+    assert "Chutes deployment completed successfully" in output
+    assert "chutes warmup chute-123" in output
+    assert "GET https://api.chutes.ai/chutes/warmup/chute-123?quick=true" in output
+    assert '"chute_id": "chute-123"' in output
+    assert "--chute-slug chronoseek-chronoseek-runtime-20260510143015999" in output
+
+
+def test_deploy_wrapper_reports_manual_warmup_after_interruption(
+    monkeypatch,
+    capsys,
+):
+    calls = []
+
+    async def fake_upload_logo_via_api(**kwargs):
+        calls.append(("logo", kwargs))
+        return "logo-123"
+
+    async def fake_deploy_chute_via_api(**kwargs):
+        calls.append(("deploy", kwargs))
+        return {
+            "chute_id": "chute-123",
+            "slug": "chronoseek-chronoseek-runtime",
+            "image": "image-123",
+            "revision": "rev-1",
+        }
+
+    async def fake_warmup_chute_via_api(**kwargs):
+        calls.append(("warmup", kwargs))
+        raise ChutesWarmupInterrupted(
+            target=kwargs["chute_id_or_name"],
+            last_payload={"status": "cold", "instance_count": 0},
+        )
+
+    def fake_metadata_from_chute_definition(*args, **kwargs):
+        return RuntimeMetadata(
+            chute_id="chute-123",
+            chute_slug=kwargs.get("chute_slug") or "chronoseek-runtime",
+            artifact_id="image-123",
+            artifact_revision="rev-1",
+        )
+
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "metadata_from_chute_definition",
+        fake_metadata_from_chute_definition,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "upload_logo_via_api",
+        fake_upload_logo_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "deploy_chute_via_api",
+        fake_deploy_chute_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "warmup_chute_via_api",
+        fake_warmup_chute_via_api,
+    )
+
+    class DummyLoadedChute:
+        _username = "chronoseek"
+        name = "chronoseek-runtime"
+        _chronoseek_logo_url = "https://chronoseek.org/logo.png"
+
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "load_chute_object",
+        lambda *args, **kwargs: DummyLoadedChute(),
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "resolve_runtime_timestamp",
+        lambda: "20260510143015999",
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime.sys,
+        "argv",
+        [
+            "deploy_chutes_runtime.py",
+            "--deploy",
+            "--warmup",
+            "--chute-ref",
+            "chronoseek_chute:chute",
+            "--accept-fee",
+        ],
+    )
+
+    assert asyncio.run(deploy_chutes_runtime.main_async()) == 0
+
+    output = capsys.readouterr().out
+    assert [call[0] for call in calls] == ["logo", "deploy", "warmup"]
+    assert "Chutes deployment completed successfully" in output
+    assert "warmup was interrupted before the chute became hot" in output
+    assert "chutes warmup chute-123" in output
+    assert "GET https://api.chutes.ai/chutes/warmup/chute-123?quick=true" in output
+    assert '"chute_id": "chute-123"' in output
+    assert "--chute-slug chronoseek-chronoseek-runtime-20260510143015999" in output

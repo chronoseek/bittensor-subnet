@@ -1,12 +1,16 @@
 # Validator Anti-Gaming Tasks
 
+## Status
+
+Hardened ActivityNet-derived task generation is implemented behind `ENABLE_HARDENED_TASKS=1`. This document describes the implemented flow and keeps the original deliverables as an audit checklist for future changes.
+
 ## Goal
 
-ChronoSeek validators currently evaluate miners with ActivityNet-derived tasks. The immediate weakness is that a miner can map the public ActivityNet video URL plus raw caption back to public ActivityNet annotations and return the known timestamps without doing video retrieval.
+ChronoSeek validators evaluate miners with ActivityNet-derived tasks. The immediate weakness in the legacy flow is that a miner can map the public ActivityNet video URL plus raw caption back to public ActivityNet annotations and return the known timestamps without doing video retrieval.
 
-The goal of this implementation is to keep ActivityNet as the validator source of truth while hiding the source dataset identity from miners. Validators should transform each ActivityNet row into a private task artifact before querying miners.
+The implemented goal is to keep ActivityNet as the validator source of truth while hiding the source dataset identity from miners. Validators transform each ActivityNet row into a private task artifact before querying miners.
 
-The target flow is:
+The hardened flow is:
 
 1. The validator samples ActivityNet internally.
 2. The validator selects one caption group and its ground-truth intervals.
@@ -147,7 +151,7 @@ This keeps existing tests and bootstrap/dev flows working while enabling the har
 
 ## Configuration
 
-Add these validator configuration values to `.env.example` and `validator.py`.
+The hardened task implementation uses these validator configuration values from `.env.example` and `validator.py`.
 
 ### Task Generation
 
@@ -207,7 +211,9 @@ VIDAIO_TIMEOUT_SECONDS=60
 
 Vidaio must be optional. If enabled but unavailable, invalid, or timed out, validation must fall back to local ffmpeg compression.
 
-## Step-By-Step Deliverables
+## Implementation Checklist
+
+This checklist is retained for implementation review. The current codebase implements these items unless a future note says otherwise.
 
 ### 1. Add Doc And Config Surface
 
@@ -394,7 +400,9 @@ Tests:
 - INFO logs do not contain ground-truth timestamps.
 - Score summaries still appear after each validation step.
 
-## Rollout Order
+## Rollout Notes
+
+The rollout order below records the intended staged path. Items 1 through 7 are represented in the current codebase; production enablement and eventual legacy tuple removal remain operator decisions.
 
 1. Ship models, adapters, and tests while keeping legacy tuple generation active.
 2. Add scoring hygiene with legacy generator still active.

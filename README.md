@@ -30,6 +30,21 @@ Additional background:
 - [Business logic](./docs/BUSINESS_LOGIC.md)
 - [Validator anti-gaming tasks](./docs/VALIDATOR_ANTI_GAMING_TASKS.md)
 
+## What To Run First
+
+ChronoSeek has a local development path and a live operator path. Start local unless you are intentionally touching Chutes, Hippius, or chain state.
+
+Safe local checks:
+
+```bash
+poetry run pytest tests/unit
+poetry run python scripts/verify_miner_retrieval.py
+poetry run python scripts/verify_hardened_task_generation.py --use-smoke-dataset --no-require-accessible-videos
+poetry run python scripts/test_chutes_runtime_local.py --print-commands
+```
+
+Live checks and production helpers are documented in [Owner and development guide](./docs/development.md). Those commands may call external services, mutate remote state, or consume credits.
+
 ## Install
 
 Prerequisites:
@@ -51,17 +66,27 @@ Create your environment file:
 cp .env.example .env
 ```
 
-Then edit `.env` for your role. The detailed required variables live in the validator and miner guides.
+Then edit `.env` for your role. `.env.example` contains the full supported configuration surface; the validator and miner guides call out the required subset.
 
 ## Quick Start
 
-Run a validator:
+Run a validator after configuring a registered validator hotkey:
 
 ```bash
 poetry run python validator.py
 ```
 
-Run the miner metadata commit after deploying a Chutes runtime:
+Deploying a miner is a two-step flow: deploy a Chutes runtime, then commit the runtime metadata on-chain for the registered miner hotkey.
+
+```bash
+cp chronoseek_chute.example.py chronoseek_chute.py
+poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
+  --chute-ref chronoseek_chute:chute \
+  --accept-fee \
+  --artifact-id chronoseek-runtime
+```
+
+The deploy helper prints the exact `miner.py` command. It will look like:
 
 ```bash
 poetry run python miner.py \
@@ -71,6 +96,8 @@ poetry run python miner.py \
 ```
 
 The examples assume Chutes account `alice` and Hippius bucket `chronoseek`.
+
+Miner runtime submissions are permanent per hotkey. Use the exact deployed slug or endpoint you want validators to score; a hotkey with multiple revealed submissions is disqualified by validators.
 
 ## Video Access
 

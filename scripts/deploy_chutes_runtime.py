@@ -28,6 +28,8 @@ from dotenv import load_dotenv
 
 from chronoseek.chain.submissions import MinerSubmission
 from chronoseek.chutes.deployment import (
+    ChutesWarmupInterrupted,
+    ChutesWarmupTimeout,
     RuntimeMetadata,
     build_image_via_api,
     deploy_chute_via_api,
@@ -45,6 +47,7 @@ from chronoseek.chutes.deployment import (
     require_chute_module_ref,
     stream_image_build_logs_via_api,
     upload_logo_via_api,
+    warmup_chute_via_api,
 )
 from chronoseek.chutes.runtime import resolve_submission_endpoint
 
@@ -114,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pass accept_fee=true to Chutes deployment.",
     )
     parser.add_argument(
+        "--warmup",
+        action="store_true",
+        default=False,
+        help="After a successful --deploy, warm up the chute until Chutes reports it hot.",
+    )
+    parser.add_argument(
         "--public",
         action="store_true",
         default=False,
@@ -166,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--chutes-timeout-seconds",
         type=float,
-        default=900.0,
+        default=3600.0,
         help="Timeout for Chutes API build/deploy requests.",
     )
     parser.add_argument(
@@ -295,8 +304,45 @@ def print_results(metadata: RuntimeMetadata, config) -> None:
     print(shlex.join(miner_command(metadata, config)))
 
 
+def manual_warmup_command(chute_id_or_name: str) -> list[str]:
+    return ["chutes", "warmup", chute_id_or_name]
+
+
+def manual_warmup_api_url(api_base_url: str, chute_id_or_name: str) -> str:
+    return f"{api_base_url.rstrip('/')}/chutes/warmup/{chute_id_or_name}?quick=true"
+
+
+def print_warmup_followup(
+    *,
+    api_base_url: str,
+    chute_id_or_name: str,
+    reason: str,
+) -> None:
+    command = shlex.join(manual_warmup_command(chute_id_or_name))
+    api_url = manual_warmup_api_url(api_base_url, chute_id_or_name)
+    message = (
+        "\nChutes deployment completed successfully, but this helper did not "
+        "finish warming the runtime to hot.\n"
+        "The deployment metadata is still valid. Validators may not be able "
+        "to call the runtime until Chutes reports it hot.\n\n"
+        f"Reason: {reason}\n\n"
+        "Continue warmup manually with:\n"
+        f"  {command}\n\n"
+        "Or call the Chutes API:\n"
+        f"  GET {api_url}\n"
+    )
+    print(message)
+    bt.logging.warning(
+        "Chutes deployment succeeded, but warmup is still pending. "
+        f"Run `{command}` or call GET {api_url}"
+    )
+
+
 async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
     require_chute_module_ref(config.chute_ref)
+    if config.warmup and not config.deploy:
+        raise RuntimeError("--warmup requires --deploy.")
+
     runtime_timestamp = resolve_runtime_timestamp()
     explicit = explicit_metadata(config)
     base_chute = load_chute_object(config.chute_ref)
@@ -386,6 +432,75 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 metadata_from_chutes_response(raw_responses["chute"]),
                 chute_slug,
             )
+            bt.logging.success("Chutes runtime deployment completed successfully.")
+            if config.warmup:
+                warmup_target = (
+                    api_metadata.chute_id or api_metadata.chute_slug or chute_name
+                )
+                try:
+                    raw_responses["warmup"] = await warmup_chute_via_api(
+                        api_base_url=config.chutes_api_base_url,
+                        chute_id_or_name=warmup_target,
+                        timeout_seconds=float(config.chutes_timeout_seconds),
+                    )
+                except ChutesWarmupInterrupted as exc:
+                    command = shlex.join(manual_warmup_command(warmup_target))
+                    api_url = manual_warmup_api_url(
+                        config.chutes_api_base_url,
+                        warmup_target,
+                    )
+                    raw_responses["warmup"] = {
+                        "status": "interrupted",
+                        "target": warmup_target,
+                        "last_response": exc.last_payload,
+                        "manual_command": command,
+                        "api_url": api_url,
+                    }
+                    print_warmup_followup(
+                        api_base_url=config.chutes_api_base_url,
+                        chute_id_or_name=warmup_target,
+                        reason="warmup was interrupted before the chute became hot",
+                    )
+                except ChutesWarmupTimeout as exc:
+                    command = shlex.join(manual_warmup_command(warmup_target))
+                    api_url = manual_warmup_api_url(
+                        config.chutes_api_base_url,
+                        warmup_target,
+                    )
+                    raw_responses["warmup"] = {
+                        "status": "not_hot_yet",
+                        "target": warmup_target,
+                        "timeout_seconds": exc.timeout_seconds,
+                        "last_response": exc.last_payload,
+                        "manual_command": command,
+                        "api_url": api_url,
+                    }
+                    print_warmup_followup(
+                        api_base_url=config.chutes_api_base_url,
+                        chute_id_or_name=warmup_target,
+                        reason=(
+                            f"warmup did not become hot within "
+                            f"{exc.timeout_seconds:g} seconds"
+                        ),
+                    )
+                except Exception as exc:
+                    command = shlex.join(manual_warmup_command(warmup_target))
+                    api_url = manual_warmup_api_url(
+                        config.chutes_api_base_url,
+                        warmup_target,
+                    )
+                    raw_responses["warmup"] = {
+                        "status": "failed",
+                        "target": warmup_target,
+                        "error": str(exc),
+                        "manual_command": command,
+                        "api_url": api_url,
+                    }
+                    print_warmup_followup(
+                        api_base_url=config.chutes_api_base_url,
+                        chute_id_or_name=warmup_target,
+                        reason=str(exc),
+                    )
 
     return (
         merge_metadata(

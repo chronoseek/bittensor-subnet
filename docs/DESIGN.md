@@ -27,7 +27,7 @@ The full v2.0 source of truth is [ChronoSeek v2.0 DESA](./CHRONOSEEK_V2_DESA.md)
 
 - miners deploy full retrieval runtimes to private Chutes
 - miners commit structured deployment metadata on-chain
-- validators resolve the latest valid miner submission from chain state
+- validators resolve one permanent valid miner submission per hotkey from chain state
 - validators query private miner Chutes for synthetic evaluation only
 - the owner-run API serves organic traffic from promoted immutable Chutes clones
 - miners and validators do not publish ports through subnet metadata
@@ -64,7 +64,7 @@ The core retrieval problem is unchanged across versions.
 2. Miner deploys that runtime to a private Chutes deployment.
 3. Miner commits structured deployment metadata on-chain, keyed by hotkey.
 4. Validator samples a synthetic task.
-5. Validator resolves the latest valid miner submission from chain state.
+5. Validator resolves one permanent valid miner submission for the miner hotkey from chain state.
 6. Validator queries the miner's private Chutes deployment.
 7. Validator scores the result with the existing synthetic scoring loop.
 8. Validator updates weights.

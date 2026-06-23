@@ -59,7 +59,7 @@ The subnet should evaluate what miners build. The public API should serve custom
 ```text
 Synthetic evaluation path:
 Validator
-  -> latest on-chain miner submission
+  -> one permanent valid on-chain miner submission
   -> private miner Chute
   -> synthetic score
   -> on-chain weights
