@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build/deploy a ChronoSeek miner runtime through production Chutes APIs.
+"""Build/deploy/warmup a ChronoSeek miner runtime through production Chutes APIs.
 
 The Chute and Image are defined with the Chutes SDK in `chronoseek_chute.py`,
 but this script performs the actual image build and chute deployment through

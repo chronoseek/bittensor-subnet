@@ -5,11 +5,34 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from miner import main as miner_main
+from miner import get_config, main as miner_main
 from chronoseek.chain.submissions import PERMANENT_SUBMISSION_ERROR
 
 
 class TestChainInteraction(unittest.TestCase):
+    def test_miner_config_parses_wallet_cli_args_by_default(self):
+        test_args = [
+            "miner.py",
+            "--netuid",
+            "298",
+            "--wallet.name",
+            "testnet-miner",
+            "--wallet.hotkey",
+            "h1",
+            "--subtensor.network",
+            "test",
+        ]
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BT_NO_PARSE_CLI_ARGS", None)
+            with patch.object(sys, "argv", test_args):
+                config = get_config()
+
+        self.assertEqual(config.netuid, 298)
+        self.assertEqual(config.wallet.name, "testnet-miner")
+        self.assertEqual(config.wallet.hotkey, "h1")
+        self.assertEqual(config.subtensor.network, "test")
+
     @patch("bittensor.Wallet")
     @patch("bittensor.Subtensor")
     @patch("bittensor.Metagraph")

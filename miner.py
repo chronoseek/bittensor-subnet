@@ -23,7 +23,14 @@ from chronoseek.chain.submissions import (
 load_dotenv()
 
 
+def enable_bittensor_cli_parsing() -> None:
+    """Bittensor 10.x disables argparse parsing unless this env flag opts in."""
+
+    os.environ["BT_NO_PARSE_CLI_ARGS"] = "false"
+
+
 def get_config():
+    enable_bittensor_cli_parsing()
     parser = argparse.ArgumentParser(description="Commit ChronoSeek miner metadata")
     bt.Wallet.add_args(parser)
     bt.Subtensor.add_args(parser)

@@ -75,7 +75,10 @@ Important fields:
 | `CHRONOSEEK_PACKAGE` | Package or git URL installed into the Chutes image. Use your fork if you changed runtime code. |
 | `RUNTIME_REVISION` | Git SHA, image version, or immutable runtime label. If unset, the template uses the current git commit when available. |
 | `node_selector` | GPU requirements. Start conservatively. |
-| `concurrency` | Keep low initially because video retrieval is resource-heavy. |
+| `concurrency` | Per-instance request concurrency. The template uses `5` to keep validator fanout responsive. |
+| `max_instances` | Maximum autoscaled Chutes instances. The template uses `3`. |
+| `scaling_threshold` | Utilization threshold for adding capacity. The template uses `0.5`. |
+| `shutdown_after_seconds` | Idle time before Chutes shuts an instance down. The template uses `300`. |
 | `allow_external_egress=True` | Required so the runtime can fetch validator task videos. |
 
 The example runtime exposes:

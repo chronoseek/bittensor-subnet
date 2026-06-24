@@ -201,7 +201,10 @@ chute = Chute(
         # max_hourly_price_per_gpu=1.50,
         # exclude=["k80"],
     ),
-    concurrency=1,
+    concurrency=5,
+    max_instances=3,
+    scaling_threshold=0.5,
+    shutdown_after_seconds=300,
     revision=RUNTIME_REVISION,
     # The runtime must fetch arbitrary validator task videos.
     allow_external_egress=True,
