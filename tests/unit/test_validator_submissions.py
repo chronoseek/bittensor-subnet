@@ -16,6 +16,7 @@ from chronoseek.chutes.runtime import (
     ChutesRuntimeEndpoint,
     build_evaluation_endpoints,
     build_submission_endpoint_map,
+    chutes_auth_headers_from_env,
     resolve_submission_endpoint,
 )
 
@@ -46,6 +47,15 @@ def test_submission_endpoint_resolves_chutes_slug():
         resolve_submission_endpoint(submission, chutes_base_domain="chutes.ai")
         == "https://chronoseek-runtime.chutes.ai"
     )
+
+
+def test_chutes_auth_headers_use_bearer_token(monkeypatch):
+    monkeypatch.setenv("CHUTES_API_KEY", "cpk_test")
+
+    headers = chutes_auth_headers_from_env()
+
+    assert headers["Authorization"] == "Bearer cpk_test"
+    assert headers["X-Chutes-Version"]
 
 
 def test_build_evaluation_endpoints_uses_registered_submission():

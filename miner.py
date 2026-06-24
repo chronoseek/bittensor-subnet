@@ -18,9 +18,14 @@ from chronoseek.chain.submissions import (
     DuplicateMinerSubmissionError,
     MinerSubmission,
     commit_miner_submission,
+    get_hotkey_revealed_commitments,
 )
 
 load_dotenv()
+
+
+class SubnetNotFoundError(RuntimeError):
+    """Raised when the configured subnet is missing on the selected chain."""
 
 
 def enable_bittensor_cli_parsing() -> None:
@@ -37,10 +42,23 @@ def get_config():
     bt.logging.add_args(parser)
 
     parser.add_argument(
+        "--network",
+        dest="subtensor.network",
+        type=str,
+        default=os.getenv("NETWORK", "finney"),
+        help="Alias for --subtensor.network. Usually finney, test, or local.",
+    )
+    parser.add_argument(
         "--netuid",
         type=int,
         default=int(os.getenv("NETUID", "1")),
         help="Subnet NetUID",
+    )
+    parser.add_argument(
+        "--mechid",
+        type=int,
+        default=int(os.getenv("MECHID", "0")),
+        help="Subnet mechanism ID. Bittensor logs this as netuid.mechid; default is 0.",
     )
     parser.add_argument(
         "--endpoint",
@@ -75,6 +93,11 @@ def get_config():
         default=1,
         help="Commit-reveal delay in blocks.",
     )
+    parser.add_argument(
+        "--check-existing",
+        action="store_true",
+        help="Fetch and print revealed commitments for this wallet hotkey, then exit without submitting.",
+    )
 
     parser.set_defaults(
         **{
@@ -104,10 +127,38 @@ def get_wallet_hotkey_address(wallet) -> str | None:
     return getattr(hotkey, "ss58_address", None)
 
 
+def optional_text(value) -> str | None:
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
 def load_subtensor_and_metagraph(config):
+    netuid = int(config.netuid)
+    mechid = int(getattr(config, "mechid", 0))
     subtensor = bt.Subtensor(config=config)
+    network = optional_text(getattr(subtensor, "network", None))
+    chain_endpoint = optional_text(getattr(subtensor, "chain_endpoint", None))
+    bt.logging.info(
+        "Loading metagraph for "
+        f"network={network}, "
+        f"chain_endpoint={chain_endpoint}, "
+        f"netuid={netuid}, mechid={mechid} "
+        f"(Bittensor subnet mechanism {netuid}.{mechid})"
+    )
+    if hasattr(subtensor, "subnet_exists") and not subtensor.subnet_exists(
+        netuid=netuid
+    ):
+        raise SubnetNotFoundError(
+            f"Subnet netuid={netuid} does not exist on network={network} "
+            f"({chain_endpoint}). Bittensor reports subnet mechanisms as "
+            f"netuid.mechid, so {netuid}.{mechid} means netuid={netuid}, "
+            f"mechid={mechid}. If this is a testnet subnet, rerun with --network test."
+        )
+
     metagraph = bt.Metagraph(
-        netuid=config.netuid,
+        netuid=netuid,
+        mechid=mechid,
         network=subtensor.network,
         sync=False,
     )
@@ -147,6 +198,46 @@ def build_submission_payload(config, hotkey: str) -> MinerSubmission:
     return submission
 
 
+def normalize_commit_data(commit_data):
+    if isinstance(commit_data, str):
+        try:
+            return json.loads(commit_data)
+        except json.JSONDecodeError:
+            return commit_data
+    return commit_data
+
+
+async def check_existing_commitments(config, subtensor, metagraph, wallet_hotkey: str):
+    commits = await get_hotkey_revealed_commitments(
+        subtensor=subtensor,
+        netuid=int(config.netuid),
+        hotkey=wallet_hotkey,
+    )
+    result = {
+        "hotkey": wallet_hotkey,
+        "netuid": int(config.netuid),
+        "registered": wallet_hotkey in getattr(metagraph, "hotkeys", []),
+        "commitments": [
+            {
+                "block": block,
+                "data": normalize_commit_data(commit_data),
+            }
+            for block, commit_data in commits
+        ],
+    }
+
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    if not commits:
+        bt.logging.info(f"No revealed miner commitments found for {wallet_hotkey}.")
+    elif len(commits) > 1:
+        bt.logging.warning(
+            f"Found {len(commits)} revealed miner commitments for {wallet_hotkey}; validators disqualify duplicate-submitted hotkeys."
+        )
+    else:
+        bt.logging.info(f"Found one revealed miner commitment for {wallet_hotkey}.")
+    return 0
+
+
 async def submit_runtime_metadata(config) -> int:
     wallet = bt.Wallet(config=config)
     wallet_hotkey = get_wallet_hotkey_address(wallet)
@@ -156,7 +247,20 @@ async def submit_runtime_metadata(config) -> int:
         )
         return 1
 
-    subtensor, metagraph = load_subtensor_and_metagraph(config)
+    try:
+        subtensor, metagraph = load_subtensor_and_metagraph(config)
+    except SubnetNotFoundError as exc:
+        bt.logging.error(str(exc))
+        return 1
+
+    if config.check_existing:
+        return await check_existing_commitments(
+            config=config,
+            subtensor=subtensor,
+            metagraph=metagraph,
+            wallet_hotkey=wallet_hotkey,
+        )
+
     if not assert_registered_hotkey(wallet_hotkey, metagraph, int(config.netuid)):
         return 1
 

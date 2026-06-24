@@ -134,6 +134,19 @@ poetry run python scripts/deploy_chutes_runtime.py --build \
   --overwrite-existing-image
 ```
 
+To redeploy only Chutes serving metadata, such as concurrency or autoscaling,
+reuse the exact deployed chute name and built image ID:
+
+```bash
+CHUTE_NAME=<deployed-chute-name> \
+CHUTES_PREBUILT_IMAGE_ID=<built-image-id> \
+RUNTIME_REVISION=<built-image-revision> \
+poetry run chutes deploy chronoseek_chute:chute --accept-fee
+```
+
+Do this only when the container image contents are unchanged. The prebuilt
+image ID must already have Chutes status `built and pushed`.
+
 ## Commit Runtime Metadata
 
 After deployment, commit the runtime submission on-chain:
@@ -147,6 +160,19 @@ poetry run python miner.py \
 ```
 
 Miner runtime submissions are permanent per hotkey. A hotkey can submit only once; to submit a different runtime later, register and use a new miner hotkey. Validators disqualify hotkeys with multiple revealed submissions and assign them zero score.
+
+Before submitting, you can check whether the selected hotkey already has revealed commit data:
+
+```bash
+poetry run python miner.py \
+  --wallet.name <miner-coldkey> \
+  --wallet.hotkey <miner-hotkey> \
+  --network <finney-or-test> \
+  --netuid <netuid> \
+  --check-existing
+```
+
+This command prints the hotkey, netuid, registration state, and any revealed commitments as JSON. It is read-only and exits without submitting new metadata.
 
 You can also include Chutes and artifact metadata:
 

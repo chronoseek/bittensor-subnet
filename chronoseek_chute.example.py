@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -93,14 +94,18 @@ def repair_cyscale_namespace() -> None:
 
 # Required by Chutes SDK image/chute object construction. This is not part of
 # ChronoSeek miner identity.
-CHUTES_ACCOUNT = "CHANGE_ME"
-CHUTE_BASE_NAME = "chronoseek-runtime"
-CHUTE_NAME = CHUTE_BASE_NAME
+CHUTES_ACCOUNT = os.getenv("CHUTES_ACCOUNT", "CHANGE_ME").strip() or "CHANGE_ME"
+CHUTE_BASE_NAME = (
+    os.getenv("CHUTE_BASE_NAME", "chronoseek-runtime").strip()
+    or "chronoseek-runtime"
+)
+CHUTE_NAME = os.getenv("CHUTE_NAME", CHUTE_BASE_NAME).strip() or CHUTE_BASE_NAME
 CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
 RUNTIME_REVISION = resolve_runtime_revision()
 IMAGE_NAME = resolve_image_name(CHUTE_NAME, RUNTIME_REVISION)
 # Chutes API enforces <=32 chars for image tags.
 IMAGE_TAG = RUNTIME_REVISION[:32]
+PREBUILT_IMAGE_ID = os.getenv("CHUTES_PREBUILT_IMAGE_ID", "").strip()
 
 # The deployed Chutes image needs the ChronoSeek package and native video tools.
 # Use a public git URL, a private URL with deploy credentials, or replace this
@@ -192,7 +197,7 @@ chute = Chute(
         "# ChronoSeek Runtime\n\n"
         "ChronoSeek runtime for validator evaluation. Exposes `/health` and `/search`."
     ),
-    image=image,
+    image=PREBUILT_IMAGE_ID or image,
     node_selector=NodeSelector(
         gpu_count=1,
         min_vram_gb_per_gpu=16,
@@ -239,8 +244,14 @@ async def initialize_chronoseek(self):
 
     from chronoseek.miner import runtime as chronoseek_runtime
 
-    # Initialize model pipeline, Bittensor metagraph auth, and runtime globals.
-    chronoseek_runtime.initialize_runtime()
+    # Chutes activation only starts after startup hooks return. Model loading can
+    # take long enough to make activation fail, so warm the runtime in the
+    # background and let /health report readiness when initialization finishes.
+    threading.Thread(
+        target=chronoseek_runtime.initialize_runtime,
+        name="chronoseek-runtime-initialize",
+        daemon=True,
+    ).start()
 
 
 @chute.cord(

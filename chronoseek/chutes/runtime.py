@@ -31,8 +31,7 @@ def chutes_auth_headers_from_env(
     headers["X-Chutes-Version"] = current_version
 
     if chutes_api_key:
-        # headers["Authorization"] = f"Bearer {chutes_api_key}"
-        headers["Authorization"] = chutes_api_key
+        headers["Authorization"] = f"Bearer {chutes_api_key}"
     if include_content_type:
         headers["Content-Type"] = "application/json"
     return headers
