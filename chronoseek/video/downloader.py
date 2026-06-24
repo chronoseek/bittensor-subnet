@@ -11,7 +11,9 @@ from urllib3.util.retry import Retry
 from urllib.parse import urlparse
 
 from chronoseek.hippius.s3 import (
+    DEFAULT_HIPPIUS_S3_BUCKET,
     DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+    DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
     DEFAULT_HIPPIUS_S3_REGION,
     HippiusS3Config,
     HippiusS3StorageClient,
@@ -73,12 +75,8 @@ class VideoDownloader:
     # yt-dlp EJS n-challenge solver needs Node 20+ or Deno 2+ (see yt-dlp wiki/EJS).
     _ENV_YTDLP_NODE_PATH = "YTDLP_NODE_PATH"
     _ENV_YTDLP_DENO_PATH = "YTDLP_DENO_PATH"
-    _ENV_HIPPIUS_S3_ENDPOINT_URL = "HIPPIUS_S3_ENDPOINT_URL"
-    _ENV_HIPPIUS_S3_PUBLIC_BASE_URL = "HIPPIUS_S3_PUBLIC_BASE_URL"
-    _ENV_HIPPIUS_S3_BUCKET = "HIPPIUS_S3_BUCKET"
     _ENV_HIPPIUS_S3_ACCESS_KEY_ID = "HIPPIUS_S3_ACCESS_KEY_ID"
     _ENV_HIPPIUS_S3_SECRET_ACCESS_KEY = "HIPPIUS_S3_SECRET_ACCESS_KEY"
-    _ENV_HIPPIUS_S3_REGION = "HIPPIUS_S3_REGION"
     # Node-based parents (e.g. PM2) set these; yt-dlp's node/deno children then break IPC.
     _YTDLP_STRIP_ENV_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
 
@@ -187,11 +185,10 @@ class VideoDownloader:
     @classmethod
     def _configured_hippius_hosts(cls) -> set[str]:
         hosts: set[str] = set()
-        for env_name in (
-            cls._ENV_HIPPIUS_S3_ENDPOINT_URL,
-            cls._ENV_HIPPIUS_S3_PUBLIC_BASE_URL,
+        for value in (
+            DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+            DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
         ):
-            value = cls._env_value(env_name)
             if not value:
                 continue
             parsed = urlparse(value)
@@ -232,15 +229,10 @@ class VideoDownloader:
         Miners should route those URLs through this branch first so synthetic
         Hippius artifacts do not get sent through extractor heuristics.
         """
-        public_base_url = cls._env_value(
-            cls._ENV_HIPPIUS_S3_PUBLIC_BASE_URL,
-            DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
-        )
-        configured_bucket = cls._env_value(cls._ENV_HIPPIUS_S3_BUCKET)
         object_ref = parse_hippius_s3_url(
             url,
-            default_bucket=configured_bucket,
-            public_base_url=public_base_url,
+            default_bucket=DEFAULT_HIPPIUS_S3_BUCKET,
+            public_base_url=DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
         )
         access_key_id = cls._env_value(cls._ENV_HIPPIUS_S3_ACCESS_KEY_ID)
         secret_access_key = cls._env_value(cls._ENV_HIPPIUS_S3_SECRET_ACCESS_KEY)
@@ -253,18 +245,12 @@ class VideoDownloader:
             if object_ref:
                 client = HippiusS3StorageClient(
                     HippiusS3Config(
-                        endpoint_url=cls._env_value(
-                            cls._ENV_HIPPIUS_S3_ENDPOINT_URL,
-                            DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
-                        ),
-                        public_base_url=public_base_url,
+                        endpoint_url=DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+                        public_base_url=DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
                         bucket=object_ref.bucket,
                         access_key_id=access_key_id,
                         secret_access_key=secret_access_key,
-                        region=cls._env_value(
-                            cls._ENV_HIPPIUS_S3_REGION,
-                            DEFAULT_HIPPIUS_S3_REGION,
-                        ),
+                        region=DEFAULT_HIPPIUS_S3_REGION,
                         anonymous=not has_credentials,
                     ),
                     timeout_seconds=timeout,

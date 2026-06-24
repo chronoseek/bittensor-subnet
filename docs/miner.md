@@ -31,6 +31,7 @@ For on-chain miner metadata commits:
 | `HOTKEY_NAME` | Yes | Registered miner hotkey name. |
 | `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
 | `NETUID` | Yes | ChronoSeek subnet netuid. |
+| `MECHID` | If non-default | Defaults to `0`. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 
 For Chutes runtime build/deploy:
@@ -38,20 +39,25 @@ For Chutes runtime build/deploy:
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `CHUTES_API_KEY` | Yes | Used by `scripts/deploy_chutes_runtime.py`. |
+| `CHUTES_ACCOUNT` | Yes for `chronoseek_chute.example.py` | Chutes account namespace, for example `alice`. |
 | `HF_TOKEN` | Recommended | Used by CLIP/Whisper model downloads when present. |
 | `YTDLP_COOKIES` | Optional | Cookies file copied into Chutes image when it points to a readable local file. |
 | `YTDLP_COOKIES_BROWSER` | Optional | Browser cookie source used by yt-dlp where that browser profile is available. Chutes deployments should prefer `YTDLP_COOKIES`. |
+| `YTDLP_DENO_PATH` | Optional | Explicit Deno path for yt-dlp challenge solving. The Chutes image sets this internally. |
+| `YTDLP_NODE_PATH` | Optional | Explicit Node.js path for yt-dlp challenge solving. |
 
 Minimal `.env` shape:
 
 ```env
 NETWORK=finney
 NETUID=<netuid>
+MECHID=0
 WALLET_NAME=<miner-coldkey>
 HOTKEY_NAME=<miner-hotkey>
 WALLET_PATH=~/.bittensor/wallets
 
 CHUTES_API_KEY=<chutes-api-key>
+CHUTES_ACCOUNT=<chutes-account>
 HF_TOKEN=<hugging-face-token>
 YTDLP_COOKIES=/absolute/path/to/cookies.txt
 ```
@@ -64,16 +70,16 @@ Create your local Chutes definition:
 cp chronoseek_chute.example.py chronoseek_chute.py
 ```
 
-Edit `chronoseek_chute.py` before deployment. This file is ignored by git and is where miner-specific Chutes account, package, GPU, and revision settings belong. The examples assume Chutes account `alice`.
+Edit `chronoseek_chute.py` before deployment. This file is ignored by git and is where miner-specific Chutes account, package, and GPU settings belong. The examples assume Chutes account `alice`.
 
 Important fields:
 
 | Field | Notes |
 | --- | --- |
 | `CHUTES_ACCOUNT` | Chutes account namespace, for example `alice`. This is not your Bittensor identity. |
-| `CHUTE_BASE_NAME` | Defaults to `chronoseek-runtime`. |
+| `DEFAULT_CHUTE_BASE_NAME` | Constant in `chronoseek/constants.py`; `CHUTE_NAME` is generated from it. |
 | `CHRONOSEEK_PACKAGE` | Package or git URL installed into the Chutes image. Use your fork if you changed runtime code. |
-| `RUNTIME_REVISION` | Git SHA, image version, or immutable runtime label. If unset, the template uses the current git commit when available. |
+| `RUNTIME_REVISION` | Derived from the current git commit when available. |
 | `node_selector` | GPU requirements. Start conservatively. |
 | `concurrency` | Per-instance request concurrency. The template uses `5` to keep validator fanout responsive. |
 | `max_instances` | Maximum autoscaled Chutes instances. The template uses `3`. |
@@ -134,18 +140,10 @@ poetry run python scripts/deploy_chutes_runtime.py --build \
   --overwrite-existing-image
 ```
 
-To redeploy only Chutes serving metadata, such as concurrency or autoscaling,
-reuse the exact deployed chute name and built image ID:
-
-```bash
-CHUTE_NAME=<deployed-chute-name> \
-CHUTES_PREBUILT_IMAGE_ID=<built-image-id> \
-RUNTIME_REVISION=<built-image-revision> \
-poetry run chutes deploy chronoseek_chute:chute --accept-fee
-```
-
-Do this only when the container image contents are unchanged. The prebuilt
-image ID must already have Chutes status `built and pushed`.
+Rare advanced redeploys that reuse a prebuilt Chutes image should edit
+`chronoseek_chute.py` directly for that one-off flow. Do this only when the
+container image contents are unchanged and the prebuilt image already has
+Chutes status `built and pushed`.
 
 ## Commit Runtime Metadata
 
@@ -215,14 +213,16 @@ YTDLP_COOKIES_BROWSER=chrome:Default
 
 During Chutes image build, a readable `YTDLP_COOKIES` file is copied into the image and the environment is rewritten to the container path.
 
+If validator task clips come from a non-default Hippius-compatible host, update
+the Hippius defaults in `chronoseek/constants.py`.
+
 ## Common Configuration
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `CHUTES_BASE_DOMAIN` | `chutes.ai` | Used by validators to resolve submitted Chutes slugs. |
 | `MIN_VALIDATOR_STAKE` | `10000` | Minimum validator stake enforced by runtime auth paths that use hotkey headers. |
-| `HF_HOME` | `~/.cache/huggingface` | Hugging Face cache path. |
-| `YTDLP_DENO_PATH` | `/opt/deno/bin/deno` | Deno path for yt-dlp challenge solving in Chutes images. |
+| `DEFAULT_CHUTES_HF_HOME` | `/data/huggingface` | Hugging Face cache path inside Chutes images. |
+| `YTDLP_DENO_PATH` | Empty locally; `/opt/deno/bin/deno` in Chutes images | Deno path for yt-dlp challenge solving. |
 | `YTDLP_NODE_PATH` | Empty | Optional Node.js path for yt-dlp challenge solving. |
 | `LOG_LEVEL` | `INFO` | Logging verbosity. |
 

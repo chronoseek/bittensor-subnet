@@ -25,8 +25,8 @@ import bittensor as bt
 import httpx
 
 from chronoseek.chutes.runtime import chutes_auth_headers_from_env
+from chronoseek.constants import DEFAULT_CHRONOSEEK_LOGO_URL
 
-DEFAULT_CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
 YTDLP_COOKIES_ENV = "YTDLP_COOKIES"
 CHUTES_MINER_FILE_ROOT = "/opt/chronoseek/miner-files"
 CHUTES_IMAGE_FILE_BUILD_CONTEXT_ROOT = ".chronoseek-chutes-build"

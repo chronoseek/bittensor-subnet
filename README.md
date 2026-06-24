@@ -66,7 +66,7 @@ Create your environment file:
 cp .env.example .env
 ```
 
-Then edit `.env` for your role. `.env.example` contains the full supported configuration surface; the validator and miner guides call out the required subset.
+Then edit `.env` for your role. `.env.example` is intentionally minimal and focuses on identity, credentials, secrets, and host-specific files. Runtime tuning defaults live as constants in `chronoseek/constants.py`.
 
 ## Quick Start
 

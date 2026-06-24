@@ -2,7 +2,7 @@
 
 ## Status
 
-Hardened ActivityNet-derived task generation is implemented behind `ENABLE_HARDENED_TASKS=1`. This document describes the implemented flow and keeps the original deliverables as an audit checklist for future changes.
+Hardened ActivityNet-derived task generation is implemented as the default validator task path through `DEFAULT_ENABLE_HARDENED_TASKS=True`. This document describes the implemented flow and keeps the original deliverables as an audit checklist for future changes.
 
 ## Goal
 
@@ -151,65 +151,36 @@ This keeps existing tests and bootstrap/dev flows working while enabling the har
 
 ## Configuration
 
-The hardened task implementation uses these validator configuration values from `.env.example` and `validator.py`.
+The hardened task implementation keeps operator secrets in `.env` and ordinary tuning in `DEFAULT_*` constants in `chronoseek/constants.py`.
 
-### Task Generation
+### Required Environment
 
 ```env
-ENABLE_HARDENED_TASKS=0
 VALIDATOR_TASK_SECRET=
-VALIDATOR_EVAL_TOP_K=1
-TASK_CLIP_CACHE_DIR=~/.cache/chronoseek/task-clips
-TASK_ARTIFACT_MANIFEST_PATH=
-TASK_ARTIFACT_PREFIX=task-clips
-TASK_CLIP_TTL_HOURS=6
-TASK_CLIP_CLEANUP_INTERVAL_SECONDS=900
-TASK_DELETE_REMOTE_ARTIFACTS=0
-TASK_VIDEO_COOLDOWN_HOURS=24
-TASK_CAPTION_COOLDOWN_HOURS=168
-TASK_QUERY_VARIANTS_PATH=
-TASK_MIN_CLIP_DURATION_SECONDS=30
-TASK_MAX_CLIP_DURATION_SECONDS=180
-TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS=120
-TASK_ENCODING_PROFILE_NAME=h264-720p-v1
-TASK_CLIP_MAX_WIDTH=1280
-TASK_CLIP_MAX_HEIGHT=720
-TASK_CLIP_VIDEO_BITRATE=1500k
-TASK_CLIP_AUDIO_BITRATE=96k
-TASK_MAX_PREDICTION_DURATION_SECONDS=60
-HARDENED_TASK_MAX_GENERATION_ATTEMPTS=5
-```
-
-`ENABLE_HARDENED_TASKS=1` switches the validator from legacy ActivityNet URL tasks to private clipped task artifacts.
-
-`VALIDATOR_TASK_SECRET` is required when hardened task generation is enabled. It should be a long random value and must not be logged.
-
-### Hippius Public S3
-
-```env
-HIPPIUS_S3_ENDPOINT_URL=https://s3.hippius.com
-HIPPIUS_S3_PUBLIC_BASE_URL=https://s3.hippius.com
-HIPPIUS_S3_BUCKET=chronoseek
 HIPPIUS_S3_ACCESS_KEY_ID=
 HIPPIUS_S3_SECRET_ACCESS_KEY=
-HIPPIUS_S3_REGION=decentralized
-HIPPIUS_S3_TIMEOUT_SECONDS=60
 ```
+
+`DEFAULT_ENABLE_HARDENED_TASKS=True` makes the validator use private clipped task artifacts by default. Use `--disable-hardened-tasks` only for bootstrap/debug runs that need legacy ActivityNet URL tasks.
+
+`VALIDATOR_TASK_SECRET` or `--validator-task-secret` and the Hippius credentials are required when hardened task generation is enabled. They should never be logged or committed.
+
+### Code Defaults
+
+Validator defaults such as `DEFAULT_TASK_CLIP_TTL_HOURS`, `DEFAULT_TASK_MIN_CLIP_DURATION_SECONDS`, `DEFAULT_TASK_MAX_CLIP_DURATION_SECONDS`, `DEFAULT_TASK_ENCODING_PROFILE_NAME`, `DEFAULT_VALIDATOR_EVAL_TOP_K`, and the default Hippius endpoint/bucket are constants in `chronoseek/constants.py`.
 
 Use Hippius public S3 path-style URLs for miner-facing task clips (`https://s3.hippius.com/chronoseek/task-clips/<video-file-name-or-id>`). Do not use IPFS gateway URLs or presigned URLs for the first implementation.
 
-By default, expired-task cleanup removes local files and manifest entries only. Set `TASK_DELETE_REMOTE_ARTIFACTS=1` only if uploaded Hippius task clips should also be deleted.
+By default, expired-task cleanup removes local files and manifest entries only. Use `--task-delete-remote-artifacts` only if uploaded Hippius task clips should also be deleted.
 
 ### Optional Vidaio
 
 ```env
-VIDAIO_COMPRESSION_ENABLED=0
 VIDAIO_API_BASE_URL=
 VIDAIO_API_KEY=
-VIDAIO_TIMEOUT_SECONDS=60
 ```
 
-Vidaio must be optional. If enabled but unavailable, invalid, or timed out, validation must fall back to local ffmpeg compression.
+Vidaio must be optional and remains disabled by default because no public API is available yet. Enable it with `--vidaio-compression-enabled` or `DEFAULT_VIDAIO_COMPRESSION_ENABLED`. If enabled but unavailable, invalid, or timed out, validation must fall back to local ffmpeg compression.
 
 ## Implementation Checklist
 
@@ -218,7 +189,7 @@ This checklist is retained for implementation review. The current codebase imple
 ### 1. Add Doc And Config Surface
 
 - Add this implementation doc.
-- Add validator task, Hippius, scoring hygiene, and optional Vidaio config values to `.env.example`.
+- Keep validator secrets in `.env.example` and ordinary task/scoring defaults in code constants.
 - Add CLI/env parsing in `validator.py`.
 - Do not change miner-facing protocol schemas.
 
@@ -233,7 +204,7 @@ Tests:
 - Implement `ValidationTask` and related dataclasses.
 - Add a normalization helper used by `forward.run_step`.
 - Keep legacy tuple task generation working.
-- Make `run_step` send `top_k=VALIDATOR_EVAL_TOP_K`.
+- Make `run_step` send `top_k` from the validator configuration.
 
 Tests:
 
@@ -245,7 +216,7 @@ Tests:
 ### 3. Add Secret-Seeded Sampling And Replay Cache
 
 - Implement `task_sampler.py`.
-- Seed sampling with `VALIDATOR_TASK_SECRET`, validator hotkey, current block, and nonce.
+- Seed sampling with `VALIDATOR_TASK_SECRET` or `--validator-task-secret`, validator hotkey, current block, and nonce.
 - Add per-video and per-caption cooldowns.
 - Add replay key containing source video, caption, crop bucket, query variant, and encoding profile.
 
@@ -259,7 +230,7 @@ Tests:
 ### 4. Add Query Variants
 
 - Implement `query_variants.py`.
-- Load private variants from `TASK_QUERY_VARIANTS_PATH`.
+- Load private variants from the configured query variants path.
 - Use deterministic fallback variants only when private variants are unavailable.
 - Avoid sending exact ActivityNet captions when a variant exists.
 - Log a warning when production uses fallback variants.
@@ -313,7 +284,7 @@ Tests:
 task-clips/<task_id>.mp4
 ```
 
-- Return public URL using `HIPPIUS_S3_PUBLIC_BASE_URL`.
+- Return public URL using the configured Hippius public base URL.
 - Validate that bucket, endpoint, access key, secret key, and public base URL are configured.
 
 Tests:
@@ -428,6 +399,6 @@ The rollout order below records the intended staged path. Items 1 through 7 are 
 - Hippius public S3 URL mode is the default delivery path.
 - Local ffmpeg compression is required on validator hosts.
 - Vidaio is optional until a stable API contract is confirmed.
-- Short TTL cleanup is the default, with `TASK_CLIP_TTL_HOURS=6`.
+- Short TTL cleanup is the default, with `DEFAULT_TASK_CLIP_TTL_HOURS=6`.
 - Generated task artifacts and private query variants must not be committed.
 - No public protocol change is required.

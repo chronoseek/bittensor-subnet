@@ -9,9 +9,13 @@ from minio.error import S3Error
 import requests
 import urllib3
 
-DEFAULT_HIPPIUS_S3_ENDPOINT_URL = "https://s3.hippius.com"
-DEFAULT_HIPPIUS_S3_REGION = "decentralized"
-DEFAULT_HIPPIUS_S3_BUCKET = "chronoseek"
+from chronoseek.constants import (
+    DEFAULT_HIPPIUS_S3_BUCKET,
+    DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+    DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
+    DEFAULT_HIPPIUS_S3_REGION,
+)
+
 HIPPIUS_S3_HOSTS = {
     "s3.hippius.com",
     "eu-central-1.hippius.com",
@@ -22,7 +26,7 @@ HIPPIUS_S3_HOSTS = {
 @dataclass(frozen=True)
 class HippiusS3Config:
     endpoint_url: str = DEFAULT_HIPPIUS_S3_ENDPOINT_URL
-    public_base_url: str = DEFAULT_HIPPIUS_S3_ENDPOINT_URL
+    public_base_url: str = DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL
     bucket: str = DEFAULT_HIPPIUS_S3_BUCKET
     access_key_id: str = ""
     secret_access_key: str = ""

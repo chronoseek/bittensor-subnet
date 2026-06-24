@@ -34,8 +34,8 @@ def test_is_hippius_url_detects_default_and_configured_hosts(monkeypatch):
         "https://public.hippius.com/chronoseek/task-clips/task.mp4"
     )
 
-    monkeypatch.setenv(
-        "HIPPIUS_S3_PUBLIC_BASE_URL",
+    monkeypatch.setattr(
+        "chronoseek.video.downloader.DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL",
         "https://tasks.example.net/chronoseek",
     )
     assert VideoDownloader.is_hippius_url(
@@ -84,12 +84,8 @@ def test_download_with_hippius_uses_signed_s3_when_credentials_are_configured(
             )
             return local_path
 
-    monkeypatch.setenv("HIPPIUS_S3_BUCKET", "chronoseek")
     monkeypatch.setenv("HIPPIUS_S3_ACCESS_KEY_ID", "access")
     monkeypatch.setenv("HIPPIUS_S3_SECRET_ACCESS_KEY", "secret")
-    monkeypatch.delenv("HIPPIUS_S3_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("HIPPIUS_S3_PUBLIC_BASE_URL", raising=False)
-    monkeypatch.delenv("HIPPIUS_S3_REGION", raising=False)
     monkeypatch.setattr(
         "chronoseek.video.downloader.HippiusS3StorageClient",
         FakeHippiusS3StorageClient,

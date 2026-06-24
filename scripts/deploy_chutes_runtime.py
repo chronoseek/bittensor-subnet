@@ -50,6 +50,11 @@ from chronoseek.chutes.deployment import (
     warmup_chute_via_api,
 )
 from chronoseek.chutes.runtime import resolve_submission_endpoint
+from chronoseek.constants import (
+    DEFAULT_CHUTES_API_BASE_URL,
+    DEFAULT_CHUTES_BASE_DOMAIN,
+    DEFAULT_LOG_LEVEL,
+)
 
 sys.argv = _ORIGINAL_ARGV
 load_dotenv()
@@ -65,14 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-level",
         type=str,
-        default=os.getenv("LOG_LEVEL", "INFO"),
+        default=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
         choices=["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity.",
     )
     parser.add_argument(
         "--chutes-api-base-url",
         type=str,
-        default="https://api.chutes.ai",
+        default=DEFAULT_CHUTES_API_BASE_URL,
         help="Chutes API base URL.",
     )
     parser.add_argument(
@@ -160,9 +165,8 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Optional on-chain provenance revision. This does not mutate the "
-            "Chutes SDK definition; copy chronoseek_chute.example.py to "
-            "chronoseek_chute.py and set RUNTIME_REVISION there for the actual "
-            "image/chute revision."
+            "Chutes SDK definition; chronoseek_chute.py derives its image/chute "
+            "revision from the current git commit."
         ),
     )
     parser.add_argument("--artifact-digest", type=str, default="")
@@ -274,7 +278,7 @@ def resolved_runtime_endpoint(metadata: RuntimeMetadata) -> str | None:
     )
     return resolve_submission_endpoint(
         submission,
-        chutes_base_domain=os.getenv("CHUTES_BASE_DOMAIN", "chutes.ai"),
+        chutes_base_domain=DEFAULT_CHUTES_BASE_DOMAIN,
     )
 
 

@@ -15,6 +15,12 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from chronoseek.constants import (
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_MIN_VALIDATOR_STAKE,
+    DEFAULT_NETUID,
+    DEFAULT_NETWORK,
+)
 from chronoseek.config import PROTOCOL_VERSION
 from chronoseek.epistula import verify_signature
 from chronoseek.miner import logic as miner_logic_module
@@ -43,10 +49,12 @@ startup_error: str | None = None
 
 def load_runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
-        netuid=int(os.getenv("NETUID", "1")),
-        network=os.getenv("NETWORK", "finney"),
-        min_validator_stake=float(os.getenv("MIN_VALIDATOR_STAKE", "10000")),
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        netuid=int(os.getenv("NETUID", str(DEFAULT_NETUID))),
+        network=os.getenv("NETWORK", DEFAULT_NETWORK),
+        min_validator_stake=float(
+            os.getenv("MIN_VALIDATOR_STAKE", str(DEFAULT_MIN_VALIDATOR_STAKE))
+        ),
+        log_level=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
     )
 
 

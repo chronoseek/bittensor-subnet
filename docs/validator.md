@@ -10,7 +10,7 @@ Validators generate synthetic video-search tasks, query miner Chutes runtimes, s
 - Poetry
 - A registered validator hotkey on the configured subnet
 - `ffmpeg` available in `PATH` when hardened task clipping/compression is enabled
-- A Hugging Face token, unless `TASK_DATASET_PATH` points to a local ActivityNet-style dataset
+- A Hugging Face token, unless `--task-dataset-path` points to a local ActivityNet-style dataset
 - A Chutes API key for querying private miner runtimes
 - Hippius S3 credentials when hardened task generation is enabled
 
@@ -21,11 +21,11 @@ poetry install
 cp .env.example .env
 ```
 
-Use `.env.example` as the complete default reference. The tables below separate the required production settings from the optional tuning knobs.
+`.env.example` intentionally stays small. Normal validators should only need identity, credentials, secrets, and host-specific access files in `.env`; runtime defaults live as `DEFAULT_*` constants in `chronoseek/constants.py` and can be overridden with CLI flags for experiments.
 
-## Required Environment Variables
+## Environment Variables
 
-Base validator:
+Required for normal validator operation:
 
 | Variable | Required | Notes |
 | --- | --- | --- |
@@ -35,31 +35,34 @@ Base validator:
 | `NETUID` | Yes | ChronoSeek subnet netuid. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 | `CHUTES_API_KEY` | Yes | Used to query private Chutes runtimes. |
-| `HF_TOKEN` | Yes, unless `TASK_DATASET_PATH` is set | Required for Hugging Face ActivityNet loading. |
+| `HF_TOKEN` | Yes, unless `--task-dataset-path` is passed | Required for Hugging Face ActivityNet loading and model downloads. |
 
 Hardened task generation:
 
-| Variable | Required when | Notes |
+| Setting | Required when | Notes |
 | --- | --- | --- |
-| `ENABLE_HARDENED_TASKS=1` | Enabling hardened tasks | Generates private clipped task artifacts. |
-| `VALIDATOR_TASK_SECRET` | `ENABLE_HARDENED_TASKS=1` | Set a long random secret. Used for private deterministic sampling. |
-| `HIPPIUS_S3_ACCESS_KEY_ID` | `ENABLE_HARDENED_TASKS=1` | Hippius S3 access key ID. |
-| `HIPPIUS_S3_SECRET_ACCESS_KEY` | `ENABLE_HARDENED_TASKS=1` | Hippius S3 secret key. |
-| `HIPPIUS_S3_BUCKET` | Optional | Defaults to `chronoseek`. |
+| `DEFAULT_ENABLE_HARDENED_TASKS` | Default | Hardened task generation is enabled by default. Use `--disable-hardened-tasks` only for bootstrap/debug runs. |
+| `VALIDATOR_TASK_SECRET` or `--validator-task-secret` | Normal validator operation | Set a long random secret. Used for private deterministic sampling. |
+| `HIPPIUS_S3_ACCESS_KEY_ID` | Normal validator operation | Hippius S3 access key ID. |
+| `HIPPIUS_S3_SECRET_ACCESS_KEY` | Normal validator operation | Hippius S3 secret key. |
+| `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, bucket, or region constants when a deployment uses different Hippius-compatible storage. |
 
 Optional Vidaio compression:
 
 | Variable | Required when | Notes |
 | --- | --- | --- |
-| `VIDAIO_COMPRESSION_ENABLED=1` | Enabling Vidaio | Tries Vidaio before local ffmpeg compression. |
-| `VIDAIO_API_BASE_URL` | `VIDAIO_COMPRESSION_ENABLED=1` | Vidaio compression API base URL. |
+| `--vidaio-compression-enabled` or `DEFAULT_VIDAIO_COMPRESSION_ENABLED` | Enabling Vidaio | Disabled by default because no public Vidaio API is available yet. When enabled, tries Vidaio before local ffmpeg compression. |
+| `VIDAIO_API_BASE_URL` | Vidaio is enabled | Vidaio compression API base URL. |
 | `VIDAIO_API_KEY` | If required by Vidaio | Bearer token sent to Vidaio. |
 
-Runtime routing:
+Optional shared validator/miner video access:
 
-| Variable | Required when | Notes |
-| --- | --- | --- |
-| `CHUTES_BASE_DOMAIN` | Optional | Defaults to `chutes.ai`; used to resolve submitted `chute_slug` values as `https://{slug}.${CHUTES_BASE_DOMAIN}`. |
+| Variable | Notes |
+| --- | --- |
+| `YTDLP_COOKIES` | Absolute path to a Netscape `cookies.txt` file. Validators use this when downloading source videos for task generation; miner Chutes image builds copy a readable cookies file into the runtime image. |
+| `YTDLP_COOKIES_BROWSER` | Optional browser cookie source, for example `chrome:Default`, for local testing on machines where that browser profile is installed and readable. |
+| `YTDLP_DENO_PATH` | Optional Deno path for yt-dlp JavaScript challenge solving when the executable is not discoverable automatically. |
+| `YTDLP_NODE_PATH` | Optional Node.js path for yt-dlp JavaScript challenge solving. |
 
 Minimal `.env` shape:
 
@@ -73,12 +76,12 @@ WALLET_PATH=~/.bittensor/wallets
 CHUTES_API_KEY=<chutes-api-key>
 HF_TOKEN=<hugging-face-token>
 
-ENABLE_HARDENED_TASKS=1
 VALIDATOR_TASK_SECRET=<long-random-secret>
-HIPPIUS_S3_BUCKET=chronoseek
 HIPPIUS_S3_ACCESS_KEY_ID=<hippius-access-key>
 HIPPIUS_S3_SECRET_ACCESS_KEY=<hippius-secret-key>
 ```
+
+Advanced runtime defaults such as dataset path, hardened-mode enablement, clip TTL, miner request timeout, eval `top_k`, Chutes base domain, and Hippius endpoint/bucket values are no longer expected in `.env`. Use the code constants in `chronoseek/constants.py` for subnet-wide defaults, or pass the corresponding CLI flag for a one-off run.
 
 ## Run
 
@@ -88,7 +91,7 @@ Start the validator:
 poetry run python validator.py
 ```
 
-CLI flags can replace environment variables. For example:
+CLI flags can replace environment variables and override code defaults. For example:
 
 ```bash
 poetry run python validator.py \
@@ -107,7 +110,7 @@ poetry run python scripts/verify_hardened_task_generation.py --use-smoke-dataset
 
 ## Hardened Task Flow
 
-With `ENABLE_HARDENED_TASKS=1`, validators:
+With `DEFAULT_ENABLE_HARDENED_TASKS=True`, validators:
 
 1. Sample an ActivityNet task internally.
 2. Download the source video on the validator side.
@@ -126,7 +129,7 @@ https://s3.hippius.com/chronoseek/task-clips/<video-file-name-or-id>
 
 At hardened validator startup, ChronoSeek checks that the configured Hippius bucket exists and applies a public-read bucket policy for `s3:GetObject` so miners can download uploaded task clips without Hippius credentials.
 
-Uploaded Hippius videos are kept by default. Set `TASK_DELETE_REMOTE_ARTIFACTS=1` only if the validator should delete expired remote artifacts during cleanup.
+Uploaded Hippius videos are kept by default. Use `--task-delete-remote-artifacts` only if the validator should delete expired remote artifacts during cleanup.
 
 ## Video Download
 
@@ -137,110 +140,25 @@ Validators use the shared downloader for source videos. The downloader supports 
 - Direct media URLs: raw HTTP.
 - Failure path: fallback to the next supported strategy, then structured error details.
 
-For restricted videos, configure cookies:
+For restricted videos, configure `YTDLP_COOKIES` or `YTDLP_COOKIES_BROWSER` in `.env`. Validators use this downloader while generating tasks, and miner runtimes use the same settings when fetching validator-provided video URLs.
 
-| Variable | Notes |
-| --- | --- |
-| `YTDLP_COOKIES` | Absolute path to a Netscape `cookies.txt` file. |
-| `YTDLP_COOKIES_BROWSER` | Optional browser cookie source, for example `chrome:Default`, for local testing on machines where that browser profile is installed and readable. Empty by default. |
-| `YTDLP_DENO_PATH` | Deno path used by yt-dlp challenge solving. |
-| `YTDLP_NODE_PATH` | Optional Node.js path if you prefer Node for challenge solving. |
+## Defaults And Overrides
 
-## Configuration Reference
+ChronoSeek keeps ordinary tuning in `DEFAULT_*` constants in `chronoseek/constants.py`. This includes:
 
-`.env.example` is the source of truth for default values. The tables below group the validator settings by operator concern.
+- task sampling, split, accessibility, cooldown, and cache defaults
+- hardened clip duration, TTL, cleanup, encoding, canary, and exposure defaults
+- Hippius endpoint, public base URL, bucket, region, and timeout defaults
+- miner request, submission refresh, health-check, scoring, latency, and burn defaults
 
-Dataset and availability:
+For one-off local testing, use CLI flags instead of adding new `.env` entries:
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `TASK_DATASET_PATH` | Empty | Local ActivityNet-style dataset path. If unset, Hugging Face is used. |
-| `TASK_SPLIT` | `validation` | Dataset split. |
-| `HF_HOME` | `~/.cache/huggingface` | Hugging Face cache path. |
-| `HF_ACTIVITYNET_FILENAME` | Empty | Optional ActivityNet JSON filename override inside the downloaded snapshot. |
-| `REQUIRE_ACCESSIBLE_VIDEOS` | `1` | Skip inaccessible source videos. |
-| `TASK_MAX_SAMPLING_ATTEMPTS` | `50` | Attempts to find an accessible task. |
-| `VIDEO_AVAILABILITY_CACHE_PATH` | Empty | Legacy base cache path used to derive specific accessibility cache files when the specific paths are unset. |
-| `ACCESSIBLE_VIDEO_CACHE_PATH` | Empty | JSON cache path for videos confirmed accessible. |
-| `INACCESSIBLE_VIDEO_CACHE_PATH` | Empty | JSON cache path for videos confirmed inaccessible. |
-| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS` | `24` | TTL for video accessibility cache entries. |
-| `VIDEO_AVAILABILITY_TIMEOUT` | `20` | Timeout in seconds for accessibility checks. |
-
-Hardened task artifacts:
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `HARDENED_TASK_MAX_GENERATION_ATTEMPTS` | `5` | Attempts to produce one hardened task before skipping the validator step. |
-| `TASK_QUERY_VARIANTS_PATH` | Empty | Private query variant manifest path. Do not commit this file. |
-| `TASK_CLIP_CACHE_DIR` | `~/.cache/chronoseek/task-clips` | Local generated clip cache. |
-| `TASK_ARTIFACT_MANIFEST_PATH` | Empty | Local uploaded artifact manifest path. |
-| `TASK_ARTIFACT_PREFIX` | `task-clips` | Hippius object-key prefix. |
-| `TASK_CLIP_TTL_HOURS` | `6` | Local manifest/cache expiry. |
-| `TASK_CLIP_CLEANUP_INTERVAL_SECONDS` | `900` | Minimum seconds between expired-artifact cleanup passes. |
-| `TASK_DELETE_REMOTE_ARTIFACTS` | `0` | Remote Hippius deletion is opt-in. |
-| `TASK_VIDEO_COOLDOWN_HOURS` | `24` | Cooldown before reusing a source video. |
-| `TASK_CAPTION_COOLDOWN_HOURS` | `168` | Cooldown before reusing a source caption. |
-| `TASK_MIN_CLIP_DURATION_SECONDS` | `30` | Minimum generated clip duration. |
-| `TASK_MAX_CLIP_DURATION_SECONDS` | `180` | Maximum generated clip duration. |
-| `TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS` | `120` | Source download timeout for clipping. |
-
-Encoding and anti-gaming:
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `TASK_ENCODING_PROFILE_NAME` | `h264-720p-v1` | Base encoding profile name recorded in the artifact manifest. |
-| `TASK_CLIP_MAX_WIDTH` | `1280` | Maximum generated clip width. |
-| `TASK_CLIP_MAX_HEIGHT` | `720` | Maximum generated clip height. |
-| `TASK_CLIP_VIDEO_BITRATE` | `1500k` | Generated clip video bitrate. |
-| `TASK_CLIP_AUDIO_BITRATE` | `96k` | Generated clip audio bitrate. |
-| `ENABLE_ADVERSARIAL_TASK_TRANSFORMS` | `1` | Enables randomized context and encoding transforms for hardened tasks. |
-| `ENABLE_TASK_ENCODING_PROFILE_VARIANTS` | `1` | Enables compact/detail encoding variants for hardened clips. |
-| `CANARY_TASK_RATE` | `0` | Fraction of hardened tasks converted into internal canary tasks. |
-| `ABSENT_CANARY_QUERIES` | Empty | Optional pipe-separated absent-query canary prompts. |
-| `MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO` | `0` | Maximum active hardened artifacts per source video; `0` disables the limit. |
-| `MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION` | `0` | Maximum active hardened artifacts per source caption; `0` disables the limit. |
-| `MAX_ACTIVE_TASKS_PER_QUERY_VARIANT` | `0` | Maximum active hardened artifacts per query variant; `0` disables the limit. |
-| `MAX_ACTIVE_TASKS_PER_TRANSFORM` | `0` | Maximum active hardened artifacts per transform profile; `0` disables the limit. |
-
-Scoring and miner routing:
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `VALIDATOR_EVAL_TOP_K` | `1` | Number of miner results requested and scored. |
-| `TASK_MAX_PREDICTION_DURATION_SECONDS` | `60` | Maximum scored miner interval duration unless ground truth is longer. |
-| `ENABLE_LATENCY_MULTIPLIER` | `0` | Applies a gentle post-quality latency multiplier when enabled. |
-| `LATENCY_GRACE_SECONDS` | `30` | Latency before the optional multiplier begins decaying. |
-| `LATENCY_MIN_MULTIPLIER` | `0.85` | Lowest optional multiplier near the miner request timeout. |
-| `SCORE_EMA_ALPHA` | `0.1` | EMA alpha used for instant miner quality scores. |
-| `SCORE_RELIABILITY_WEIGHT` | `0` | Optional post-quality reliability multiplier weight. |
-| `SCORE_CONSISTENCY_WEIGHT` | `0` | Optional post-quality consistency multiplier weight. |
-| `SCORE_SUSPICION_WEIGHT` | `0` | Optional post-quality suspicion multiplier weight. |
-| `MINER_REQUEST_TIMEOUT_SECONDS` | `150` | Per-miner `/search` timeout. |
-| `MINER_SUBMISSION_CACHE_TTL_SECONDS` | `300` | Chain submission cache TTL. |
-| `MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS` | `60` | Miner submission refresh interval. |
-| `MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS` | `10` | Per-runtime `/health` timeout. |
-| `VALIDATOR_TELEMETRY_PATH` | Empty | Optional JSON path for miner behavior telemetry snapshots. |
-| `CHUTES_BASE_DOMAIN` | `chutes.ai` | Base domain used to resolve submitted `chute_slug` values. |
-| `MINER_EMISSION_BURN_PERCENT` | `0` | Percent of miner emissions assigned to UID 0 burn. |
-
-## Hippius Configuration
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `HIPPIUS_S3_ENDPOINT_URL` | `https://s3.hippius.com` | Hippius S3-compatible endpoint. |
-| `HIPPIUS_S3_PUBLIC_BASE_URL` | `https://s3.hippius.com` | Public base URL for miner-facing clips. |
-| `HIPPIUS_S3_BUCKET` | `chronoseek` | Bucket for validator task clips. |
-| `HIPPIUS_S3_REGION` | `decentralized` | S3 signing region. |
-| `HIPPIUS_S3_TIMEOUT_SECONDS` | `60` | Upload/download/delete timeout. |
-
-## Vidaio Configuration
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `VIDAIO_COMPRESSION_ENABLED` | `0` | Try Vidaio before local ffmpeg compression. |
-| `VIDAIO_API_BASE_URL` | Empty | Vidaio compression API base URL. |
-| `VIDAIO_API_KEY` | Empty | Optional bearer token. |
-| `VIDAIO_TIMEOUT_SECONDS` | `60` | Vidaio request timeout. |
+```bash
+poetry run python validator.py \
+  --task-clip-ttl-hours 2 \
+  --miner-request-timeout-seconds 90 \
+  --hippius-s3-bucket chronoseek-test
+```
 
 ## Operational Notes
 
@@ -264,11 +182,10 @@ Malformed intervals, empty responses, timeouts, out-of-clip intervals, and
 oversized intervals still score zero. Extra results beyond the validator's
 configured top-k do not improve the score.
 
-When `ENABLE_LATENCY_MULTIPLIER=1`, the interval quality score is multiplied by
-a gentle latency factor. The multiplier is `1.0` through
-`LATENCY_GRACE_SECONDS`, then decays toward `LATENCY_MIN_MULTIPLIER` near
-`MINER_REQUEST_TIMEOUT_SECONDS`. A zero-quality response remains zero
-regardless of latency.
+When the latency multiplier is enabled, the interval quality score is multiplied
+by a gentle latency factor. The multiplier is `1.0` through the configured
+grace period, then decays toward the configured minimum near the miner request
+timeout. A zero-quality response remains zero regardless of latency.
 
 ## Adversarial Task Transforms
 
@@ -280,8 +197,8 @@ the artifact URL, query, request ID, protocol version, and `top_k`.
 
 ## Canary Tasks
 
-Canaries are internal validator probes sampled from hardened tasks at
-`CANARY_TASK_RATE`. The initial canary types are:
+Canaries are internal validator probes sampled from hardened tasks at the
+configured canary task rate. The initial canary types are:
 
 - `absent`: replaces the query with an unlikely absent event, clears ground
   truth, and expects an empty successful response.
@@ -302,16 +219,16 @@ exposure summary so operators can inspect active task-bank freshness.
 ## Telemetry
 
 Validators keep report-only miner behavior telemetry in memory and can write it
-to `VALIDATOR_TELEMETRY_PATH`. The snapshot includes per-miner score, latency,
-failure, timeout, task-family, canary, hard-negative, and repeated-duration
-signals. Suspicion flags are logged for visibility but do not affect weights
-until an aggregation policy explicitly consumes them.
+with `--validator-telemetry-path`. The snapshot includes per-miner score,
+latency, failure, timeout, task-family, canary, hard-negative, and
+repeated-duration signals. Suspicion flags are logged for visibility but do not
+affect weights until an aggregation policy explicitly consumes them.
 
 ## Score Aggregation
 
 The validator now computes explicit quality, reliability, consistency, and
 suspicion components before updating moving scores. By default only the quality
 EMA is active, matching the previous `alpha = 0.1` behavior. Setting
-`SCORE_RELIABILITY_WEIGHT`, `SCORE_CONSISTENCY_WEIGHT`, or
-`SCORE_SUSPICION_WEIGHT` above zero turns on post-quality multipliers based on
-the telemetry summary for each miner.
+The reliability, consistency, and suspicion weights are configured by constants
+or CLI flags. Setting any of them above zero turns on post-quality multipliers
+based on the telemetry summary for each miner.

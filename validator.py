@@ -21,6 +21,77 @@ load_dotenv()
 
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator import forward as forward_module
+from chronoseek.constants import (
+    DEFAULT_ABSENT_CANARY_QUERIES,
+    DEFAULT_ACCESSIBLE_VIDEO_CACHE_PATH,
+    DEFAULT_CANARY_TASK_RATE,
+    DEFAULT_CHUTES_BASE_DOMAIN,
+    DEFAULT_ENABLE_ADVERSARIAL_TASK_TRANSFORMS,
+    DEFAULT_ENABLE_HARDENED_TASKS,
+    DEFAULT_ENABLE_LATENCY_MULTIPLIER,
+    DEFAULT_ENABLE_TASK_ENCODING_PROFILE_VARIANTS,
+    DEFAULT_HF_ACTIVITYNET_FILENAME,
+    DEFAULT_HF_CACHE_DIR,
+    DEFAULT_HIPPIUS_S3_BUCKET,
+    DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+    DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
+    DEFAULT_HIPPIUS_S3_REGION,
+    DEFAULT_HIPPIUS_S3_TIMEOUT_SECONDS,
+    DEFAULT_HOTKEY_NAME,
+    DEFAULT_INACCESSIBLE_VIDEO_CACHE_PATH,
+    DEFAULT_LATENCY_GRACE_SECONDS,
+    DEFAULT_LATENCY_MIN_MULTIPLIER,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_MAX_ACTIVE_TASKS_PER_QUERY_VARIANT,
+    DEFAULT_MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION,
+    DEFAULT_MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO,
+    DEFAULT_MAX_ACTIVE_TASKS_PER_TRANSFORM,
+    DEFAULT_MINER_EMISSION_BURN_PERCENT,
+    DEFAULT_MINER_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_MINER_SUBMISSION_CACHE_TTL_SECONDS,
+    DEFAULT_MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS,
+    DEFAULT_MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_NETUID,
+    DEFAULT_NETWORK,
+    DEFAULT_REQUIRE_ACCESSIBLE_VIDEOS,
+    DEFAULT_SCORE_CONSISTENCY_WEIGHT,
+    DEFAULT_SCORE_EMA_ALPHA,
+    DEFAULT_SCORE_RELIABILITY_WEIGHT,
+    DEFAULT_SCORE_SUSPICION_WEIGHT,
+    DEFAULT_TASK_ARTIFACT_MANIFEST_PATH,
+    DEFAULT_TASK_ARTIFACT_PREFIX,
+    DEFAULT_TASK_CAPTION_COOLDOWN_HOURS,
+    DEFAULT_TASK_CLIP_AUDIO_BITRATE,
+    DEFAULT_TASK_CLIP_CACHE_DIR,
+    DEFAULT_TASK_CLIP_CLEANUP_INTERVAL_SECONDS,
+    DEFAULT_TASK_CLIP_MAX_HEIGHT,
+    DEFAULT_TASK_CLIP_MAX_WIDTH,
+    DEFAULT_TASK_CLIP_TTL_HOURS,
+    DEFAULT_TASK_CLIP_VIDEO_BITRATE,
+    DEFAULT_TASK_DATASET_PATH,
+    DEFAULT_TASK_DELETE_REMOTE_ARTIFACTS,
+    DEFAULT_TASK_ENCODING_PROFILE_NAME,
+    DEFAULT_TASK_MAX_CLIP_DURATION_SECONDS,
+    DEFAULT_TASK_MAX_PREDICTION_DURATION_SECONDS,
+    DEFAULT_TASK_MAX_SAMPLING_ATTEMPTS,
+    DEFAULT_TASK_MIN_CLIP_DURATION_SECONDS,
+    DEFAULT_TASK_QUERY_VARIANTS_PATH,
+    DEFAULT_TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS,
+    DEFAULT_TASK_SPLIT,
+    DEFAULT_TASK_VIDEO_COOLDOWN_HOURS,
+    DEFAULT_VALIDATOR_EVAL_TOP_K,
+    DEFAULT_VALIDATOR_HEARTBEAT_TIMEOUT_SECONDS,
+    DEFAULT_VALIDATOR_TELEMETRY_PATH,
+    DEFAULT_VALIDATOR_TASK_SECRET,
+    DEFAULT_VIDAIO_API_BASE_URL,
+    DEFAULT_VIDAIO_COMPRESSION_ENABLED,
+    DEFAULT_VIDAIO_TIMEOUT_SECONDS,
+    DEFAULT_VIDEO_AVAILABILITY_CACHE_PATH,
+    DEFAULT_VIDEO_AVAILABILITY_CACHE_TTL_HOURS,
+    DEFAULT_VIDEO_AVAILABILITY_TIMEOUT,
+    DEFAULT_WALLET_NAME,
+    DEFAULT_WALLET_PATH,
+)
 from chronoseek.scoring import LatencyScoringConfig
 from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
@@ -53,8 +124,6 @@ from chronoseek.chutes.runtime import (
 )
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
-HEARTBEAT_TIMEOUT = 600  # seconds
-
 
 def seed_scores_from_metagraph(metagraph: bt.Metagraph) -> np.ndarray:
     try:
@@ -83,9 +152,14 @@ def seed_scores_from_metagraph(metagraph: bt.Metagraph) -> np.ndarray:
 def heartbeat_monitor(last_heartbeat, stop_event):
     while not stop_event.is_set():
         time.sleep(5)
-        if time.time() - last_heartbeat[0] > HEARTBEAT_TIMEOUT:
+        if (
+            time.time() - last_heartbeat[0]
+            > DEFAULT_VALIDATOR_HEARTBEAT_TIMEOUT_SECONDS
+        ):
             bt.logging.error(
-                "No heartbeat detected in the last 600 seconds. Restarting process."
+                "No heartbeat detected in the last "
+                f"{DEFAULT_VALIDATOR_HEARTBEAT_TIMEOUT_SECONDS} seconds. "
+                "Restarting process."
             )
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -316,13 +390,6 @@ def get_config_bool(config: bt.Config, name: str, default: bool) -> bool:
     return default
 
 
-def env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() not in {"0", "false", "no", "off"}
-
-
 def build_validator_task_generator(
     *,
     config: bt.Config,
@@ -344,7 +411,12 @@ def build_validator_task_generator(
         bt.logging.info("Validator task generation configured | mode=legacy-activitynet")
         return source_task_gen
 
-    task_secret = os.getenv("VALIDATOR_TASK_SECRET", "").strip()
+    task_secret = str(config.validator_task_secret or "").strip()
+    if not task_secret:
+        raise ValueError(
+            "Hardened task generation requires VALIDATOR_TASK_SECRET "
+            "or --validator-task-secret."
+        )
     hippius_access_key_id = os.getenv("HIPPIUS_S3_ACCESS_KEY_ID", "").strip()
     hippius_secret_access_key = os.getenv("HIPPIUS_S3_SECRET_ACCESS_KEY", "").strip()
     vidaio_api_key = os.getenv("VIDAIO_API_KEY", "").strip() or None
@@ -760,7 +832,11 @@ async def run_validator_loop(
 def get_config():
     """
     Parse arguments and return configuration.
-    Priority: CLI > Environment Variables > Defaults
+    Priority: CLI > explicit operator environment > code defaults.
+
+    Most validator tuning values intentionally default from constants instead
+    of environment variables so operators only need to provide identity,
+    credentials, and secrets in `.env`.
     """
     parser = argparse.ArgumentParser(description="ChronoSeek Validator")
 
@@ -773,155 +849,169 @@ def get_config():
     parser.add_argument(
         "--netuid",
         type=int,
-        default=int(os.getenv("NETUID", "1")),
+        default=int(os.getenv("NETUID", str(DEFAULT_NETUID))),
         help="Subnet NetUID",
     )
     parser.add_argument(
         "--task-dataset-path",
         type=str,
-        default=os.getenv("TASK_DATASET_PATH", ""),
+        default=DEFAULT_TASK_DATASET_PATH,
         help="Optional local task dataset path. If omitted, ActivityNet is loaded from Hugging Face.",
     )
     parser.add_argument(
         "--task-split",
         type=str,
-        default=os.getenv("TASK_SPLIT", "validation"),
+        default=DEFAULT_TASK_SPLIT,
         help="Task split to use when loading validator data.",
     )
     parser.add_argument(
         "--require-accessible-videos",
         action="store_true",
-        default=os.getenv("REQUIRE_ACCESSIBLE_VIDEOS", "1")
-        not in {"0", "false", "False"},
+        default=DEFAULT_REQUIRE_ACCESSIBLE_VIDEOS,
         help="Skip validator tasks whose source videos are not currently accessible.",
+    )
+    parser.add_argument(
+        "--no-require-accessible-videos",
+        action="store_false",
+        dest="require_accessible_videos",
+        help="Skip validator-side source video accessibility checks.",
     )
     parser.add_argument(
         "--task-max-sampling-attempts",
         type=int,
-        default=int(os.getenv("TASK_MAX_SAMPLING_ATTEMPTS", "50")),
+        default=DEFAULT_TASK_MAX_SAMPLING_ATTEMPTS,
         help="Maximum random samples to try before giving up on finding an accessible validator task.",
     )
     parser.add_argument(
         "--enable-hardened-tasks",
         action="store_true",
-        default=env_bool("ENABLE_HARDENED_TASKS", False),
+        default=DEFAULT_ENABLE_HARDENED_TASKS,
         help="Generate private clipped ActivityNet tasks and upload them to Hippius before querying miners.",
+    )
+    parser.add_argument(
+        "--disable-hardened-tasks",
+        action="store_false",
+        dest="enable_hardened_tasks",
+        help="Use legacy ActivityNet URL tasks instead of private clipped task artifacts.",
+    )
+    parser.add_argument(
+        "--validator-task-secret",
+        type=str,
+        default=os.getenv("VALIDATOR_TASK_SECRET", DEFAULT_VALIDATOR_TASK_SECRET),
+        help="Private hardened-task sampling secret. Defaults to VALIDATOR_TASK_SECRET.",
     )
     parser.add_argument(
         "--hardened-task-max-generation-attempts",
         type=int,
-        default=int(os.getenv("HARDENED_TASK_MAX_GENERATION_ATTEMPTS", "5")),
+        default=DEFAULT_HARDENED_TASK_MAX_GENERATION_ATTEMPTS,
         help="Maximum hardened task generation attempts before skipping a validator step.",
     )
     parser.add_argument(
         "--task-query-variants-path",
         type=str,
-        default=os.getenv("TASK_QUERY_VARIANTS_PATH", ""),
+        default=DEFAULT_TASK_QUERY_VARIANTS_PATH,
         help="Private query variant manifest path. Exact ActivityNet captions are avoided when variants exist.",
     )
     parser.add_argument(
         "--task-clip-cache-dir",
         type=str,
-        default=os.getenv(
-            "TASK_CLIP_CACHE_DIR",
-            str(Path.home() / ".cache" / "chronoseek" / "task-clips"),
-        ),
+        default=DEFAULT_TASK_CLIP_CACHE_DIR,
         help="Local cache directory for generated validator task clips.",
     )
     parser.add_argument(
         "--task-artifact-manifest-path",
         type=str,
-        default=os.getenv("TASK_ARTIFACT_MANIFEST_PATH", ""),
+        default=DEFAULT_TASK_ARTIFACT_MANIFEST_PATH,
         help="Local JSON manifest of uploaded validator task artifacts.",
     )
     parser.add_argument(
         "--task-artifact-prefix",
         type=str,
-        default=os.getenv("TASK_ARTIFACT_PREFIX", "task-clips"),
+        default=DEFAULT_TASK_ARTIFACT_PREFIX,
         help="Object key prefix for uploaded validator task clips.",
     )
     parser.add_argument(
         "--task-clip-ttl-hours",
         type=float,
-        default=float(os.getenv("TASK_CLIP_TTL_HOURS", "6")),
+        default=DEFAULT_TASK_CLIP_TTL_HOURS,
         help="TTL in hours for local and Hippius validator task artifacts.",
     )
     parser.add_argument(
         "--task-clip-cleanup-interval-seconds",
         type=float,
-        default=float(os.getenv("TASK_CLIP_CLEANUP_INTERVAL_SECONDS", "900")),
+        default=DEFAULT_TASK_CLIP_CLEANUP_INTERVAL_SECONDS,
         help="Minimum interval between expired validator task artifact cleanup runs.",
     )
     parser.add_argument(
         "--task-delete-remote-artifacts",
         action="store_true",
-        default=env_bool("TASK_DELETE_REMOTE_ARTIFACTS", False),
+        default=DEFAULT_TASK_DELETE_REMOTE_ARTIFACTS,
         help="Delete expired uploaded validator task clips from Hippius during cleanup.",
     )
     parser.add_argument(
         "--task-video-cooldown-hours",
         type=float,
-        default=float(os.getenv("TASK_VIDEO_COOLDOWN_HOURS", "24")),
+        default=DEFAULT_TASK_VIDEO_COOLDOWN_HOURS,
         help="Cooldown before the same ActivityNet source video may be sampled again.",
     )
     parser.add_argument(
         "--task-caption-cooldown-hours",
         type=float,
-        default=float(os.getenv("TASK_CAPTION_COOLDOWN_HOURS", "168")),
+        default=DEFAULT_TASK_CAPTION_COOLDOWN_HOURS,
         help="Cooldown before the same ActivityNet source caption may be sampled again.",
     )
     parser.add_argument(
         "--task-min-clip-duration-seconds",
         type=float,
-        default=float(os.getenv("TASK_MIN_CLIP_DURATION_SECONDS", "30")),
+        default=DEFAULT_TASK_MIN_CLIP_DURATION_SECONDS,
         help="Minimum generated task clip duration.",
     )
     parser.add_argument(
         "--task-max-clip-duration-seconds",
         type=float,
-        default=float(os.getenv("TASK_MAX_CLIP_DURATION_SECONDS", "180")),
+        default=DEFAULT_TASK_MAX_CLIP_DURATION_SECONDS,
         help="Maximum generated task clip duration.",
     )
     parser.add_argument(
         "--task-source-download-timeout-seconds",
         type=int,
-        default=int(os.getenv("TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS", "120")),
+        default=DEFAULT_TASK_SOURCE_DOWNLOAD_TIMEOUT_SECONDS,
         help="Timeout in seconds when downloading ActivityNet source videos for clipping.",
     )
     parser.add_argument(
         "--task-encoding-profile-name",
         type=str,
-        default=os.getenv("TASK_ENCODING_PROFILE_NAME", "h264-720p-v1"),
+        default=DEFAULT_TASK_ENCODING_PROFILE_NAME,
         help="Name recorded for the validator task encoding profile.",
     )
     parser.add_argument(
         "--task-clip-max-width",
         type=int,
-        default=int(os.getenv("TASK_CLIP_MAX_WIDTH", "1280")),
+        default=DEFAULT_TASK_CLIP_MAX_WIDTH,
         help="Maximum generated task clip width.",
     )
     parser.add_argument(
         "--task-clip-max-height",
         type=int,
-        default=int(os.getenv("TASK_CLIP_MAX_HEIGHT", "720")),
+        default=DEFAULT_TASK_CLIP_MAX_HEIGHT,
         help="Maximum generated task clip height.",
     )
     parser.add_argument(
         "--task-clip-video-bitrate",
         type=str,
-        default=os.getenv("TASK_CLIP_VIDEO_BITRATE", "1500k"),
+        default=DEFAULT_TASK_CLIP_VIDEO_BITRATE,
         help="Generated task clip video bitrate.",
     )
     parser.add_argument(
         "--task-clip-audio-bitrate",
         type=str,
-        default=os.getenv("TASK_CLIP_AUDIO_BITRATE", "96k"),
+        default=DEFAULT_TASK_CLIP_AUDIO_BITRATE,
         help="Generated task clip audio bitrate.",
     )
     parser.add_argument(
         "--enable-adversarial-task-transforms",
         action="store_true",
-        default=env_bool("ENABLE_ADVERSARIAL_TASK_TRANSFORMS", True),
+        default=DEFAULT_ENABLE_ADVERSARIAL_TASK_TRANSFORMS,
         help="Enable randomized hardened task transforms such as context and encoding variation.",
     )
     parser.add_argument(
@@ -933,7 +1023,7 @@ def get_config():
     parser.add_argument(
         "--enable-task-encoding-profile-variants",
         action="store_true",
-        default=env_bool("ENABLE_TASK_ENCODING_PROFILE_VARIANTS", True),
+        default=DEFAULT_ENABLE_TASK_ENCODING_PROFILE_VARIANTS,
         help="Enable randomized encoding profile variants for hardened task clips.",
     )
     parser.add_argument(
@@ -945,223 +1035,223 @@ def get_config():
     parser.add_argument(
         "--canary-task-rate",
         type=float,
-        default=float(os.getenv("CANARY_TASK_RATE", "0")),
+        default=DEFAULT_CANARY_TASK_RATE,
         help="Fraction of hardened tasks converted into internal validator canaries.",
     )
     parser.add_argument(
         "--absent-canary-queries",
         type=str,
-        default=os.getenv("ABSENT_CANARY_QUERIES", ""),
+        default=DEFAULT_ABSENT_CANARY_QUERIES,
         help="Pipe-separated absent-query canary prompts. Defaults to built-in unlikely prompts.",
     )
     parser.add_argument(
         "--max-active-tasks-per-source-video",
         type=int,
-        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO", "0")),
+        default=DEFAULT_MAX_ACTIVE_TASKS_PER_SOURCE_VIDEO,
         help="Maximum active hardened artifacts per source video. 0 disables the limit.",
     )
     parser.add_argument(
         "--max-active-tasks-per-source-caption",
         type=int,
-        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION", "0")),
+        default=DEFAULT_MAX_ACTIVE_TASKS_PER_SOURCE_CAPTION,
         help="Maximum active hardened artifacts per source caption. 0 disables the limit.",
     )
     parser.add_argument(
         "--max-active-tasks-per-query-variant",
         type=int,
-        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_QUERY_VARIANT", "0")),
+        default=DEFAULT_MAX_ACTIVE_TASKS_PER_QUERY_VARIANT,
         help="Maximum active hardened artifacts per query variant. 0 disables the limit.",
     )
     parser.add_argument(
         "--max-active-tasks-per-transform",
         type=int,
-        default=int(os.getenv("MAX_ACTIVE_TASKS_PER_TRANSFORM", "0")),
+        default=DEFAULT_MAX_ACTIVE_TASKS_PER_TRANSFORM,
         help="Maximum active hardened artifacts per encoding transform. 0 disables the limit.",
     )
     parser.add_argument(
         "--validator-eval-top-k",
         type=int,
-        default=int(os.getenv("VALIDATOR_EVAL_TOP_K", "1")),
+        default=DEFAULT_VALIDATOR_EVAL_TOP_K,
         help="Number of miner results requested and scored for synthetic evaluation.",
     )
     parser.add_argument(
         "--score-ema-alpha",
         type=float,
-        default=float(os.getenv("SCORE_EMA_ALPHA", "0.1")),
+        default=DEFAULT_SCORE_EMA_ALPHA,
         help="EMA alpha used for instant miner quality scores.",
     )
     parser.add_argument(
         "--score-reliability-weight",
         type=float,
-        default=float(os.getenv("SCORE_RELIABILITY_WEIGHT", "0")),
+        default=DEFAULT_SCORE_RELIABILITY_WEIGHT,
         help="Optional reliability multiplier weight applied after quality scoring.",
     )
     parser.add_argument(
         "--score-consistency-weight",
         type=float,
-        default=float(os.getenv("SCORE_CONSISTENCY_WEIGHT", "0")),
+        default=DEFAULT_SCORE_CONSISTENCY_WEIGHT,
         help="Optional consistency multiplier weight applied after quality scoring.",
     )
     parser.add_argument(
         "--score-suspicion-weight",
         type=float,
-        default=float(os.getenv("SCORE_SUSPICION_WEIGHT", "0")),
+        default=DEFAULT_SCORE_SUSPICION_WEIGHT,
         help="Optional suspicion multiplier weight applied after quality scoring.",
     )
     parser.add_argument(
         "--task-max-prediction-duration-seconds",
         type=float,
-        default=float(os.getenv("TASK_MAX_PREDICTION_DURATION_SECONDS", "60")),
+        default=DEFAULT_TASK_MAX_PREDICTION_DURATION_SECONDS,
         help="Maximum scored miner interval duration unless the ground-truth interval is longer.",
     )
     parser.add_argument(
         "--enable-latency-multiplier",
         action="store_true",
-        default=env_bool("ENABLE_LATENCY_MULTIPLIER", False),
+        default=DEFAULT_ENABLE_LATENCY_MULTIPLIER,
         help="Apply a gentle latency multiplier after interval quality scoring.",
     )
     parser.add_argument(
         "--latency-grace-seconds",
         type=float,
-        default=float(os.getenv("LATENCY_GRACE_SECONDS", "30")),
+        default=DEFAULT_LATENCY_GRACE_SECONDS,
         help="Latency before the optional multiplier begins decaying.",
     )
     parser.add_argument(
         "--latency-min-multiplier",
         type=float,
-        default=float(os.getenv("LATENCY_MIN_MULTIPLIER", "0.85")),
+        default=DEFAULT_LATENCY_MIN_MULTIPLIER,
         help="Lowest multiplier applied near the miner request timeout.",
     )
     parser.add_argument(
         "--hippius-s3-endpoint-url",
         type=str,
-        default=os.getenv("HIPPIUS_S3_ENDPOINT_URL", "https://s3.hippius.com"),
+        default=DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
         help="Hippius S3-compatible endpoint URL used for validator task uploads.",
     )
     parser.add_argument(
         "--hippius-s3-public-base-url",
         type=str,
-        default=os.getenv("HIPPIUS_S3_PUBLIC_BASE_URL", "https://s3.hippius.com"),
+        default=DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
         help="Public base URL for uploaded Hippius validator task clips.",
     )
     parser.add_argument(
         "--hippius-s3-bucket",
         type=str,
-        default=os.getenv("HIPPIUS_S3_BUCKET", "chronoseek"),
+        default=DEFAULT_HIPPIUS_S3_BUCKET,
         help="Hippius S3 bucket for validator task clips.",
     )
     parser.add_argument(
         "--hippius-s3-region",
         type=str,
-        default=os.getenv("HIPPIUS_S3_REGION", "decentralized"),
+        default=DEFAULT_HIPPIUS_S3_REGION,
         help="S3 signing region for Hippius uploads.",
     )
     parser.add_argument(
         "--hippius-s3-timeout-seconds",
         type=float,
-        default=float(os.getenv("HIPPIUS_S3_TIMEOUT_SECONDS", "60")),
+        default=DEFAULT_HIPPIUS_S3_TIMEOUT_SECONDS,
         help="Hippius S3 upload/delete timeout in seconds.",
     )
     parser.add_argument(
         "--vidaio-compression-enabled",
         action="store_true",
-        default=env_bool("VIDAIO_COMPRESSION_ENABLED", False),
+        default=DEFAULT_VIDAIO_COMPRESSION_ENABLED,
         help="Try Vidaio compression before falling back to local ffmpeg.",
     )
     parser.add_argument(
         "--vidaio-api-base-url",
         type=str,
-        default=os.getenv("VIDAIO_API_BASE_URL", ""),
+        default=os.getenv("VIDAIO_API_BASE_URL", DEFAULT_VIDAIO_API_BASE_URL),
         help="Optional Vidaio compression API base URL.",
     )
     parser.add_argument(
         "--vidaio-timeout-seconds",
         type=float,
-        default=float(os.getenv("VIDAIO_TIMEOUT_SECONDS", "60")),
+        default=DEFAULT_VIDAIO_TIMEOUT_SECONDS,
         help="Vidaio compression timeout in seconds.",
     )
     parser.add_argument(
         "--video-availability-cache-path",
         type=str,
-        default=os.getenv("VIDEO_AVAILABILITY_CACHE_PATH", ""),
+        default=DEFAULT_VIDEO_AVAILABILITY_CACHE_PATH,
         help="Legacy base path used to derive accessible/inaccessible validator video cache files when explicit cache paths are not configured.",
     )
     parser.add_argument(
         "--accessible-video-cache-path",
         type=str,
-        default=os.getenv("ACCESSIBLE_VIDEO_CACHE_PATH", ""),
+        default=DEFAULT_ACCESSIBLE_VIDEO_CACHE_PATH,
         help="Path to a JSON cache of validator videos confirmed to be publicly accessible.",
     )
     parser.add_argument(
         "--inaccessible-video-cache-path",
         type=str,
-        default=os.getenv("INACCESSIBLE_VIDEO_CACHE_PATH", ""),
+        default=DEFAULT_INACCESSIBLE_VIDEO_CACHE_PATH,
         help="Path to a JSON cache of validator videos confirmed to be inaccessible.",
     )
     parser.add_argument(
         "--video-availability-cache-ttl-hours",
         type=float,
-        default=float(os.getenv("VIDEO_AVAILABILITY_CACHE_TTL_HOURS", "24")),
+        default=DEFAULT_VIDEO_AVAILABILITY_CACHE_TTL_HOURS,
         help="TTL in hours for cached validator video availability checks.",
     )
     parser.add_argument(
         "--video-availability-timeout",
         type=int,
-        default=int(os.getenv("VIDEO_AVAILABILITY_TIMEOUT", "20")),
+        default=DEFAULT_VIDEO_AVAILABILITY_TIMEOUT,
         help="Timeout in seconds for validator-side video availability checks.",
     )
     parser.add_argument(
         "--miner-request-timeout-seconds",
         type=float,
-        default=float(os.getenv("MINER_REQUEST_TIMEOUT_SECONDS", "150")),
+        default=DEFAULT_MINER_REQUEST_TIMEOUT_SECONDS,
         help="Per-miner timeout in seconds for validator runtime search requests.",
     )
     parser.add_argument(
         "--miner-submission-cache-ttl-seconds",
         type=float,
-        default=float(os.getenv("MINER_SUBMISSION_CACHE_TTL_SECONDS", "300")),
+        default=DEFAULT_MINER_SUBMISSION_CACHE_TTL_SECONDS,
         help="TTL for cached v2 miner submissions loaded from chain.",
     )
     parser.add_argument(
         "--miner-submission-refresh-interval-seconds",
         type=float,
-        default=float(os.getenv("MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS", "60")),
+        default=DEFAULT_MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS,
         help="Interval in seconds between validator refreshes of miner submission metadata.",
     )
     parser.add_argument(
         "--miner-submission-health-timeout-seconds",
         type=float,
-        default=float(os.getenv("MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS", "10")),
+        default=DEFAULT_MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS,
         help="Per-runtime timeout for /health checks during responsive miner refresh.",
     )
     parser.add_argument(
         "--validator-telemetry-path",
         type=str,
-        default=os.getenv("VALIDATOR_TELEMETRY_PATH", ""),
+        default=DEFAULT_VALIDATOR_TELEMETRY_PATH,
         help="Optional JSON path for validator miner behavior telemetry snapshots.",
     )
     parser.add_argument(
         "--chutes-base-domain",
         type=str,
-        default=os.getenv("CHUTES_BASE_DOMAIN", "chutes.ai"),
+        default=DEFAULT_CHUTES_BASE_DOMAIN,
         help="Base Chutes domain used to resolve chute_slug submissions into HTTPS endpoints.",
     )
     parser.add_argument(
         "--miner-emission-burn-percent",
         type=float,
-        default=float(os.getenv("MINER_EMISSION_BURN_PERCENT", "0")),
+        default=DEFAULT_MINER_EMISSION_BURN_PERCENT,
         help="Percent of miner emissions to burn by assigning that weight share to UID 0. The remaining share is distributed to UID 1+ by score.",
     )
     parser.add_argument(
         "--hf-cache-dir",
         type=str,
-        default=os.getenv("HF_HOME", ""),
+        default=DEFAULT_HF_CACHE_DIR,
         help="Optional Hugging Face cache directory for validator dataset downloads.",
     )
     parser.add_argument(
         "--hf-activitynet-filename",
         type=str,
-        default=os.getenv("HF_ACTIVITYNET_FILENAME", ""),
+        default=DEFAULT_HF_ACTIVITYNET_FILENAME,
         help="Optional filename override inside the ActivityNet Hugging Face snapshot.",
     )
 
@@ -1169,11 +1259,11 @@ def get_config():
     # Note: We must use the internal argument names (dest) which usually replace dots with underscores
     # However, bittensor seems to use dots in dest names, so we use a dict to set defaults
     defaults = {
-        "wallet.name": os.getenv("WALLET_NAME", "default"),
-        "wallet.hotkey": os.getenv("HOTKEY_NAME", "default"),
-        "wallet.path": os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
-        "subtensor.network": os.getenv("NETWORK", "finney"),
-        "logging.level": os.getenv("LOG_LEVEL", "INFO"),
+        "wallet.name": os.getenv("WALLET_NAME", DEFAULT_WALLET_NAME),
+        "wallet.hotkey": os.getenv("HOTKEY_NAME", DEFAULT_HOTKEY_NAME),
+        "wallet.path": os.getenv("WALLET_PATH", DEFAULT_WALLET_PATH),
+        "subtensor.network": os.getenv("NETWORK", DEFAULT_NETWORK),
+        "logging.level": os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
     }
 
     parser.set_defaults(**defaults)

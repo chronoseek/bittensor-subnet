@@ -6,6 +6,7 @@ import bittensor as bt
 import httpx
 
 from chronoseek.chain.submissions import MinerSubmission
+from chronoseek.constants import DEFAULT_CHUTES_BASE_DOMAIN
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,7 @@ def build_evaluation_endpoints(
     metagraph: bt.Metagraph,
     candidate_uids: list[int] | None,
     submissions_by_hotkey: dict[str, MinerSubmission] | None = None,
-    chutes_base_domain: str = "chutes.ai",
+    chutes_base_domain: str = DEFAULT_CHUTES_BASE_DOMAIN,
 ) -> list[ChutesRuntimeEndpoint]:
     submissions_by_hotkey = submissions_by_hotkey or {}
     uids_to_query = candidate_uids if candidate_uids is not None else metagraph.uids
@@ -121,7 +122,7 @@ def build_submission_endpoint_map(
     *,
     metagraph: bt.Metagraph,
     submissions_by_hotkey: dict[str, MinerSubmission],
-    chutes_base_domain: str = "chutes.ai",
+    chutes_base_domain: str = DEFAULT_CHUTES_BASE_DOMAIN,
 ) -> dict[int, str]:
     """Resolve v2 miner submissions for hotkeys present in the metagraph."""
 

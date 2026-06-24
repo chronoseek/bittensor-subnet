@@ -20,6 +20,15 @@ from chronoseek.chain.submissions import (
     commit_miner_submission,
     get_hotkey_revealed_commitments,
 )
+from chronoseek.constants import (
+    DEFAULT_HOTKEY_NAME,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_MECHID,
+    DEFAULT_NETUID,
+    DEFAULT_NETWORK,
+    DEFAULT_WALLET_NAME,
+    DEFAULT_WALLET_PATH,
+)
 
 load_dotenv()
 
@@ -45,19 +54,19 @@ def get_config():
         "--network",
         dest="subtensor.network",
         type=str,
-        default=os.getenv("NETWORK", "finney"),
+        default=os.getenv("NETWORK", DEFAULT_NETWORK),
         help="Alias for --subtensor.network. Usually finney, test, or local.",
     )
     parser.add_argument(
         "--netuid",
         type=int,
-        default=int(os.getenv("NETUID", "1")),
+        default=int(os.getenv("NETUID", str(DEFAULT_NETUID))),
         help="Subnet NetUID",
     )
     parser.add_argument(
         "--mechid",
         type=int,
-        default=int(os.getenv("MECHID", "0")),
+        default=int(os.getenv("MECHID", str(DEFAULT_MECHID))),
         help="Subnet mechanism ID. Bittensor logs this as netuid.mechid; default is 0.",
     )
     parser.add_argument(
@@ -101,11 +110,11 @@ def get_config():
 
     parser.set_defaults(
         **{
-            "wallet.name": os.getenv("WALLET_NAME", "default"),
-            "wallet.hotkey": os.getenv("HOTKEY_NAME", "default"),
-            "wallet.path": os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
-            "subtensor.network": os.getenv("NETWORK", "finney"),
-            "logging.level": os.getenv("LOG_LEVEL", "INFO"),
+            "wallet.name": os.getenv("WALLET_NAME", DEFAULT_WALLET_NAME),
+            "wallet.hotkey": os.getenv("HOTKEY_NAME", DEFAULT_HOTKEY_NAME),
+            "wallet.path": os.getenv("WALLET_PATH", DEFAULT_WALLET_PATH),
+            "subtensor.network": os.getenv("NETWORK", DEFAULT_NETWORK),
+            "logging.level": os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
         }
     )
     return bt.Config(parser)

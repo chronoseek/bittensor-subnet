@@ -24,6 +24,12 @@ from dotenv import load_dotenv
 from chutes.chute import Chute, NodeSelector
 from chutes.image import Image
 
+from chronoseek.constants import (
+    DEFAULT_CHRONOSEEK_LOGO_URL,
+    DEFAULT_CHUTE_BASE_NAME,
+    DEFAULT_CHUTES_HF_HOME,
+    DEFAULT_CHUTES_YTDLP_DENO_PATH,
+)
 from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
 
 
@@ -31,11 +37,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 def resolve_runtime_revision() -> str:
-    """Resolve runtime revision from env or git commit SHA."""
-
-    env_revision = os.getenv("RUNTIME_REVISION", "").strip()
-    if env_revision:
-        return env_revision
+    """Resolve runtime revision from the current git commit SHA."""
 
     try:
         return subprocess.check_output(
@@ -95,12 +97,9 @@ def repair_cyscale_namespace() -> None:
 # Required by Chutes SDK image/chute object construction. This is not part of
 # ChronoSeek miner identity.
 CHUTES_ACCOUNT = os.getenv("CHUTES_ACCOUNT", "CHANGE_ME").strip() or "CHANGE_ME"
-CHUTE_BASE_NAME = (
-    os.getenv("CHUTE_BASE_NAME", "chronoseek-runtime").strip()
-    or "chronoseek-runtime"
-)
-CHUTE_NAME = os.getenv("CHUTE_NAME", CHUTE_BASE_NAME).strip() or CHUTE_BASE_NAME
-CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
+CHUTE_BASE_NAME = DEFAULT_CHUTE_BASE_NAME
+CHUTE_NAME = CHUTE_BASE_NAME
+CHRONOSEEK_LOGO_URL = DEFAULT_CHRONOSEEK_LOGO_URL
 RUNTIME_REVISION = resolve_runtime_revision()
 IMAGE_NAME = resolve_image_name(CHUTE_NAME, RUNTIME_REVISION)
 # Chutes API enforces <=32 chars for image tags.
@@ -112,7 +111,7 @@ PREBUILT_IMAGE_ID = os.getenv("CHUTES_PREBUILT_IMAGE_ID", "").strip()
 # with your own image/package install command. Do not commit embedded secrets.
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-IMAGE_YTDLP_DENO_PATH = "/opt/deno/bin/deno"
+IMAGE_YTDLP_DENO_PATH = DEFAULT_CHUTES_YTDLP_DENO_PATH
 CYSCALE_VENDOR_DIR = "/opt/chronoseek/vendor"
 YTDLP_COOKIES_BROWSER = (
     os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
@@ -138,7 +137,7 @@ image = (
     .with_env("PIP_CACHE_DIR", "/tmp/pip-cache")
     .with_env("UV_CACHE_DIR", "/tmp/uv-cache")
     .with_env("XDG_CACHE_HOME", "/tmp/.cache")
-    .with_env("HF_HOME", "/data/huggingface")
+    .with_env("HF_HOME", DEFAULT_CHUTES_HF_HOME)
     .with_env("DENO_INSTALL", "/opt/deno")
     .with_env("PATH", "/opt/deno/bin:$PATH")
     .with_env("PYTHONPATH", f"{CYSCALE_VENDOR_DIR}:$PYTHONPATH")
@@ -161,7 +160,8 @@ image = (
         "chmod -R a+rx /opt/deno"
     )
     .run_command(
-        "mkdir -p /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data/huggingface && "
+        "mkdir -p /tmp/pip-cache /tmp/uv-cache /tmp/.cache "
+        f"{DEFAULT_CHUTES_HF_HOME} && "
         "chmod -R a+rwx /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data"
     )
     .run_command(
@@ -223,10 +223,10 @@ chute._chronoseek_logo_url = CHRONOSEEK_LOGO_URL
 async def initialize_chronoseek(self):
     """Initialize ChronoSeek once per Chutes instance."""
 
-    for env_name in ("HF_TOKEN", "HF_HOME"):
-        env_value = os.getenv(env_name)
-        if env_value:
-            os.environ[env_name] = os.path.expanduser(env_value.strip())
+    hf_token = os.getenv("HF_TOKEN")
+    if hf_token:
+        os.environ["HF_TOKEN"] = os.path.expanduser(hf_token.strip())
+    os.environ["HF_HOME"] = os.path.expanduser(DEFAULT_CHUTES_HF_HOME)
 
     deno_path = os.path.expanduser(os.getenv("YTDLP_DENO_PATH", "").strip())
     if not deno_path or not os.path.exists(deno_path):
