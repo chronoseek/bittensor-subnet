@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from chronoseek.video.downloader import VideoDownloader
+
 
 @dataclass
 class VideoAvailabilityResult:
@@ -62,8 +64,8 @@ class VideoAvailabilityChecker:
         if cached is not None:
             return cached
 
-        if self._is_youtube_url(url):
-            result = self._check_youtube(url)
+        if VideoDownloader.is_extractor_platform_url(url):
+            result = self._check_extractor_platform(url)
         else:
             result = self._check_direct_url(url)
 
@@ -75,11 +77,14 @@ class VideoAvailabilityChecker:
         return host in self.YOUTUBE_HOSTS
 
     def _check_youtube(self, url: str) -> VideoAvailabilityResult:
+        return self._check_extractor_platform(url)
+
+    def _check_extractor_platform(self, url: str) -> VideoAvailabilityResult:
         try:
             import yt_dlp
         except ImportError as exc:
             raise RuntimeError(
-                "yt-dlp is required for validator-side YouTube availability checks."
+                "yt-dlp is required for validator-side extractor-platform availability checks."
             ) from exc
 
         options = {
@@ -96,11 +101,11 @@ class VideoAvailabilityChecker:
                 info = ydl.extract_info(url, download=False)
 
             if not info:
-                return VideoAvailabilityResult(False, "youtube_unavailable")
+                return VideoAvailabilityResult(False, "extractor_unavailable")
 
-            return VideoAvailabilityResult(True, "youtube_ok")
+            return VideoAvailabilityResult(True, "extractor_ok")
         except Exception as exc:
-            return VideoAvailabilityResult(False, self._normalize_youtube_error(exc))
+            return VideoAvailabilityResult(False, self._normalize_extractor_error(exc))
 
     def _check_direct_url(self, url: str) -> VideoAvailabilityResult:
         try:
@@ -112,18 +117,21 @@ class VideoAvailabilityChecker:
             return VideoAvailabilityResult(False, str(exc))
 
     def _normalize_youtube_error(self, exc: Exception) -> str:
+        return self._normalize_extractor_error(exc)
+
+    def _normalize_extractor_error(self, exc: Exception) -> str:
         message = str(exc).lower()
         if "confirm you’re not a bot" in message or "confirm you're not a bot" in message:
-            return "youtube_bot_check"
+            return "extractor_bot_check"
         if "private video" in message:
-            return "youtube_private"
+            return "extractor_private"
         if "video unavailable" in message:
-            return "youtube_unavailable"
+            return "extractor_unavailable"
         if "sign in" in message:
-            return "youtube_sign_in_required"
+            return "extractor_sign_in_required"
         if "unsupported url" in message:
-            return "youtube_unsupported"
-        return "youtube_check_failed"
+            return "extractor_unsupported"
+        return "extractor_check_failed"
 
     def _load_cache(self, cache_path: Path | None) -> dict:
         if cache_path is None or not cache_path.exists():

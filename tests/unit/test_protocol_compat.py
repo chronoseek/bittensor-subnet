@@ -9,7 +9,7 @@ from chronoseek.protocol_models import (
     VideoSearchResponse,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "protocol_artifacts"
 
 
@@ -36,7 +36,7 @@ def test_video_search_response_matches_protocol_schema():
                 "confidence": 0.91,
             }
         ],
-        miner_metadata={"source": "validator-gateway"},
+        miner_metadata={"source": "chutes-runtime"},
     ).model_dump(mode="json", exclude_none=True)
 
     jsonschema.validate(payload, load_schema("video-search-response.schema.json"))

@@ -32,16 +32,6 @@ architecture:
       - ipfs_hashes
 
 communication:
-  axon_dendrite_synapse:
-    status: DEPRECATED
-    rule: "NEVER use for new development"
-    replacement: "HTTP APIs with Epistula signing"
-    rationale:
-      - proprietary_limits_flexibility
-      - poor_production_performance
-      - encourages_closed_source
-      - obscures_actual_behavior
-
   discovery:
     method: "miners commit connection info to chain"
     validator_reads: "chain commitments for endpoints"

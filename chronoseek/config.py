@@ -1,1 +1,1 @@
-PROTOCOL_VERSION = "2026-04-10"
+from chronoseek.constants import PROTOCOL_VERSION

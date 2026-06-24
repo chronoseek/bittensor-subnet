@@ -1,3 +1,12 @@
+"""Run a local end-to-end smoke check for ChronoSeek miner retrieval.
+
+This script is intended for developer/operator verification, not validator
+scoring. It loads either the curated smoke-test task manifest or a supplied
+video/query pair, validates the request/response protocol models, runs the
+local reference miner logic, and optionally checks whether the top result passes
+the strict IoU threshold against known ground truth intervals.
+"""
+
 import argparse
 import os
 import sys
@@ -33,7 +42,9 @@ DEFAULT_SMOKE_TEST_DATASET_PATH = str(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ChronoSeek MVP end-to-end verifier")
+    parser = argparse.ArgumentParser(
+        description="ChronoSeek miner retrieval verifier"
+    )
     parser.add_argument(
         "--dataset-path",
         type=str,
@@ -61,7 +72,7 @@ def parse_args():
         "--video-url",
         type=str,
         default="",
-        help="Optional custom video URL for direct end-to-end miner verification.",
+        help="Optional custom video URL for direct end-to-end runtime verification.",
     )
     parser.add_argument(
         "--query",
@@ -114,7 +125,7 @@ def verify_protocol_response(request_id: str, results) -> VideoSearchResponse:
         request_id=request_id,
         status="completed",
         results=results,
-        miner_metadata={"source": "verify_mvp"},
+        miner_metadata={"source": "verify_miner_retrieval"},
     )
     print("Protocol response validation: ok")
     return response
@@ -142,12 +153,12 @@ def run_single_attempt(
 
     request = verify_protocol_request(video_url, query)
 
-    print_header("Miner Search")
+    print_header("Runtime Search")
     results = miner.search(request.video_url, request.query)
     response = verify_protocol_response(request.request_id, results)
 
     if not response.results:
-        raise RuntimeError("Miner returned an empty result list.")
+        raise RuntimeError("Runtime returned an empty result list.")
 
     if skip_quality_check:
         print_header("Pipeline Check")
@@ -191,7 +202,7 @@ def main():
     args = parse_args()
 
     bt.logging.set_info(True)
-    print("ChronoSeek MVP Verification")
+    print("ChronoSeek Verification")
     print(f"Split: {args.split}")
     if args.video_url:
         print("Mode: custom video/query")
@@ -216,7 +227,7 @@ def main():
     try:
         miner = MinerLogic()
     except Exception as exc:
-        print_header("Miner Initialization Failure")
+        print_header("Runtime Initialization Failure")
         print(str(exc))
         return 1
 

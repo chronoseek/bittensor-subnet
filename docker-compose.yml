@@ -1,4 +1,4 @@
-# Chi Subnet Docker Compose
+# ChronoSeek Subnet Docker Compose
 #
 # For Validators: Use this file to run the validator with auto-updates
 #
@@ -6,48 +6,44 @@
 #   1. Copy this file to your server
 #   2. Update NETUID and wallet configuration
 #   3. Run: docker-compose up -d
-#   4. View logs: docker-compose logs -f validator
+#   4. View logs: docker-compose logs -f chronoseek-validator
 #
 # Watchtower will automatically update the validator when new images are pushed
 
 services:
   validator:
     # For production: use the Docker Hub image
-    # image: your-dockerhub-username/chi-subnet:latest
-    
+    # image: creativeessence/chronoseek-subnet:latest
+
     # For development: build locally
     build: .
-    
-    container_name: chi-validator
+
+    container_name: chronoseek-validator
     restart: unless-stopped
-    
+
     # Load environment variables from .env file
     env_file:
       - .env
-    
+
     environment:
       # Network configuration
       - NETWORK=${NETWORK:-finney}
       - NETUID=${NETUID:-1}
-      
+
       # Wallet configuration (keys are mounted as volume)
       - WALLET_NAME=${WALLET_NAME:-default}
       - HOTKEY_NAME=${HOTKEY_NAME:-default}
-      
+
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    
+
     volumes:
       # Mount wallet directory (read-only for security)
       - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
-      
+
       # Persistent storage for validator state/scores
       - validator-data:/app/data
-    
-    # Uncomment if your validator serves an axon
-    # ports:
-    #   - "8091:8091"
-    
+
     # Resource limits - adjust based on your hardware
     deploy:
       resources:
@@ -55,22 +51,22 @@ services:
           memory: 4G
         reservations:
           memory: 2G
-    
+
     # Health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import bittensor; print('healthy')"]
+      test: [ "CMD", "python", "-c", "import bittensor; print('healthy')" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-    
+
     # Logging configuration
     logging:
       driver: "json-file"
       options:
         max-size: "100m"
         max-file: "5"
-    
+
     # Labels for Watchtower
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -80,35 +76,33 @@ services:
     image: containrrr/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
-    
+
     environment:
       # Check for updates every 5 minutes (300 seconds)
       - WATCHTOWER_POLL_INTERVAL=300
-      
+
       # Clean up old images after updating
       - WATCHTOWER_CLEANUP=true
-      
+
       # Only update containers with the enable label
       - WATCHTOWER_LABEL_ENABLE=true
-      
+
       # Rolling restart - graceful updates
       - WATCHTOWER_ROLLING_RESTART=true
-      
       # Uncomment for Slack notifications
       # - WATCHTOWER_NOTIFICATIONS=slack
       # - WATCHTOWER_NOTIFICATION_SLACK_HOOK_URL=${SLACK_WEBHOOK_URL}
       # - WATCHTOWER_NOTIFICATION_SLACK_IDENTIFIER=${HOSTNAME:-chi-validator}
-    
+
     volumes:
       # Watchtower needs Docker socket access to manage containers
       - /var/run/docker.sock:/var/run/docker.sock
-    
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-
 
 volumes:
   validator-data:

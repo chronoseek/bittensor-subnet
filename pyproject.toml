@@ -32,6 +32,8 @@ huggingface-hub = ">=1.5.0"
 pyarrow = ">=21.0.0"
 yt-dlp = ">=2026.3.17"
 yt-dlp-ejs = ">=0.8.0"
+chutes = "^0.6.8"
+minio = "^7.2.20"
 
 [build-system]
 requires = ["poetry-core"]
@@ -40,4 +42,12 @@ build-backend = "poetry.core.masonry.api"
 [dependency-groups]
 dev = [
     "pytest (>=9.0.2,<10.0.0)"
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests/unit",
+]
+markers = [
+    "live: opt-in live integration tests that may call paid or externally mutating services",
 ]

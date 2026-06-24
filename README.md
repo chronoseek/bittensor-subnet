@@ -1,317 +1,136 @@
 # ChronoSeek
 
-> **A Bittensor subnet for decentralized semantic video moment retrieval.**
+ChronoSeek is **Google for Videos**: a Bittensor subnet for semantic video moment retrieval.
 
-**ChronoSeek** enables semantic search over video content by mapping natural-language scene descriptions to precise timestamp intervals within a video.
+Given a video and a natural-language query, ChronoSeek miners return the timestamp interval that best matches the query. Validators generate synthetic video-search tasks, score miner responses, and set on-chain weights.
 
----
+## Architecture
 
-## Current Scope (1.0)
+ChronoSeek uses the `v2.0` Decoupled Evaluation-Serving Architecture (DESA):
 
-**Current Status:** Fully functioning on testnet with a released developer-facing gateway.
+- **Miners** deploy private retrieval runtimes on Chutes.
+- **Miners** commit structured runtime metadata on-chain.
+- **Validators** read those submissions, query miner Chutes for synthetic evaluation, score responses, and set weights.
+- **Owner-run serving** is separate from subnet scoring. Organic user and developer traffic is served by operator-controlled promoted Chutes runtimes, not by validator fanout.
 
-This repository implements the ChronoSeek 1.0 subnet currently running on testnet.
+The full design note is [ChronoSeek v2.0 DESA](./docs/CHRONOSEEK_V2_DESA.md).
 
-**1.0 Capabilities:**
+## Guides
 
-- **Multimodal baseline:** Miners perform visual retrieval plus transcript-based speech understanding. Vision remains the primary signal, and speech-derived scoring acts as an additional boost when audio is available and usable.
-- **Deterministic evaluation:** Validators evaluate against **ActivityNet Captions** annotations loaded from Hugging Face or a local manifest, with accessible/inaccessible video caching to keep synthetic validation usable on testnet.
-- **Scoring:** Validators score miners by best-match Intersection-over-Union (IoU) in `[0, 1]`, maintain moving averages for weight setting, and normalize weights on-chain. A strict IoU threshold of `0.5` remains only for local pass/fail verification scripts.
-- **Gateway/API:** Validators can expose a protocol-compatible gateway for application and developer traffic, and that developer-facing surface is already released.
-- **Deployment status:** Miner search, validator scoring, and gateway request flows are all functioning on testnet.
+Start with the guide for your role:
 
-**Roadmap (2.0+):**
+- [Validator guide](./docs/validator.md): validator setup, required environment variables, hardened task generation, Hippius storage, and Vidaio compression.
+- [Miner guide](./docs/miner.md): Chutes runtime deployment, video download behavior, and on-chain runtime metadata commits.
+- [Owner and development guide](./docs/development.md): local Chutes testing, production build/deploy helpers, live integration checks, and module boundaries.
 
-1.  **Full multimodality:** Extend from vision + speech transcript matching to vision + speech + non-speech sound understanding.
-2.  **Stronger retrieval models:** Transition from the current CLIP-based baseline toward more temporal-aware architectures like **Moment-DETR** or **VideoLlama**-class systems.
-3.  **Richer evaluation and incentives:** Expand beyond the current deterministic dataset loop once more advanced generation and scoring are trustworthy.
-4.  **Caching and modular inference:** Add stronger caching and optional delegated inference backends where they improve real testnet performance.
+Additional background:
 
----
+- [Problem statement](./docs/PROBLEM_STATEMENT.md)
+- [System design](./docs/DESIGN.md)
+- [Business logic](./docs/BUSINESS_LOGIC.md)
+- [Validator anti-gaming tasks](./docs/VALIDATOR_ANTI_GAMING_TASKS.md)
 
-## 📚 Project Documentation
+## What To Run First
 
-This project is organized into the following key documents:
+ChronoSeek has a local development path and a live operator path. Start local unless you are intentionally touching Chutes, Hippius, or chain state.
 
-- **[Problem Statement](docs/PROBLEM_STATEMENT.md)**  
-  _Why this subnet exists, the "dark data" problem, and the limitations of current search tools._
+Safe local checks:
 
-- **[System Design](docs/DESIGN.md)**  
-  _Technical architecture, including the deployed Miner/Validator logic, validator gateway behavior, and longer-term multimodal roadmap._
-
-- **[Business Logic & Market Rationale](docs/BUSINESS_LOGIC.md)**  
-  _Market size ($94B+), commercialization strategy, and competitive advantage against centralized giants._
-
----
-
-## 🚀 Quick Start
-
-### 1. The Core Concept
-
-We are building a decentralized protocol where:
-
-- **Miners** use AI models (CLIP, Transformers) to "watch" videos and find specific moments.
-- **Validators** run deterministic ActivityNet evaluation to grade miners and serve organic/developer requests.
-- **Miners** currently combine visual search with transcript-based speech understanding.
-- **Users** get precise timestamps (e.g., "04:12 - 04:18") for natural language queries.
-
-### 2. Architecture Overview
-
-```
-User / Client
-   │
-   ▼
-Validator (Scoring + Gateway)
-   ├─ Deterministic evaluation (scoring & weights)
-   └─ Organic / developer query routing
-   │
-   ▼
-Miners
-   └─ Semantic video analysis (vision + speech transcript scoring)
+```bash
+poetry run pytest tests/unit
+poetry run python scripts/verify_miner_retrieval.py
+poetry run python scripts/verify_hardened_task_generation.py --use-smoke-dataset --no-require-accessible-videos
+poetry run python scripts/test_chutes_runtime_local.py --print-commands
 ```
 
-## 📦 Installation & Setup
+Live checks and production helpers are documented in [Owner and development guide](./docs/development.md). Those commands may call external services, mutate remote state, or consume credits.
 
-This project uses `poetry` for dependency management.
+## Install
 
-### Prerequisites
+Prerequisites:
 
 - Python 3.12+
-- [Poetry](https://python-poetry.org/docs/#installation) installed
+- [Poetry](https://python-poetry.org/docs/#installation)
 
-### 1. Clone & Install
+Clone and install:
 
 ```bash
 git clone https://github.com/chronoseek/bittensor-subnet.git
 cd bittensor-subnet
-
-# Install dependencies and create virtualenv
 poetry install
 ```
 
-### 2. Activate Virtual Environment
+Create your environment file:
 
 ```bash
-poetry env activate
+cp .env.example .env
 ```
 
-### 3. Set up HuggingFace Token
+Then edit `.env` for your role. `.env.example` is intentionally minimal and focuses on identity, credentials, secrets, and host-specific files. Runtime tuning defaults live as constants in `chronoseek/constants.py`.
 
-To download models (e.g., CLIP), you need a Hugging Face token.
+## Quick Start
 
-1. Get your token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
-2. Set it in your environment:
-
-```bash
-export HF_TOKEN=your_token_here
-```
-
-_Or add it to your `.env` file._
-
-### 4. YouTube / yt-dlp Setup (Recommended for Miner)
-
-ChronoSeek miner uses `yt-dlp` for platform URLs (YouTube, Vimeo, etc.).  
-For YouTube reliability, install at least one JS runtime and optionally provide cookies from a logged-in browser.
-
-#### Runtime prerequisites
-
-- Node.js 22+ (recommended), or
-- Deno 2+
-
-Example install commands (Ubuntu):
+Run a validator after configuring a registered validator hotkey:
 
 ```bash
-# Node 22 via nvm
-nvm install 22
-nvm use 22
-
-# Deno (optional alternative)
-curl -fsSL https://deno.land/install.sh | sh
-```
-
-Then set runtime paths in `.env` (use whichever you installed):
-
-```bash
-CHRONOSEEK_YTDLP_NODE_PATH=/home/<user>/.nvm/versions/node/v22.x.x/bin/node
-CHRONOSEEK_YTDLP_DENO_PATH=/home/<user>/.deno/bin/deno
-```
-
-#### Cookies for bot/sign-in protected YouTube videos
-
-1. Export cookies from a browser session that can play the target video  
-   (Netscape format `cookies.txt`; extensions like "Get cookies.txt LOCALLY" work).
-2. Save it outside version control (for example: `/home/<user>/secrets/cookies.txt`).
-3. Point miner to the file:
-
-```bash
-CHRONOSEEK_YTDLP_COOKIES=/home/<user>/secrets/cookies.txt
-```
-
-Alternative (desktop/local only):
-
-```bash
-CHRONOSEEK_YTDLP_COOKIES_BROWSER=chrome
-# or: firefox:Default
-```
-
-Notes:
-
-- `CHRONOSEEK_YTDLP_COOKIES` takes precedence over `CHRONOSEEK_YTDLP_COOKIES_BROWSER`.
-- Never commit cookies files. `cookies.txt` is ignored by `.gitignore`.
-- Under PM2, start miner with `poetry run python ...` so the same virtualenv and dependencies are used.
-
-## 🏃‍♂️ Running your nodes (Testnet: SN298, Mainnet: TBD)
-
-### 1. Start the Miner
-
-The miner listens for validator HTTP requests, including signed `/search` queries and `/health` liveness checks.
-
-```bash
-# Starts miner on port 8000
-poetry run python miner.py
-```
-
-_Ensure your wallet/hotkey is registered on SN298._
-
-### 2. Start the Validator
-
-The validator generates synthetic tasks, queries miners, and scores them.
-
-```bash
-# Starts validator loop
 poetry run python validator.py
 ```
 
-_Ensure your wallet/hotkey is registered on SN298._
-
-To run the validator without synthetic evaluation and weight updates (when you want to run only the API for organic request handling):
+Deploying a miner is a two-step flow: deploy a Chutes runtime, then commit the runtime metadata on-chain for the registered miner hotkey.
 
 ```bash
-poetry run python validator.py --no-enable-synthetic-evaluation
+cp chronoseek_chute.example.py chronoseek_chute.py
+poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
+  --chute-ref chronoseek_chute:chute \
+  --accept-fee \
+  --artifact-id chronoseek-runtime
 ```
 
-### 2a. Optional Validator API
-
-Validators can optionally expose a public API for application or developer use. This is disabled by default.
-
-Supported endpoints:
-
-- `GET /health`
-- `GET /capabilities`
-- `POST /search`
-- `POST /search/stream`
-
-The `/search` endpoint accepts the standard ChronoSeek `VideoSearchRequest` payload and returns a standard `VideoSearchResponse`. It waits for all queried miners to finish before aggregating and ranking the combined result set. This preserves the existing synchronous behavior for API consumers that want the fullest available aggregate.
-The `/search/stream` endpoint accepts the same request payload and responds as a server-sent event stream. It emits an immediate `accepted` event once the validator has selected currently healthy miners and dispatched the fanout, then emits `result` events whenever usable miner responses arrive, followed by a terminal `done` or `error` event.
-The `/capabilities` endpoint exposes gateway metadata such as the supported protocol versions so upstream platform services can verify compatibility at startup.
-The `/health` endpoint is intentionally self-identifying. Miner health responses include `service: "miner"` and validator API health responses include `service: "validator-gateway"`, so validator liveness checks do not confuse one role for the other.
-
-Gateway behavior:
-
-- validators maintain a miner liveness snapshot using periodic `/health` checks
-- both search endpoints query several currently healthy miners, ranked by the validator's current moving scores
-- synthetic validator scoring also targets only miners that are currently healthy at liveness sweep time
-- `POST /search` aggregates the returned windows across all completed miner queries before responding
-- `POST /search/stream` keeps the connection open and yields incremental usable results as miner responses arrive
-- both return the top `k` ranked windows by confidence in the standard `VideoSearchResponse.results` field
-- the response remains compatible with the shared protocol contract [here](https://github.com/chronoseek/protocol)
-
-Example:
+The deploy helper prints the exact `miner.py` command. It will look like:
 
 ```bash
-poetry run python validator.py \
-  --enable-validator-api \
-  --validator-api-host 0.0.0.0 \
-  --validator-api-port 8010
+poetry run python miner.py \
+  --wallet.name <wallet-name> \
+  --wallet.hotkey <hotkey-name> \
+  --chute-slug alice-chronoseek-runtime-<timestamp>
 ```
 
-### 3. Local Miner Search Test
+The examples assume Chutes account `alice` and Hippius bucket `chronoseek`.
 
-You can test `miner.py` directly without running a validator by sending a signed
-Epistula request to `/search` with `scripts/test_miner_search.py`.
+Miner runtime submissions are permanent per hotkey. Use the exact deployed slug or endpoint you want validators to score; a hotkey with multiple revealed submissions is disqualified by validators.
 
-```bash
-# In terminal A: start miner
-poetry run python miner.py
+## Video Access
 
-# In terminal B: run a signed search request
-poetry run python scripts/test_miner_search.py \
-  --video-url "https://www.w3schools.com/html/mov_bbb.mp4" \
-  --query "people talking"
+Both validator-side task generation and miner runtimes need to fetch videos. The shared downloader routes by URL type:
+
+- Hippius URLs use the Hippius S3-compatible API.
+- YouTube, Vimeo, and other extractor-platform URLs use `yt-dlp`.
+- Direct media URLs use raw HTTP.
+- If a strategy fails, the runtime falls back to the next supported strategy and returns a structured error when all strategies fail.
+
+Validator hardened tasks upload generated clips to public Hippius URLs shaped like:
+
+```text
+https://s3.hippius.com/chronoseek/task-clips/<video-file-name-or-id>
 ```
 
-Optional flags:
+## Current Scope
 
-- `--endpoint` (default: `http://127.0.0.1:8000/search`)
-- `--top-k` (default: `3`)
-- `--wallet-name`, `--wallet-hotkey`, `--wallet-path` (for Epistula signing key)
+The active subnet path is synthetic evaluation:
 
-## ⚙️ Running with PM2 (Production)
-
-For long-running processes, use [PM2](https://pm2.keymetrics.io/).
-
-### 1. Install PM2
-
-```bash
-npm install pm2 -g
+```text
+Validator
+  -> chain submission metadata
+  -> private miner Chutes
+  -> scoring
+  -> on-chain weights
 ```
 
-### 2. Start Miner
+Organic serving is intentionally outside validator scoring:
 
-```bash
-pm2 start "poetry run python miner.py --wallet.name default --wallet.hotkey default" --name miner
+```text
+User / Developer
+  -> owner-run API
+  -> promoted immutable Chutes runtime
+  -> stable product response
 ```
-
-### 3. Start Validator
-
-```bash
-pm2 start "poetry run python validator.py --wallet.name default --wallet.hotkey default" --name validator
-```
-
-### 4. Manage Processes
-
-```bash
-pm2 list
-pm2 logs miner
-pm2 logs validator
-```
-
-## 🔧 Environment Variables
-
-| Variable                              | Description                                                                       | Default                 |
-| ------------------------------------- | --------------------------------------------------------------------------------- | ----------------------- |
-| `WALLET_NAME`                         | Name of your coldkey                                                              | `default`               |
-| `HOTKEY_NAME`                         | Name of your hotkey                                                               | `default`               |
-| `WALLET_PATH`                         | Path to your wallet storage                                                       | `~/.bittensor/wallets/` |
-| `NETUID`                              | Subnet NetUID                                                                     | `298` (Mainnet TBD)     |
-| `NETWORK`                             | Network (finney, test, local)                                                     | `test`                  |
-| `PORT`                                | Default value for `axon.port`                                                     | `8000`                  |
-| `MIN_VALIDATOR_STAKE`                 | Minimum validator stake required by the miner                                     | `10000`                 |
-| `CHRONOSEEK_YTDLP_COOKIES`            | Optional path to Netscape `cookies.txt` for YouTube auth                          | ``                      |
-| `CHRONOSEEK_YTDLP_COOKIES_BROWSER`    | Optional browser source for cookies (`chrome`, `firefox:Default`, etc.)           | ``                      |
-| `CHRONOSEEK_YTDLP_NODE_PATH`          | Optional Node.js runtime path used by yt-dlp EJS challenge solver                 | ``                      |
-| `CHRONOSEEK_YTDLP_DENO_PATH`          | Optional Deno runtime path used by yt-dlp EJS challenge solver                    | ``                      |
-| `LOG_LEVEL`                           | Logging verbosity                                                                 | `INFO`                  |
-| `HF_TOKEN`                            | Hugging Face Token                                                                | `None`                  |
-| `HF_HOME`                             | Hugging Face cache directory                                                      | `~/.cache/huggingface`  |
-| `HF_ACTIVITYNET_FILENAME`             | Optional filename override inside the ActivityNet snapshot                        | ``                      |
-| `TASK_DATASET_PATH`                   | Optional local validator dataset path                                             | ``                      |
-| `TASK_SPLIT`                          | Validator task split                                                              | `validation`            |
-| `REQUIRE_ACCESSIBLE_VIDEOS`           | Skip inaccessible validator task videos                                           | `1`                     |
-| `TASK_MAX_SAMPLING_ATTEMPTS`          | Max tries to find an accessible validator task                                    | `50`                    |
-| `VIDEO_AVAILABILITY_CACHE_PATH`       | Legacy base path used to derive the validator accessible/inaccessible cache files | ``                      |
-| `ACCESSIBLE_VIDEO_CACHE_PATH`         | JSON cache path for validator videos confirmed to be accessible                   | ``                      |
-| `INACCESSIBLE_VIDEO_CACHE_PATH`       | JSON cache path for validator videos confirmed to be inaccessible                 | ``                      |
-| `VIDEO_AVAILABILITY_CACHE_TTL_HOURS`  | TTL for cached video availability checks                                          | `24`                    |
-| `VIDEO_AVAILABILITY_TIMEOUT`          | Timeout for validator-side video availability checks (seconds)                    | `20`                    |
-| `ENABLE_SYNTHETIC_EVALUATION`         | Enable synthetic validator scoring and on-chain weight updates                    | `1`                     |
-| `SYNTHETIC_MINER_TIMEOUT_SECONDS`     | Per-miner timeout for synthetic validator evaluation requests                     | `150`                   |
-| `MINER_EMISSION_BURN_PERCENT`         | Percent of miner emissions to burn by assigning that weight share to UID 0       | `0`                     |
-| `ENABLE_VALIDATOR_API`                | Enable the optional validator `/search`, `/search/stream`, `/health`, and `/capabilities` API | `0`          |
-| `VALIDATOR_API_HOST`                  | Host for the optional validator API                                               | `0.0.0.0`               |
-| `VALIDATOR_API_PORT`                  | Port for the optional validator API                                               | `8010`                  |
-| `VALIDATOR_API_MAX_MINERS`            | Max miners queried concurrently per validator API request                         | `3`                     |
-| `VALIDATOR_API_SYNC_MINER_TIMEOUT_SECONDS`   | Per-miner timeout for sync validator API search fanout                      | `135`                   |
-| `VALIDATOR_API_STREAM_MINER_TIMEOUT_SECONDS` | Per-miner timeout for streaming validator API search fanout                 | `135`                   |
-| `VALIDATOR_MINER_HEALTH_INTERVAL_SECONDS`    | Interval between validator liveness sweeps using miner `/health`            | `60`                    |
-| `VALIDATOR_MINER_HEALTH_TIMEOUT_SECONDS`     | Per-miner timeout for validator liveness checks via miner `/health`         | `5`                     |

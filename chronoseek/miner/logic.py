@@ -7,7 +7,7 @@ import bittensor as bt
 
 # Modular components
 from chronoseek.miner.utils.audio_extractor import AudioExtractor
-from chronoseek.miner.utils.video_downloader import VideoDownloader
+from chronoseek.video.downloader import VideoDownloadError, VideoDownloader
 from chronoseek.miner.utils.frame_extractor import FrameExtractor
 from chronoseek.miner.utils.clip_engine import CLIPProcessorEngine
 from chronoseek.miner.utils.transcript_engine import TranscriptEngine, TranscriptSegment
@@ -80,13 +80,24 @@ class MinerLogic:
 
         bt.logging.info(f">>> Step 1: Downloading Video")
         t0 = time.perf_counter()
-        downloaded_video = VideoDownloader.download_video(video_url)
+        try:
+            downloaded_video = VideoDownloader.download_video(
+                video_url,
+                raise_on_failure=True,
+            )
+        except VideoDownloadError as exc:
+            bt.logging.error(f"Video download failed: {exc}")
+            raise SearchPipelineError(
+                "VIDEO_FETCH_FAILED",
+                "The video URL could not be fetched by supported download backends.",
+                exc.details(),
+            ) from exc
         download_sec = time.perf_counter() - t0
         if not downloaded_video:
             bt.logging.error("Video download failed.")
             raise SearchPipelineError(
                 "VIDEO_FETCH_FAILED",
-                "The video URL could not be fetched.",
+                "The video URL could not be fetched by supported download backends.",
                 {"video_url": video_url},
             )
         video_path = downloaded_video.path

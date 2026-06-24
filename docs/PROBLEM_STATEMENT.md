@@ -2,13 +2,13 @@
 
 ## The Gap in Video Search
 
-Users often remember *what happens* in a video, but not *when it happens*. 
+Users often remember *what happens* in a video, but not *when it happens*.
 
 Existing tools rely on metadata, subtitles, or manual chaptering and cannot reliably answer semantic queries such as:
 
 > "the scene where two generals fight each other with guns"
 
-**ChronoSeek** solves this problem by enabling semantic video moment retrieval in a decentralized, competitive environment.
+**ChronoSeek** solves this problem by building "Google for Videos" in a decentralized, competitive environment.
 
 ## Key Challenges
 
@@ -20,3 +20,15 @@ Existing tools rely on metadata, subtitles, or manual chaptering and cannot reli
 ## The Solution
 
 A decentralized subnet where miners compete to provide the most accurate timestamp intervals for natural language queries, evaluated by a robust, synthetic ground-truth mechanism.
+
+## v2.0 Serving Boundary
+
+ChronoSeek's production serving model is moving to Decoupled Evaluation-Serving Architecture (DESA):
+
+- the subnet evaluates miner runtimes with synthetic requests
+- miners submit private Chutes-hosted retrieval runtimes
+- selected runtimes can be promoted into public Chutes clones
+- each promoted clone is locked to the exact Docker image that was running at clone time
+- the owner-run API serves organic website and developer traffic from promoted clones, not from live miner fanout
+
+This keeps the subnet decentralized while giving the public API a stable serving backend.

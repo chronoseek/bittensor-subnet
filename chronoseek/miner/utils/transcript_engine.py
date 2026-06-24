@@ -70,7 +70,10 @@ class TranscriptEngine:
             return []
 
         try:
-            result = asr_pipeline(audio_path, return_timestamps=True)
+            result = asr_pipeline(
+                audio_path,
+                return_timestamps=True
+            )
         except Exception as exc:
             bt.logging.warning(f"Transcript generation failed: {exc}")
             return []
@@ -81,14 +84,20 @@ class TranscriptEngine:
         return segments
 
     @staticmethod
-    def _parse_segments(result, audio_duration_sec: float | None) -> List[TranscriptSegment]:
+    def _parse_segments(
+        result, audio_duration_sec: float | None
+    ) -> List[TranscriptSegment]:
         chunks = result.get("chunks") if isinstance(result, dict) else None
         if chunks:
             segments: List[TranscriptSegment] = []
             for chunk in chunks:
                 raw_text = str(chunk.get("text", "")).strip()
                 timestamp = chunk.get("timestamp")
-                if not raw_text or not isinstance(timestamp, (list, tuple)) or len(timestamp) != 2:
+                if (
+                    not raw_text
+                    or not isinstance(timestamp, (list, tuple))
+                    or len(timestamp) != 2
+                ):
                     continue
                 start, end = timestamp
                 if start is None:

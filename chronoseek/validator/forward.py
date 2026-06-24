@@ -1,18 +1,24 @@
-import httpx
-import time
 import asyncio
 import json
-from uuid import uuid4
-import bittensor as bt
+import time
 from dataclasses import dataclass
 from typing import List, Tuple
+from uuid import uuid4
+from urllib.parse import urlparse
+
+import bittensor as bt
+import httpx
+
 from chronoseek.protocol_models import (
     ProtocolError,
     VideoSearchRequest,
     VideoSearchResponse,
 )
-from chronoseek.scoring import score_response
+from chronoseek.scoring import LatencyScoringConfig, score_response
 from chronoseek.epistula import generate_header
+from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
+from chronoseek.validator.task_models import normalize_generated_task
+from chronoseek.validator.telemetry import MinerTelemetryEvent
 
 MAX_CONCURRENT_MINER_REQUESTS = 8
 
@@ -32,13 +38,6 @@ class MinerQueryResult:
     failure: MinerQueryFailure | None = None
 
 
-@dataclass
-class MinerHealthcheckResult:
-    ok: bool
-    latency: float
-    failure: MinerQueryFailure | None = None
-
-
 def _normalize_endpoint(endpoint: str) -> str:
     if endpoint.startswith("http"):
         return endpoint
@@ -53,18 +52,21 @@ async def query_miner(
     request: VideoSearchRequest,
     wallet: bt.Wallet,
     timeout_seconds: float = 60.0,
+    extra_headers: dict[str, str] | None = None,
 ) -> MinerQueryResult:
     """
-    Query a single miner with Epistula signing.
-    Returns (Response, Latency).
+    Query one resolved miner runtime with Epistula signing.
     """
     start_time = time.time()
     try:
         request_payload = request.model_dump(mode="json")
         endpoint = _normalize_endpoint(endpoint)
 
-        # Generate Epistula headers
-        headers = generate_header(wallet.hotkey, request_payload)
+        # Generate Epistula headers. Provider auth stays additive.
+        headers = {
+            **(extra_headers or {}),
+            **generate_header(wallet.hotkey, request_payload),
+        }
 
         resp = await client.post(
             f"{endpoint}/search",
@@ -132,93 +134,72 @@ async def query_miner(
         )
 
 
-async def check_miner_health(
-    client: httpx.AsyncClient,
-    uid: int,
-    hotkey: str,
-    endpoint: str,
-    timeout_seconds: float = 5.0,
-) -> MinerHealthcheckResult:
-    start_time = time.time()
-    try:
-        endpoint = _normalize_endpoint(endpoint)
-        resp = await client.get(
-            f"{endpoint}/health",
-            timeout=timeout_seconds,
-        )
-        resp.raise_for_status()
-        latency = time.time() - start_time
-        payload = resp.json()
-        if (
-            not isinstance(payload, dict)
-            or payload.get("status") != "ok"
-            or payload.get("service") != "miner"
-        ):
-            raise ValueError("unexpected health response")
-        bt.logging.debug(
-            f"Health check miner {uid} ({hotkey}, {endpoint}) response: {payload}"
-        )
-        return MinerHealthcheckResult(
-            ok=True,
-            latency=latency,
-        )
-
-    except httpx.HTTPStatusError as exc:
-        failure = MinerQueryFailure(
-            kind="http_status",
-            message=str(exc),
-            status_code=exc.response.status_code,
-        )
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-    except httpx.TimeoutException as exc:
-        failure = MinerQueryFailure(kind="timeout", message=str(exc))
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-    except httpx.ConnectError as exc:
-        failure = MinerQueryFailure(kind="connect_error", message=str(exc))
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-    except Exception as exc:
-        failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
-        bt.logging.warning(
-            f"Failed to health-check miner {uid} ({hotkey}, {endpoint}): {failure.message}"
-        )
-        return MinerHealthcheckResult(ok=False, latency=0.0, failure=failure)
-
-
 async def query_uid(
     semaphore: asyncio.Semaphore,
-    uid: int,
-    hotkey: str,
-    endpoint: str,
+    miner_endpoint: ChutesRuntimeEndpoint,
     client: httpx.AsyncClient,
     request_model: VideoSearchRequest,
     wallet: bt.Wallet,
     ground_truths: List[Tuple[float, float]],
     timeout_seconds: float,
+    clip_duration: float | None = None,
+    max_prediction_duration_seconds: float | None = None,
+    extra_headers: dict[str, str] | None = None,
+    expects_empty_response: bool = False,
+    task_family: str = "legacy-activitynet",
+    canary_kind: str | None = None,
+    transform_id: str | None = None,
+    hard_negative_count: int = 0,
+    latency_scoring_config: LatencyScoringConfig | None = None,
+    telemetry_recorder=None,
 ) -> Tuple[int, float]:
     async with semaphore:
-        bt.logging.debug(f"Querying miner {uid} at {endpoint}...")
+        uid = miner_endpoint.uid
+        bt.logging.debug(
+            f"Querying miner {uid} runtime from chain submission at {miner_endpoint.endpoint}..."
+        )
         result = await query_miner(
             client,
             uid,
-            hotkey,
-            endpoint,
+            miner_endpoint.hotkey,
+            miner_endpoint.endpoint,
             request_model,
             wallet,
             timeout_seconds=timeout_seconds,
+            extra_headers=extra_headers,
         )
         resp = result.response
         latency = result.latency
 
         if not resp.results:
+            if expects_empty_response and result.failure is None:
+                score = score_response(
+                    [],
+                    [],
+                    latency,
+                    expects_empty_response=True,
+                    latency_scoring_config=latency_scoring_config
+                    or LatencyScoringConfig(),
+                )
+                if telemetry_recorder is not None:
+                    telemetry_recorder(
+                        MinerTelemetryEvent(
+                            uid=int(uid),
+                            score=score,
+                            latency=latency,
+                            task_family=task_family,
+                            canary_kind=canary_kind,
+                            transform_id=transform_id,
+                            hard_negative_count=hard_negative_count,
+                        )
+                    )
+                bt.logging.success(
+                    f"[UID {uid}] Empty canary response accepted | "
+                    f"Request: {request_model.request_id} | "
+                    f"Latency: {latency:.2f}s | Score: {score:.4f}"
+                )
+                return int(uid), score
+
             failure_suffix = ""
             if result.failure is not None:
                 parts = [result.failure.kind]
@@ -232,11 +213,59 @@ async def query_uid(
             bt.logging.warning(
                 f"[UID {uid}] No results | Request: {request_model.request_id} | Latency: {latency:.2f}s | Score: 0.0000{failure_suffix}"
             )
+            if telemetry_recorder is not None:
+                telemetry_recorder(
+                    MinerTelemetryEvent(
+                        uid=int(uid),
+                        score=0.0,
+                        latency=latency,
+                        task_family=task_family,
+                        canary_kind=canary_kind,
+                        transform_id=transform_id,
+                        hard_negative_count=hard_negative_count,
+                        failure_kind=(
+                            result.failure.kind if result.failure is not None else None
+                        ),
+                        protocol_code=(
+                            result.failure.protocol_code
+                            if result.failure is not None
+                            else None
+                        ),
+                        status_code=(
+                            result.failure.status_code
+                            if result.failure is not None
+                            else None
+                        ),
+                    )
+                )
             return int(uid), 0.0
 
-        score = score_response(resp.results, ground_truths, latency)
+        score = score_response(
+            resp.results,
+            ground_truths,
+            latency,
+            clip_duration=clip_duration,
+            max_prediction_duration_seconds=max_prediction_duration_seconds,
+            score_top_k=1,
+            expects_empty_response=expects_empty_response,
+            latency_scoring_config=latency_scoring_config or LatencyScoringConfig(),
+        )
         result = resp.results[0]
         res_str = f"[{result.start:.1f}s - {result.end:.1f}s]"
+        if telemetry_recorder is not None:
+            telemetry_recorder(
+                MinerTelemetryEvent(
+                    uid=int(uid),
+                    score=score,
+                    latency=latency,
+                    task_family=task_family,
+                    canary_kind=canary_kind,
+                    transform_id=transform_id,
+                    hard_negative_count=hard_negative_count,
+                    top_start=float(result.start),
+                    top_end=float(result.end),
+                )
+            )
         bt.logging.success(
             f"[UID {uid}] Request: {request_model.request_id} | Score: {score:.4f} | Latency: {latency:.2f}s | Result: {res_str}"
         )
@@ -249,13 +278,18 @@ async def run_step(
     wallet: bt.Wallet,
     client: httpx.AsyncClient,
     miner_timeout_seconds: float = 60.0,
-    candidate_uids: List[int] | None = None,
+    miner_endpoints: list[ChutesRuntimeEndpoint] | None = None,
+    provider_headers: dict[str, str] | None = None,
+    validator_eval_top_k: int = 1,
+    max_prediction_duration_seconds: float = 60.0,
+    latency_scoring_config: LatencyScoringConfig | None = None,
+    telemetry_recorder=None,
 ) -> List[Tuple[int, float]]:
     """
     Run a single validation step:
     1. Generate task (ActivityNet)
-    2. Query all miners via HTTP + Epistula
-    3. Score responses (Strict IoU)
+    2. Query selected responsive runtime endpoints via HTTP + Epistula
+    3. Score responses with continuous IoU
 
     Returns: List of (uid, score)
     """
@@ -267,7 +301,10 @@ async def run_step(
 
     bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
     try:
-        video_url, query, ground_truths = task_gen.generate_task()
+        normalized_task = normalize_generated_task(
+            task_gen.generate_task(),
+            default_top_k=validator_eval_top_k,
+        )
     except RuntimeError as exc:
         bt.logging.warning(
             f"Task generation could not find an accessible video: {exc}. Refreshing video availability checks and retrying."
@@ -280,59 +317,77 @@ async def run_step(
                 f"Refreshed {refreshed_entries} cached unavailable video availability entries."
             )
         try:
-            video_url, query, ground_truths = task_gen.generate_task()
+            normalized_task = normalize_generated_task(
+                task_gen.generate_task(),
+                default_top_k=validator_eval_top_k,
+            )
         except RuntimeError as retry_exc:
             bt.logging.warning(
                 f"Skipping validation step because no accessible validator task was found after retry: {retry_exc}"
             )
             bt.logging.info("=" * 50)
             return []
-    request_id = f"validation-{uuid4()}"
+    request_id = normalized_task.request_id or f"validation-{uuid4()}"
+    video_url = normalized_task.video_url
+    query = normalized_task.query
+    ground_truths = normalized_task.ground_truths
+    clip_duration = normalized_task.clip_duration
+    artifact_host = urlparse(video_url).netloc or "unknown"
+    task_family = normalized_task.task_family or "legacy-activitynet"
 
     bt.logging.info("-" * 40)
     bt.logging.info(f"Request ID:  {request_id}")
-    bt.logging.info(f"Video URL:   {video_url}")
-    bt.logging.info(f"Query:       {query}")
-    bt.logging.info(f"Ground Truths: {ground_truths}")
+    bt.logging.info(f"Task ID:     {normalized_task.task_id or 'legacy-task'}")
+    bt.logging.info(f"Artifact Host: {artifact_host}")
+    bt.logging.info(f"Query Variant: {normalized_task.query_variant_id or 'legacy-query'}")
+    if normalized_task.canary_kind:
+        bt.logging.info(
+            f"Canary: {normalized_task.canary_kind} | "
+            f"expects_empty={normalized_task.expects_empty_response}"
+        )
+    bt.logging.info(f"Clip Duration: {clip_duration if clip_duration is not None else 'unknown'}")
+    bt.logging.info(f"Ground Truth Count: {len(ground_truths)}")
     bt.logging.info("-" * 40)
 
     request_model = VideoSearchRequest(
         request_id=request_id,
         video={"url": video_url},
         query=query,
+        top_k=normalized_task.top_k,
     )
 
     scores = []
 
-    # MVP: Loop over metagraph to query miners
-    # We skip UIDs with no IP (0.0.0.0) or private IPs if not local dev
-    bt.logging.info(f"\n>>> Phase 2: Querying Miners ({len(metagraph.uids)} total)")
+    miner_endpoints = list(miner_endpoints or [])
+    bt.logging.info(
+        "\n>>> Phase 2: Querying Miners "
+        f"({len(metagraph.uids)} total | selected={len(miner_endpoints)} | "
+        f"routing=chain+chutes)"
+    )
 
     tasks = []
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MINER_REQUESTS)
-    uids_to_query = candidate_uids if candidate_uids is not None else metagraph.uids
 
-    for uid in uids_to_query:
-        uid = int(uid)
-        if uid < 0 or uid >= len(metagraph.axons):
-            continue
-        axon = metagraph.axons[uid]
-        if axon.ip == "0.0.0.0":
-            continue
-
-        endpoint = f"http://{axon.ip}:{axon.port}"
-        hotkey = metagraph.hotkeys[uid]
+    for miner_endpoint in miner_endpoints:
         tasks.append(
             query_uid(
                 semaphore,
-                int(uid),
-                hotkey,
-                endpoint,
+                miner_endpoint,
                 client,
                 request_model,
                 wallet,
                 ground_truths,
                 miner_timeout_seconds,
+                clip_duration=clip_duration,
+                max_prediction_duration_seconds=max_prediction_duration_seconds,
+                extra_headers=provider_headers,
+                expects_empty_response=normalized_task.expects_empty_response,
+                task_family=task_family,
+                canary_kind=normalized_task.canary_kind,
+                transform_id=normalized_task.transform_id,
+                hard_negative_count=normalized_task.hard_negative_count,
+                latency_scoring_config=latency_scoring_config,
+                telemetry_recorder=telemetry_recorder,
             )
         )
 
