@@ -31,15 +31,13 @@ For on-chain miner metadata commits:
 | `HOTKEY_NAME` | Yes | Registered miner hotkey name. |
 | `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
 | `NETUID` | Yes | ChronoSeek subnet netuid. |
-| `MECHID` | If non-default | Defaults to `0`. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 
 For Chutes runtime build/deploy:
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `CHUTES_API_KEY` | Yes | Used by `scripts/deploy_chutes_runtime.py`. |
-| `CHUTES_ACCOUNT` | Yes for `chronoseek_chute.example.py` | Chutes account namespace, for example `alice`. |
+| `CHUTES_API_KEY` | Yes | Used by `scripts/deploy_chutes_runtime.py`; the helper resolves the Chutes username from this key. |
 | `HF_TOKEN` | Recommended | Used by CLIP/Whisper model downloads when present. |
 | `YTDLP_COOKIES` | Optional | Cookies file copied into Chutes image when it points to a readable local file. |
 | `YTDLP_COOKIES_BROWSER` | Optional | Browser cookie source used by yt-dlp where that browser profile is available. Chutes deployments should prefer `YTDLP_COOKIES`. |
@@ -51,13 +49,11 @@ Minimal `.env` shape:
 ```env
 NETWORK=finney
 NETUID=<netuid>
-MECHID=0
 WALLET_NAME=<miner-coldkey>
 HOTKEY_NAME=<miner-hotkey>
 WALLET_PATH=~/.bittensor/wallets
 
 CHUTES_API_KEY=<chutes-api-key>
-CHUTES_ACCOUNT=<chutes-account>
 HF_TOKEN=<hugging-face-token>
 YTDLP_COOKIES=/absolute/path/to/cookies.txt
 ```
@@ -70,13 +66,12 @@ Create your local Chutes definition:
 cp chronoseek_chute.example.py chronoseek_chute.py
 ```
 
-Edit `chronoseek_chute.py` before deployment. This file is ignored by git and is where miner-specific Chutes account, package, and GPU settings belong. The examples assume Chutes account `alice`.
+Edit `chronoseek_chute.py` before deployment. This file is ignored by git and is where miner-specific package and GPU settings belong. The deploy helper resolves the Chutes username from `CHUTES_API_KEY` with `GET /users/me`.
 
 Important fields:
 
 | Field | Notes |
 | --- | --- |
-| `CHUTES_ACCOUNT` | Chutes account namespace, for example `alice`. This is not your Bittensor identity. |
 | `DEFAULT_CHUTE_BASE_NAME` | Constant in `chronoseek/constants.py`; `CHUTE_NAME` is generated from it. |
 | `CHRONOSEEK_PACKAGE` | Package or git URL installed into the Chutes image. Use your fork if you changed runtime code. |
 | `RUNTIME_REVISION` | Derived from the current git commit when available. |
@@ -117,7 +112,7 @@ poetry run python scripts/deploy_chutes_runtime.py --build --deploy \
   --artifact-id chronoseek-runtime
 ```
 
-The helper prints normalized metadata and a suggested `miner.py` command. With Chutes account `alice`, the submitted slug looks like:
+The helper prints normalized metadata and a suggested `miner.py` command. With resolved Chutes username `alice`, the submitted slug looks like:
 
 ```text
 alice-chronoseek-runtime-<timestamp>

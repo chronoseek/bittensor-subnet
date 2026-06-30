@@ -8,10 +8,13 @@ from chronoseek.chutes.deployment import (
     ChutesWarmupInterrupted,
     ChutesWarmupTimeout,
     RuntimeMetadata,
+    apply_chutes_username,
     apply_runtime_name,
     build_image_via_api,
     chutes_ytdlp_cookie_file_context,
     chute_deploy_payload,
+    chutes_username_from_user_payload,
+    get_chutes_username_via_api,
     image_build_form_payload,
     merge_metadata,
     metadata_from_chute_object,
@@ -44,6 +47,10 @@ class DummyConfig:
     artifact_revision = "abc123"
     artifact_digest = "sha256:deadbeef"
     capability = ["vision", "audio"]
+
+
+async def fake_get_chutes_username_via_api(**kwargs):
+    return "chronoseek"
 
 
 class DummyChutesImage:
@@ -281,6 +288,38 @@ def test_runtime_name_uses_timestamp():
     assert resolve_chute_display_name("chronoseek-runtime") == "ChronoSeek Runtime"
 
 
+def test_chutes_username_from_user_payload_accepts_known_shapes():
+    assert chutes_username_from_user_payload({"username": "alice"}) == "alice"
+    assert chutes_username_from_user_payload({"user": {"name": "bob"}}) == "bob"
+    assert (
+        chutes_username_from_user_payload({"account": {"user_name": "carol"}})
+        == "carol"
+    )
+
+
+def test_apply_chutes_username_updates_chute_and_image_ids():
+    class DummyImage:
+        username = "placeholder"
+        name = "runtime"
+        tag = "rev-1"
+        _uid = "old-image"
+
+    class DummyChute:
+        _username = "placeholder"
+        name = "chronoseek-runtime"
+        _uid = "old-chute"
+        image = DummyImage()
+
+    chute = DummyChute()
+
+    apply_chutes_username(chute, "alice")
+
+    assert chute._username == "alice"
+    assert chute.image.username == "alice"
+    assert chute._uid != "old-chute"
+    assert chute.image._uid != "old-image"
+
+
 def test_resolve_chute_logo_url_uses_chronoseek_default():
     class ChuteWithoutLogo:
         pass
@@ -353,6 +392,46 @@ def test_upload_logo_via_api_downloads_and_uploads_logo(monkeypatch):
     assert calls[2][2]["logo"][1] == b"png-bytes"
     assert calls[2][2]["logo"][2] == "image/png"
     assert calls[2][3] == {"Authorization": "cpk_test"}
+
+
+def test_get_chutes_username_via_api_loads_current_user(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            calls.append(("client", kwargs))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers):
+            calls.append(("get", url, headers))
+            return chutes_deployment.httpx.Response(
+                200,
+                json={"username": "alice"},
+                request=chutes_deployment.httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(chutes_deployment.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        chutes_deployment,
+        "chutes_auth_headers_from_env",
+        lambda **kwargs: {"Authorization": "cpk_test"},
+    )
+
+    username = asyncio.run(
+        get_chutes_username_via_api(api_base_url="https://api.chutes.ai")
+    )
+
+    assert username == "alice"
+    assert calls[1] == (
+        "get",
+        "https://api.chutes.ai/users/me",
+        {"Authorization": "cpk_test"},
+    )
 
 
 def test_warmup_chute_via_api_polls_until_hot(monkeypatch):
@@ -881,6 +960,11 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
         "deploy_chute_via_api",
         fake_deploy_chute_via_api,
     )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "get_chutes_username_via_api",
+        fake_get_chutes_username_via_api,
+    )
 
     class DummyLoadedChute:
         _username = "chronoseek"
@@ -933,6 +1017,7 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
                 "public": True,
                 "overwrite_existing": None,
                 "timeout_seconds": 3600.0,
+                "chutes_username": "chronoseek",
                 "chute_name": "ChronoSeek-runtime-20260510143015999",
                 "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
                 "chute_display_name": "ChronoSeek Runtime",
@@ -955,6 +1040,7 @@ def test_deploy_wrapper_build_deploy_flow_invokes_chutes_api_boundaries(
                 "public": True,
                 "accept_fee": True,
                 "timeout_seconds": 3600.0,
+                "chutes_username": "chronoseek",
                 "chute_name": "ChronoSeek-runtime-20260510143015999",
                 "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
                 "chute_display_name": "ChronoSeek Runtime",
@@ -1019,6 +1105,11 @@ def test_deploy_wrapper_warms_up_after_deploy_when_requested(monkeypatch):
         "warmup_chute_via_api",
         fake_warmup_chute_via_api,
     )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "get_chutes_username_via_api",
+        fake_get_chutes_username_via_api,
+    )
 
     class DummyLoadedChute:
         _username = "chronoseek"
@@ -1067,6 +1158,7 @@ def test_deploy_wrapper_warms_up_after_deploy_when_requested(monkeypatch):
                 "public": False,
                 "accept_fee": True,
                 "timeout_seconds": 3600.0,
+                "chutes_username": "chronoseek",
                 "chute_name": "ChronoSeek-runtime-20260510143015999",
                 "chute_slug": "chronoseek-chronoseek-runtime-20260510143015999",
                 "chute_display_name": "ChronoSeek Runtime",
@@ -1138,6 +1230,11 @@ def test_deploy_wrapper_reports_manual_warmup_after_warmup_timeout(
         deploy_chutes_runtime,
         "warmup_chute_via_api",
         fake_warmup_chute_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "get_chutes_username_via_api",
+        fake_get_chutes_username_via_api,
     )
 
     class DummyLoadedChute:
@@ -1232,6 +1329,11 @@ def test_deploy_wrapper_reports_manual_warmup_after_interruption(
         deploy_chutes_runtime,
         "warmup_chute_via_api",
         fake_warmup_chute_via_api,
+    )
+    monkeypatch.setattr(
+        deploy_chutes_runtime,
+        "get_chutes_username_via_api",
+        fake_get_chutes_username_via_api,
     )
 
     class DummyLoadedChute:

@@ -47,19 +47,6 @@ class TestChainInteraction(unittest.TestCase):
 
         self.assertEqual(config.subtensor.network, "local")
 
-    def test_miner_config_accepts_mechid(self):
-        test_args = [
-            "miner.py",
-            "--mechid",
-            "2",
-        ]
-
-        with patch.dict(os.environ, {}, clear=True):
-            with patch.object(sys, "argv", test_args):
-                config = get_config()
-
-        self.assertEqual(config.mechid, 2)
-
     def test_miner_config_accepts_check_existing(self):
         test_args = [
             "miner.py",

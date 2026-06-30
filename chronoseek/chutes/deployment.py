@@ -220,6 +220,25 @@ def _recompute_chute_uid(chute: Any) -> None:
         chute._uid = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{username}::chute::{name}"))
 
 
+def apply_chutes_username(chute: Any, username: str | None) -> Any:
+    """Apply the Chutes account username resolved from the API key."""
+
+    resolved_username = str(username or "").strip()
+    if not resolved_username:
+        return chute
+
+    # Chutes SDK exposes Chute.username only as a private field.
+    chute._username = resolved_username
+    _recompute_chute_uid(chute)
+
+    image = getattr(chute, "image", None)
+    if image is not None and not isinstance(image, str):
+        image.username = resolved_username
+        _recompute_image_uid(image)
+
+    return chute
+
+
 def _readme_with_runtime_info(
     readme: str | None,
     *,
@@ -442,6 +461,7 @@ def require_chute_module_ref(chute_ref: str) -> str:
 def load_chute_definition(
     chute_ref: str,
     *,
+    chutes_username: str | None = None,
     chute_name: str | None = None,
     chute_slug: str | None = None,
     chute_display_name: str | None = None,
@@ -461,6 +481,7 @@ def load_chute_definition(
         chute = chute.chute
     if not isinstance(chute, Chute):
         raise TypeError(f"{chute_ref} did not resolve to a Chutes Chute object.")
+    apply_chutes_username(chute, chutes_username)
     apply_runtime_name(
         chute,
         chute_name,
@@ -474,6 +495,7 @@ def load_chute_definition(
 def load_chute_object(
     chute_ref: str,
     *,
+    chutes_username: str | None = None,
     chute_name: str | None = None,
     chute_slug: str | None = None,
     chute_display_name: str | None = None,
@@ -482,6 +504,7 @@ def load_chute_object(
 
     _, _, chute = load_chute_definition(
         chute_ref,
+        chutes_username=chutes_username,
         chute_name=chute_name,
         chute_slug=chute_slug,
         chute_display_name=chute_display_name,
@@ -510,6 +533,7 @@ def metadata_from_chute_object(chute: Any) -> RuntimeMetadata:
 def metadata_from_chute_definition(
     chute_ref: str,
     *,
+    chutes_username: str | None = None,
     chute_name: str | None = None,
     chute_slug: str | None = None,
     chute_display_name: str | None = None,
@@ -517,6 +541,7 @@ def metadata_from_chute_definition(
     return metadata_from_chute_object(
         load_chute_object(
             chute_ref,
+            chutes_username=chutes_username,
             chute_name=chute_name,
             chute_slug=chute_slug,
             chute_display_name=chute_display_name,
@@ -717,6 +742,52 @@ async def get_image_via_api(
         return _json_or_empty(response)
 
 
+def chutes_username_from_user_payload(payload: dict[str, Any]) -> str | None:
+    """Extract the current Chutes username from known `/users/me` shapes."""
+
+    if not isinstance(payload, dict):
+        return None
+    user = _mapping(payload.get("user"))
+    account = _mapping(payload.get("account"))
+    return _first_text(
+        payload.get("username"),
+        payload.get("name"),
+        payload.get("user_name"),
+        user.get("username"),
+        user.get("name"),
+        user.get("user_name"),
+        account.get("username"),
+        account.get("name"),
+        account.get("user_name"),
+    )
+
+
+async def get_chutes_username_via_api(
+    *,
+    api_base_url: str,
+    timeout_seconds: float = 60.0,
+) -> str:
+    """Return the Chutes username associated with `CHUTES_API_KEY`."""
+
+    url = f"{api_base_url.rstrip('/')}/users/me"
+    bt.logging.info(f"Resolving Chutes username through API: GET {url}")
+    async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
+        response = await client.get(
+            url,
+            headers=chutes_auth_headers_from_env(require_token=True),
+        )
+        _raise_for_status_with_body(response)
+        payload = _json_or_empty(response)
+
+    username = chutes_username_from_user_payload(payload)
+    if not username:
+        raise RuntimeError(
+            "Chutes /users/me response did not include a username. "
+            f"Response keys: {sorted(payload.keys())}"
+        )
+    return username
+
+
 async def delete_image_via_api(
     *,
     api_base_url: str,
@@ -827,12 +898,14 @@ def chute_deploy_payload(
     chute_ref: str,
     public: bool = False,
     logo_id: str | None = None,
+    chutes_username: str | None = None,
     chute_name: str | None = None,
     chute_slug: str | None = None,
     chute_display_name: str | None = None,
 ) -> dict[str, Any]:
     _, module_path, chute = load_chute_definition(
         chute_ref,
+        chutes_username=chutes_username,
         chute_name=chute_name,
         chute_slug=chute_slug,
         chute_display_name=chute_display_name,
@@ -913,6 +986,7 @@ async def build_image_via_api(
     public: bool = False,
     overwrite_existing: bool | None = None,
     timeout_seconds: float = 900.0,
+    chutes_username: str | None = None,
     chute_name: str | None = None,
     chute_slug: str | None = None,
     chute_display_name: str | None = None,
@@ -922,6 +996,7 @@ async def build_image_via_api(
 
     image = load_chute_object(
         chute_ref,
+        chutes_username=chutes_username,
         chute_name=chute_name,
         chute_slug=chute_slug,
         chute_display_name=chute_display_name,
@@ -1052,6 +1127,7 @@ async def deploy_chute_via_api(
     accept_fee: bool = False,
     public: bool = False,
     timeout_seconds: float = 900.0,
+    chutes_username: str | None = None,
     chute_name: str | None = None,
     chute_slug: str | None = None,
     chute_display_name: str | None = None,
@@ -1063,6 +1139,7 @@ async def deploy_chute_via_api(
         chute_ref=chute_ref,
         public=public,
         logo_id=logo_id,
+        chutes_username=chutes_username,
         chute_name=chute_name,
         chute_slug=chute_slug,
         chute_display_name=chute_display_name,

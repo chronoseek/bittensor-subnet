@@ -33,6 +33,7 @@ from chronoseek.chutes.deployment import (
     RuntimeMetadata,
     build_image_via_api,
     deploy_chute_via_api,
+    get_chutes_username_via_api,
     get_chute_via_api,
     merge_metadata,
     metadata_from_chute_definition,
@@ -211,12 +212,6 @@ def resolve_runtime_timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")[:-3]
 
 
-def chute_username(chute) -> str:
-    return str(
-        getattr(chute, "username", None) or getattr(chute, "_username", None) or ""
-    ).strip()
-
-
 def chute_logo_url(chute) -> str:
     return resolve_chute_logo_url(chute)
 
@@ -351,15 +346,20 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
     explicit = explicit_metadata(config)
     base_chute = load_chute_object(config.chute_ref)
     logo_url = chute_logo_url(base_chute)
+    chutes_username = await get_chutes_username_via_api(
+        api_base_url=config.chutes_api_base_url,
+        timeout_seconds=float(config.chutes_timeout_seconds),
+    )
     base_chute_name = getattr(base_chute, "name", None) or "chronoseek-runtime"
     chute_base_name = resolve_chute_api_name(base_chute_name)
     chute_name = resolve_chute_api_runtime_name(chute_base_name, runtime_timestamp)
     chute_display_name = resolve_chute_display_name(chute_base_name)
     chute_slug = resolve_chute_slug(
-        chute_username(base_chute),
+        chutes_username,
         chute_base_name,
         runtime_timestamp,
     )
+    bt.logging.info(f"Resolved Chutes username: {chutes_username}")
     bt.logging.info(f"Resolved Chutes runtime timestamp: {runtime_timestamp}")
     bt.logging.info(f"Resolved Chutes display label: {chute_display_name}")
     bt.logging.info(f"Resolved Chutes API name: {chute_name}")
@@ -367,6 +367,7 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
     bt.logging.info(f"Resolved Chutes logo URL: {logo_url}")
     definition_metadata = metadata_from_chute_definition(
         config.chute_ref,
+        chutes_username=chutes_username,
         chute_name=chute_name,
         chute_slug=chute_slug,
         chute_display_name=chute_display_name,
@@ -403,6 +404,7 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 public=bool(config.public),
                 overwrite_existing=config.overwrite_existing_image,
                 timeout_seconds=float(config.chutes_timeout_seconds),
+                chutes_username=chutes_username,
                 chute_name=chute_name,
                 chute_slug=chute_slug,
                 chute_display_name=chute_display_name,
@@ -427,6 +429,7 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 accept_fee=bool(config.accept_fee),
                 public=bool(config.public),
                 timeout_seconds=float(config.chutes_timeout_seconds),
+                chutes_username=chutes_username,
                 chute_name=chute_name,
                 chute_slug=chute_slug,
                 chute_display_name=chute_display_name,

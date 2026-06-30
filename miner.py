@@ -64,12 +64,6 @@ def get_config():
         help="Subnet NetUID",
     )
     parser.add_argument(
-        "--mechid",
-        type=int,
-        default=int(os.getenv("MECHID", str(DEFAULT_MECHID))),
-        help="Subnet mechanism ID. Bittensor logs this as netuid.mechid; default is 0.",
-    )
-    parser.add_argument(
         "--endpoint",
         type=str,
         default="",
@@ -144,7 +138,7 @@ def optional_text(value) -> str | None:
 
 def load_subtensor_and_metagraph(config):
     netuid = int(config.netuid)
-    mechid = int(getattr(config, "mechid", 0))
+    mechid = DEFAULT_MECHID
     subtensor = bt.Subtensor(config=config)
     network = optional_text(getattr(subtensor, "network", None))
     chain_endpoint = optional_text(getattr(subtensor, "chain_endpoint", None))
@@ -162,7 +156,8 @@ def load_subtensor_and_metagraph(config):
             f"Subnet netuid={netuid} does not exist on network={network} "
             f"({chain_endpoint}). Bittensor reports subnet mechanisms as "
             f"netuid.mechid, so {netuid}.{mechid} means netuid={netuid}, "
-            f"mechid={mechid}. If this is a testnet subnet, rerun with --network test."
+            f"mechid={mechid}. ChronoSeek uses mechid=0. If this is a "
+            "testnet subnet, rerun with --network test."
         )
 
     metagraph = bt.Metagraph(

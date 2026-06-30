@@ -94,9 +94,9 @@ def repair_cyscale_namespace() -> None:
             pass
 
 
-# Required by Chutes SDK image/chute object construction. This is not part of
-# ChronoSeek miner identity.
-CHUTES_ACCOUNT = os.getenv("CHUTES_ACCOUNT", "CHANGE_ME").strip() or "CHANGE_ME"
+# Placeholder required by Chutes SDK object construction. The deploy helper
+# replaces it with the username resolved from CHUTES_API_KEY before build/deploy.
+CHUTES_USERNAME = "<change-me>"
 CHUTE_BASE_NAME = DEFAULT_CHUTE_BASE_NAME
 CHUTE_NAME = CHUTE_BASE_NAME
 CHRONOSEEK_LOGO_URL = DEFAULT_CHRONOSEEK_LOGO_URL
@@ -122,7 +122,7 @@ YTDLP_DENO_PATH = IMAGE_YTDLP_DENO_PATH
 
 image = (
     Image(
-        username=CHUTES_ACCOUNT,
+        username=CHUTES_USERNAME,
         name=IMAGE_NAME,
         tag=IMAGE_TAG,
         readme="ChronoSeek miner runtime.",
@@ -190,7 +190,7 @@ if HF_TOKEN:
 
 
 chute = Chute(
-    username=CHUTES_ACCOUNT,
+    username=CHUTES_USERNAME,
     name=CHUTE_NAME,
     tagline="ChronoSeek",
     readme=(

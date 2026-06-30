@@ -95,7 +95,7 @@ poetry run python miner.py \
   --chute-slug alice-chronoseek-runtime-<timestamp>
 ```
 
-The examples assume Chutes account `alice` and Hippius bucket `chronoseek`.
+The examples use `alice` as the Chutes username resolved from `CHUTES_API_KEY`; the default Hippius bucket is `chronoseek`.
 
 Miner runtime submissions are permanent per hotkey. Use the exact deployed slug or endpoint you want validators to score; a hotkey with multiple revealed submissions is disqualified by validators.
 
