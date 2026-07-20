@@ -1,12 +1,13 @@
 import asyncio
 import os
 from dataclasses import dataclass
+from typing import Any
 
-import bittensor as bt
 import httpx
 
 from chronoseek.chain.submissions import MinerSubmission
 from chronoseek.constants import DEFAULT_CHUTES_BASE_DOMAIN
+from chronoseek.logging import logger
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ def resolve_submission_endpoint(
 
 def build_evaluation_endpoints(
     *,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
     candidate_uids: list[int] | None,
     submissions_by_hotkey: dict[str, MinerSubmission] | None = None,
     chutes_base_domain: str = DEFAULT_CHUTES_BASE_DOMAIN,
@@ -96,7 +97,7 @@ def build_evaluation_endpoints(
 
 def build_runtime_endpoints_from_map(
     *,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
     endpoint_map: dict[int, str],
     candidate_uids: list[int],
 ) -> list[ChutesRuntimeEndpoint]:
@@ -120,7 +121,7 @@ def build_runtime_endpoints_from_map(
 
 def build_submission_endpoint_map(
     *,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
     submissions_by_hotkey: dict[str, MinerSubmission],
     chutes_base_domain: str = DEFAULT_CHUTES_BASE_DOMAIN,
 ) -> dict[int, str]:
@@ -159,13 +160,13 @@ async def check_runtime_health(
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("ok") is not True:
-            bt.logging.debug(
+            logger.debug(
                 f"{subject} health check returned unexpected payload: {payload}"
             )
             return False
         return True
     except Exception as exc:
-        bt.logging.debug(
+        logger.debug(
             f"{subject} failed /health at {endpoint}: {exc}"
         )
         return False

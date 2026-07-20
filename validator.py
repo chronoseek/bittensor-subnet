@@ -8,11 +8,10 @@ import argparse
 import time
 import asyncio
 import httpx
-import bittensor as bt
 import threading
 import sys
 import numpy as np
-from typing import List
+from typing import Any, List
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -37,12 +36,17 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
-def enable_bittensor_cli_parsing() -> None:
-    """Bittensor 10.x disables argparse parsing unless this env flag opts in."""
-
-    os.environ["BT_NO_PARSE_CLI_ARGS"] = "false"
-
 from chronoseek.validator import forward as forward_module
+from chronoseek.bittensor_sdk import (
+    add_bittensor_arguments,
+    create_subtensor,
+    create_wallet,
+    current_block,
+    fetch_metagraph,
+    parse_config,
+    set_weights as set_chain_weights,
+    subnet_tempo,
+)
 from chronoseek.constants import (
     DEFAULT_ABSENT_CANARY_QUERIES,
     DEFAULT_ACCESSIBLE_VIDEO_CACHE_PATH,
@@ -52,6 +56,7 @@ from chronoseek.constants import (
     DEFAULT_ENABLE_HARDENED_TASKS,
     DEFAULT_ENABLE_LATENCY_MULTIPLIER,
     DEFAULT_ENABLE_TASK_ENCODING_PROFILE_VARIANTS,
+    DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
     DEFAULT_HF_ACTIVITYNET_FILENAME,
     DEFAULT_HF_CACHE_DIR,
     DEFAULT_HARDENED_TASK_MAX_GENERATION_ATTEMPTS,
@@ -117,6 +122,7 @@ from chronoseek.constants import (
     DEFAULT_WALLET_PATH,
 )
 from chronoseek.scoring import LatencyScoringConfig
+from chronoseek.logging import configure_logging, logger
 from chronoseek.validator.aggregation import (
     ScoreAggregationConfig,
     update_miner_score,
@@ -140,7 +146,7 @@ from chronoseek.chutes.runtime import (
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 
-def seed_scores_from_metagraph(metagraph: bt.Metagraph) -> np.ndarray:
+def seed_scores_from_metagraph(metagraph: Any) -> np.ndarray:
     try:
         incentives = getattr(metagraph, "I", None)
         if incentives is None:
@@ -155,10 +161,10 @@ def seed_scores_from_metagraph(metagraph: bt.Metagraph) -> np.ndarray:
         if np.any(np.isnan(scores)) or np.any(scores < 0):
             raise ValueError("metagraph incentives contain invalid values")
 
-        bt.logging.info("Initialized validator scores from metagraph incentives.")
+        logger.info("Initialized validator scores from metagraph incentives.")
         return np.array(scores, copy=True)
     except Exception as exc:
-        bt.logging.warning(
+        logger.warning(
             f"Falling back to zero-initialized validator scores: {exc}"
         )
         return np.zeros(int(metagraph.n), dtype=float)
@@ -171,7 +177,7 @@ def heartbeat_monitor(last_heartbeat, stop_event):
             time.time() - last_heartbeat[0]
             > DEFAULT_VALIDATOR_HEARTBEAT_TIMEOUT_SECONDS
         ):
-            bt.logging.error(
+            logger.error(
                 "No heartbeat detected in the last "
                 f"{DEFAULT_VALIDATOR_HEARTBEAT_TIMEOUT_SECONDS} seconds. "
                 "Restarting process."
@@ -195,7 +201,7 @@ def get_metagraph_snapshot(runtime: ValidatorRuntimeState):
 
 def resize_scores_for_metagraph(
     current_scores: np.ndarray,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
 ) -> np.ndarray:
     scores = np.array(current_scores, copy=True)
     metagraph_size = int(metagraph.n)
@@ -210,23 +216,18 @@ def resize_scores_for_metagraph(
 
 def replace_runtime_metagraph(
     runtime: ValidatorRuntimeState,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
 ):
     with runtime.metagraph_lock:
         runtime.metagraph = metagraph
 
 
 def sync_runtime_metagraph(
-    subtensor: bt.Subtensor,
+    subtensor: Any,
     runtime: ValidatorRuntimeState,
     netuid: int,
-) -> bt.Metagraph:
-    next_metagraph = bt.Metagraph(
-        netuid=netuid,
-        network=subtensor.network,
-        sync=False,
-    )
-    next_metagraph.sync(subtensor=subtensor)
+) -> Any:
+    next_metagraph = fetch_metagraph(subtensor, netuid)
 
     with runtime.score_lock:
         current_scores = np.array(runtime.scores, copy=True)
@@ -253,7 +254,7 @@ def responsive_refresh_due(
 
 async def refresh_responsive_miners_from_submissions(
     runtime: ValidatorRuntimeState,
-    subtensor: bt.Subtensor,
+    subtensor: Any,
     netuid: int,
     submission_resolver: MinerSubmissionResolver,
     chutes_base_domain: str,
@@ -309,7 +310,7 @@ async def refresh_responsive_miners_from_submissions(
         runtime.responsive_initialized = True
         runtime.responsive_last_refresh_at = refreshed_at
 
-    bt.logging.info(
+    logger.info(
         "Submission metadata refresh completed | "
         f"metadata={len(endpoint_map)}/{len(getattr(metagraph, 'hotkeys', []))} | "
         f"responsive={len(responsive_uids)}/{len(getattr(metagraph, 'hotkeys', []))} | "
@@ -382,12 +383,12 @@ def normalize_miner_emission_burn_percent(value: float) -> float:
 
 
 async def run_validator_loop(
-    subtensor: bt.Subtensor,
+    subtensor: Any,
     runtime: ValidatorRuntimeState,
     netuid: int,
     stop_event: threading.Event,
     last_heartbeat: List[float],
-    config: bt.Config,
+    config: Any,
 ):
     """
     Async validator evaluation loop.
@@ -429,7 +430,7 @@ async def run_validator_loop(
         config=config,
         availability_checker=availability_checker,
         validator_hotkey=runtime.wallet.hotkey.ss58_address,
-        current_block_provider=lambda: subtensor.get_current_block(),
+        current_block_provider=lambda: current_block(subtensor),
     )
     chutes_base_domain = get_config_str(config, "chutes_base_domain", "chutes.ai")
     submission_resolver = MinerSubmissionResolver(
@@ -438,25 +439,33 @@ async def run_validator_loop(
             "miner_submission_cache_ttl_seconds",
             300.0,
         ),
+        enforce_one_hotkey_one_submission=get_config_bool(
+            config,
+            "enforce_one_hotkey_one_submission",
+            DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+        ),
     )
     provider_headers = chutes_auth_headers_from_env()
     if provider_headers:
-        bt.logging.info(
+        logger.info(
             "Chutes/provider authorization header is configured for v2 evaluation requests."
         )
-    bt.logging.info("Synthetic evaluation routing configured | mode=chain")
+    logger.info("Synthetic evaluation routing configured | mode=chain")
     async_client = httpx.AsyncClient(timeout=30.0)
-    tempo = subtensor.get_subnet_hyperparameters(netuid).tempo
-    bt.logging.info(f"Subnet tempo: {tempo} blocks")
+    tempo = subnet_tempo(subtensor, netuid)
+    logger.info(f"Subnet tempo: {tempo} blocks")
     last_weight_block = 0
 
     try:
         while not stop_event.is_set():
-            current_block = subtensor.get_current_block()
+            current_block_number = current_block(subtensor)
             last_heartbeat[0] = time.time()
-            if current_block % 100 == 0 and runtime.last_metagraph_sync_block != current_block:
+            if (
+                current_block_number % 100 == 0
+                and runtime.last_metagraph_sync_block != current_block_number
+            ):
                 sync_runtime_metagraph(subtensor, runtime, netuid)
-                runtime.last_metagraph_sync_block = current_block
+                runtime.last_metagraph_sync_block = current_block_number
 
             metagraph = get_metagraph_snapshot(runtime)
             with runtime.score_lock:
@@ -502,7 +511,7 @@ async def run_validator_loop(
             scores = apply_responsive_miner_filter(scores, candidate_uids)
 
             if not candidate_uids:
-                bt.logging.warning(
+                logger.warning(
                     "Skipping validation step because no responsive miners have valid committed metadata and healthy runtimes."
                 )
                 await asyncio.sleep(12)
@@ -578,7 +587,7 @@ async def run_validator_loop(
                 step_summary = ", ".join(
                     f"UID {uid}: {score:.4f}" for uid, score in ranked_step_scores[:10]
                 )
-                bt.logging.info(f"Step scores: {step_summary}")
+                logger.info(f"Step scores: {step_summary}")
 
                 ranked_moving_scores = sorted(
                     (
@@ -593,7 +602,7 @@ async def run_validator_loop(
                     f"UID {uid}: {score:.4f}"
                     for uid, score in ranked_moving_scores[:10]
                 )
-                bt.logging.info(f"Moving scores: {moving_summary}")
+                logger.info(f"Moving scores: {moving_summary}")
                 if aggregate_components:
                     component_summary = ", ".join(
                         (
@@ -604,7 +613,7 @@ async def run_validator_loop(
                         )
                         for uid, components in sorted(aggregate_components.items())[:10]
                     )
-                    bt.logging.info(f"Score components: {component_summary}")
+                    logger.info(f"Score components: {component_summary}")
 
                 telemetry_path = get_config_str(
                     config,
@@ -622,13 +631,13 @@ async def run_validator_loop(
                     if payload.get("suspicion_flags")
                 ]
                 if flagged:
-                    bt.logging.warning(f"Telemetry suspicion flags: {flagged[:10]}")
+                    logger.warning(f"Telemetry suspicion flags: {flagged[:10]}")
 
             # --- 2. Set Weights ---
-            blocks_since_last = current_block - last_weight_block
+            blocks_since_last = current_block_number - last_weight_block
             if blocks_since_last >= tempo:
-                bt.logging.info(
-                    f"Block {current_block}: Setting weights (tempo={tempo})"
+                logger.info(
+                    f"Block {current_block_number}: Setting weights (tempo={tempo})"
                 )
 
                 burn_percent = normalize_miner_emission_burn_percent(
@@ -639,7 +648,7 @@ async def run_validator_loop(
                     miner_emission_burn_percent=burn_percent,
                     burn_uid=0,
                 )
-                bt.logging.info(
+                logger.info(
                     "Emission weights prepared | "
                     f"burn_uid=0 | burn_percent={burn_percent:.2f} | "
                     f"distributed_percent={100.0 - burn_percent:.2f}"
@@ -651,19 +660,18 @@ async def run_validator_loop(
 
                 # Set weights on chain
                 try:
-                    success = subtensor.set_weights(
+                    success = set_chain_weights(
+                        subtensor=subtensor,
                         wallet=runtime.wallet,
                         netuid=netuid,
                         uids=uids_list,
                         weights=weights_list,
-                        wait_for_inclusion=True,
-                        wait_for_finalization=False,
                     )
                     if success:
-                        bt.logging.success("Successfully set weights")
-                        last_weight_block = current_block
+                        logger.success("Successfully set weights")
+                        last_weight_block = current_block_number
                 except Exception as e:
-                    bt.logging.error(f"Failed to set weights: {e}")
+                    logger.error(f"Failed to set weights: {e}")
 
             # Sleep a bit
             await asyncio.sleep(12)
@@ -682,13 +690,9 @@ def get_config():
     of environment variables so operators only need to provide identity,
     credentials, and secrets in `.env`.
     """
-    enable_bittensor_cli_parsing()
     parser = argparse.ArgumentParser(description="ChronoSeek Validator")
 
-    # Add bittensor arguments first
-    bt.Wallet.add_args(parser)
-    bt.Subtensor.add_args(parser)
-    bt.logging.add_args(parser)
+    add_bittensor_arguments(parser)
 
     # Add custom arguments
     parser.add_argument(
@@ -696,6 +700,15 @@ def get_config():
         type=int,
         default=int(os.getenv("NETUID", str(DEFAULT_NETUID))),
         help="Subnet NetUID",
+    )
+    parser.add_argument(
+        "--enforce-one-hotkey-one-submission",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool(
+            "ENFORCE_ONE_HOTKEY_ONE_SUBMISSION",
+            DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+        ),
+        help="Disqualify hotkeys with multiple revealed submissions. Enabled by default.",
     )
     parser.add_argument(
         "--task-dataset-path",
@@ -1129,7 +1142,7 @@ def get_config():
 
     parser.set_defaults(**defaults)
 
-    return bt.Config(parser)
+    return parse_config(parser)
 
 
 def main():
@@ -1137,23 +1150,16 @@ def main():
     # 1. Configuration
     config = get_config()
 
-    # Setup logging
-    bt.logging(config=config, logging_dir=config.logging.logging_dir)
-    bt.logging.on()  # Ensure console logging is on
+    configure_logging(
+        config.logging.level,
+        logging_dir=config.logging.logging_dir,
+        filename="validator.log",
+    )
 
-    # Force debug if requested, otherwise default to INFO
-    if config.logging.level == "DEBUG":
-        bt.logging.set_debug(True)
-    elif config.logging.level == "TRACE":
-        bt.logging.set_trace(True)
-    else:
-        # Default to INFO if not specified
-        bt.logging.set_info(True)
-
-    bt.logging.info(
+    logger.info(
         f"Starting ChronoSeek Validator on network={config.subtensor.network}, netuid={config.netuid}"
     )
-    bt.logging.info(f"Full config: {config}")
+    logger.info(f"Full config: {config}")
 
     # Heartbeat setup
     last_heartbeat = [time.time()]
@@ -1165,34 +1171,31 @@ def main():
 
     try:
         # 2. Setup
-        wallet = bt.Wallet(config=config)
-        bt.logging.info(f"Wallet: {wallet}")
+        wallet = create_wallet(config)
+        logger.info(f"Wallet: {wallet}")
 
         try:
             if wallet.hotkey:
-                bt.logging.info(
+                logger.info(
                     f"Starting Validator with hotkey: {wallet.hotkey.ss58_address}"
                 )
         except Exception as e:
-            bt.logging.error(f"Error checking wallet: {e}")
+            logger.error(f"Error checking wallet: {e}")
             stop_event.set()
             return
 
-        subtensor = bt.Subtensor(config=config)
-        metagraph = bt.Metagraph(
-            netuid=config.netuid, network=subtensor.network, sync=False
-        )
-        metagraph.sync(subtensor=subtensor)
+        subtensor = create_subtensor(config)
+        metagraph = fetch_metagraph(subtensor, config.netuid)
 
         # 3. Check Registration
         if wallet.hotkey.ss58_address not in metagraph.hotkeys:
-            bt.logging.error(
+            logger.error(
                 f"Validator hotkey {wallet.hotkey.ss58_address} is NOT registered on netuid {config.netuid}"
             )
             stop_event.set()
             return
 
-        bt.logging.info(
+        logger.info(
             f"Validator registered with UID: {metagraph.hotkeys.index(wallet.hotkey.ss58_address)}"
         )
 
@@ -1212,7 +1215,12 @@ def main():
                 config,
                 "miner_submission_cache_ttl_seconds",
                 300.0,
-            )
+            ),
+            enforce_one_hotkey_one_submission=get_config_bool(
+                config,
+                "enforce_one_hotkey_one_submission",
+                DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+            ),
         )
         initial_responsive_uids = asyncio.run(
             refresh_responsive_miners_from_submissions(
@@ -1236,7 +1244,7 @@ def main():
             ),
             sorted(initial_responsive_uids),
         )
-        bt.logging.info(
+        logger.info(
             f"Initialized responsive miner snapshot with {len(initial_responsive_uids)} miners."
         )
 
@@ -1252,9 +1260,9 @@ def main():
         )
 
     except KeyboardInterrupt:
-        bt.logging.info("Validator stopped by user")
+        logger.info("Validator stopped by user")
     except Exception as e:
-        bt.logging.error(f"Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
     finally:
         stop_event.set()
         heartbeat_thread.join(timeout=2)

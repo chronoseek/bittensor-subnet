@@ -16,6 +16,7 @@ from chronoseek.chain.submissions import (
     get_hotkey_revealed_commitments,
     load_chain_submission_snapshot,
 )
+from chronoseek.bittensor_sdk import fetch_metagraph
 from live_helpers import env_value, require_extra_confirmation, require_live
 
 
@@ -26,12 +27,7 @@ def live_subtensor_metagraph():
     import bittensor as bt
 
     subtensor = bt.Subtensor(network=env_value("NETWORK", "finney"))
-    metagraph = bt.Metagraph(
-        netuid=int(env_value("NETUID", "1")),
-        network=subtensor.network,
-        sync=False,
-    )
-    metagraph.sync(subtensor=subtensor)
+    metagraph = fetch_metagraph(subtensor, int(env_value("NETUID", "1")))
     return subtensor, metagraph
 
 

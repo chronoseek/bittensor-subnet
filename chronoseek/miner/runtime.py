@@ -21,8 +21,10 @@ from chronoseek.constants import (
     DEFAULT_NETUID,
     DEFAULT_NETWORK,
 )
+from chronoseek.bittensor_sdk import fetch_metagraph
 from chronoseek.config import PROTOCOL_VERSION
 from chronoseek.epistula import verify_signature
+from chronoseek.logging import configure_logging, logger
 from chronoseek.miner import logic as miner_logic_module
 from chronoseek.miner.auth import ValidatorAuthContext, authorize_hotkey
 from chronoseek.protocol_models import (
@@ -59,24 +61,12 @@ def load_runtime_config() -> RuntimeConfig:
 
 
 def configure_runtime_logging(config: RuntimeConfig) -> None:
-    bt.logging.on()
-    if config.log_level == "DEBUG":
-        bt.logging.set_debug(True)
-    elif config.log_level == "TRACE":
-        bt.logging.set_trace(True)
-    else:
-        bt.logging.set_info(True)
+    configure_logging(config.log_level)
 
 
 def load_runtime_metagraph(config: RuntimeConfig):
     subtensor = bt.Subtensor(network=config.network)
-    metagraph = bt.Metagraph(
-        netuid=config.netuid,
-        network=subtensor.network,
-        sync=False,
-    )
-    metagraph.sync(subtensor=subtensor)
-    return metagraph
+    return fetch_metagraph(subtensor, config.netuid)
 
 
 def initialize_runtime() -> None:
@@ -86,7 +76,7 @@ def initialize_runtime() -> None:
 
     config = load_runtime_config()
     configure_runtime_logging(config)
-    bt.logging.info(
+    logger.info(
         f"Starting ChronoSeek Chutes runtime on network={config.network}, netuid={config.netuid}"
     )
 
@@ -98,12 +88,12 @@ def initialize_runtime() -> None:
         )
         miner_logic = miner_logic_module.MinerLogic()
         startup_error = None
-        bt.logging.success("ChronoSeek Chutes runtime initialized.")
+        logger.success("ChronoSeek Chutes runtime initialized.")
     except Exception as exc:
         miner_logic = None
         validator_auth = None
         startup_error = str(exc)
-        bt.logging.error(f"ChronoSeek Chutes runtime initialization failed: {exc}")
+        logger.error(f"ChronoSeek Chutes runtime initialization failed: {exc}")
 
 
 @asynccontextmanager
@@ -159,8 +149,8 @@ def execute_search(
 ):
     request_id = payload.request_id or "unknown-request"
     caller = caller_hotkey or "chutes-sdk-authenticated-caller"
-    bt.logging.info(f"Received request {request_id} from {caller}: {payload.query}")
-    bt.logging.debug(f"Video URL: {payload.video_url}")
+    logger.info(f"Received request {request_id} from {caller}: {payload.query}")
+    logger.debug(f"Video URL: {payload.video_url}")
 
     if miner_logic is None or validator_auth is None:
         return build_protocol_error(
@@ -190,7 +180,7 @@ def execute_search(
 
         is_authorized, auth_details = authorize_hotkey(validator_auth, caller_hotkey)
         if not is_authorized:
-            bt.logging.warning(
+            logger.warning(
                 f"Rejecting request {request_id} from hotkey {caller_hotkey} with stake {auth_details['caller_stake']:.6f} below minimum {auth_details['minimum_validator_stake']:.6f}"
             )
             return build_protocol_error(
@@ -202,12 +192,12 @@ def execute_search(
             )
 
     try:
-        bt.logging.info("Starting search processing...")
+        logger.info("Starting search processing...")
         results = miner_logic.search(payload.video_url, payload.query, top_k=payload.top_k)
-        bt.logging.success(f"Search completed. Found {len(results)} results.")
+        logger.success(f"Search completed. Found {len(results)} results.")
         return VideoSearchResponse(request_id=payload.request_id, results=results)
     except miner_logic_module.SearchPipelineError as exc:
-        bt.logging.error(f"Request {request_id} failed with {exc.code}: {exc.message}")
+        logger.error(f"Request {request_id} failed with {exc.code}: {exc.message}")
         status_code = 500
         if exc.code in {
             "INVALID_REQUEST",
@@ -230,7 +220,7 @@ def execute_search(
             details=exc.details,
         )
     except Exception as exc:
-        bt.logging.error(f"Error processing request: {exc}")
+        logger.error(f"Error processing request: {exc}")
         return build_protocol_error(
             code="INTERNAL_ERROR",
             message="The runtime encountered an unexpected internal error.",

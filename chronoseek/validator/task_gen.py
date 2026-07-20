@@ -7,8 +7,8 @@ from typing import Tuple, List, Dict
 from zipfile import ZipFile
 
 import requests
-import bittensor as bt
 
+from chronoseek.logging import logger
 from chronoseek.validator.base_task_gen import BaseTaskGenerator
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
@@ -428,7 +428,7 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             return None
 
         fallback_url = random.choice(accessible_urls)
-        bt.logging.info(
+        logger.info(
             f"Falling back to cached accessible validator task video {fallback_url}"
         )
         return self._build_task_result(self._tasks_by_video_url[fallback_url])
@@ -446,7 +446,7 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             if self.require_accessible_videos and self.availability_checker is not None:
                 availability = self.availability_checker.check(video["video_url"])
                 if not availability.accessible:
-                    bt.logging.info(
+                    logger.info(
                         f"Skipping unavailable validator task video {video['video_url']}: {availability.reason}"
                     )
                     continue

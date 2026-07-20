@@ -4,8 +4,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
-import bittensor as bt
-
+from chronoseek.logging import logger
 from chronoseek.validator.artifact_manifest import (
     ArtifactManifestEntry,
     TaskArtifactManifest,
@@ -137,7 +136,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
         self._last_cleanup_at = now
         if deleted:
             remote_mode = "with remote deletion" if delete_remote else "local only"
-            bt.logging.info(
+            logger.info(
                 f"Cleaned up {deleted} expired validator task artifacts ({remote_mode})."
             )
         return deleted
@@ -265,7 +264,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                     )
                 )
                 exposure = self.manifest.exposure_summary(now=now)
-                bt.logging.info(
+                logger.info(
                     "Generated hardened validator task | "
                     f"task_id={task_id} | request_id=validation-{task_id} | "
                     f"clip_duration={clip_result.crop_plan.clip_duration:.2f}s | "
@@ -308,7 +307,7 @@ class HardenedActivityNetTaskGenerator(BaseTaskGenerator):
                 self._remove_local_file(clip_path)
                 self._remove_local_file(compressed_path)
                 last_error = exc
-                bt.logging.warning(
+                logger.warning(
                     f"Hardened validator task generation attempt failed: {exc}"
                 )
 

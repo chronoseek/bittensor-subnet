@@ -2,8 +2,9 @@ import os
 from dataclasses import dataclass
 from typing import List
 
-import bittensor as bt
 import torch
+
+from chronoseek.logging import logger
 
 
 @dataclass
@@ -34,14 +35,14 @@ class TranscriptEngine:
 
         token = os.getenv("HF_TOKEN")
         if not token:
-            bt.logging.warning(
+            logger.warning(
                 "HF_TOKEN not found in environment. Transcript model downloads may be rate-limited."
             )
 
         try:
             from transformers import pipeline
 
-            bt.logging.info(
+            logger.info(
                 f"Loading transcript model '{self.model_id}' on "
                 f"{'cuda' if self.device >= 0 else 'cpu'}..."
             )
@@ -52,10 +53,10 @@ class TranscriptEngine:
                 device=self.device,
                 chunk_length_s=30,
             )
-            bt.logging.success("Transcript model loaded successfully.")
+            logger.success("Transcript model loaded successfully.")
         except Exception as exc:
             self._disabled = True
-            bt.logging.warning(
+            logger.warning(
                 f"Transcript model unavailable; continuing in vision-only mode: {exc}"
             )
             return None
@@ -75,12 +76,12 @@ class TranscriptEngine:
                 return_timestamps=True
             )
         except Exception as exc:
-            bt.logging.warning(f"Transcript generation failed: {exc}")
+            logger.warning(f"Transcript generation failed: {exc}")
             return []
 
         segments = self._parse_segments(result, audio_duration_sec)
         if not segments:
-            bt.logging.info("Transcript generation returned no timestamped segments.")
+            logger.info("Transcript generation returned no timestamped segments.")
         return segments
 
     @staticmethod

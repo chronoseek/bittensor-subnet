@@ -21,6 +21,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 load_dotenv()
 
 from chronoseek.constants import DEFAULT_VIDAIO_API_BASE_URL
+from chronoseek.logging import configure_logging
 
 
 DEFAULT_CACHE_DIR = str(Path.home() / ".cache" / "chronoseek" / "hardened-task-verifier")
@@ -519,12 +520,11 @@ def print_json(title: str, payload) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
-    import bittensor as bt
 
     from chronoseek.protocol_models import VideoSearchRequest
     from chronoseek.validator.task_models import normalize_generated_task
 
-    bt.logging.set_info(True)
+    configure_logging("INFO")
 
     try:
         context = build_generator(args)

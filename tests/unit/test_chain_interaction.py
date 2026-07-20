@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -59,12 +60,28 @@ class TestChainInteraction(unittest.TestCase):
 
         self.assertTrue(config.check_existing)
 
+    def test_miner_submission_enforcement_defaults_to_enabled(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            sys, "argv", ["miner.py"]
+        ):
+            config = get_config()
+
+        self.assertTrue(config.enforce_one_hotkey_one_submission)
+
+    def test_miner_submission_enforcement_can_be_disabled_by_environment(self):
+        with patch.dict(
+            os.environ,
+            {"ENFORCE_ONE_HOTKEY_ONE_SUBMISSION": "0"},
+            clear=True,
+        ), patch.object(sys, "argv", ["miner.py"]):
+            config = get_config()
+
+        self.assertFalse(config.enforce_one_hotkey_one_submission)
+
     @patch("bittensor.Wallet")
     @patch("bittensor.Subtensor")
-    @patch("bittensor.Metagraph")
     def test_miner_commits_runtime_submission(
         self,
-        mock_metagraph_cls,
         mock_subtensor_cls,
         mock_wallet_cls,
     ):
@@ -74,12 +91,15 @@ class TestChainInteraction(unittest.TestCase):
 
         mock_subtensor = MagicMock()
         mock_subtensor.network = "test"
-        mock_subtensor.set_reveal_commitment.return_value = True
+        mock_subtensor.endpoint = "wss://test.example"
+        mock_subtensor.subnets.commitments.return_value = {}
+        mock_subtensor.submit_call.return_value = True
         mock_subtensor_cls.return_value = mock_subtensor
 
         mock_metagraph = MagicMock()
         mock_metagraph.hotkeys = ["5FakeAddress"]
-        mock_metagraph_cls.return_value = mock_metagraph
+        mock_metagraph.neurons = []
+        mock_subtensor.subnets.metagraph.return_value = mock_metagraph
 
         test_args = [
             "miner.py",
@@ -93,27 +113,34 @@ class TestChainInteraction(unittest.TestCase):
             "chronoseek-runtime",
         ]
 
-        with patch.object(sys, "argv", test_args), patch("builtins.print"):
+        with patch.object(sys, "argv", test_args), patch("builtins.print"), patch(
+            "chronoseek.chain.submissions.get_encrypted_commitment",
+            return_value=(b"encrypted", 12345),
+        ):
             exit_code = miner_main()
 
         self.assertEqual(exit_code, 0)
         mock_wallet_cls.assert_called()
         mock_subtensor_cls.assert_called()
-        mock_metagraph_cls.assert_called_with(
-            netuid=298,
-            mechid=0,
-            network="test",
-            sync=False,
+        mock_subtensor.subnets.metagraph.assert_called_once_with(
+            298, commitments=False
         )
-        mock_metagraph.sync.assert_called_with(subtensor=mock_subtensor)
-        mock_subtensor.set_reveal_commitment.assert_called_once()
+        mock_subtensor.submit_call.assert_called_once()
+        call_args = mock_subtensor.submit_call.call_args
+        call = call_args.args[0]
+        self.assertEqual(call.module, "Commitments")
+        self.assertEqual(call.function, "set_commitment")
+        self.assertEqual(call.params["netuid"], 298)
+        self.assertEqual(
+            call.params["info"]["fields"][0][0]["TimelockEncrypted"],
+            {"encrypted": b"encrypted", "reveal_round": 12345},
+        )
+        self.assertEqual(call_args.kwargs["signer"], "hotkey")
 
     @patch("bittensor.Wallet")
     @patch("bittensor.Subtensor")
-    @patch("bittensor.Metagraph")
     def test_miner_check_existing_prints_commitments_without_submitting(
         self,
-        mock_metagraph_cls,
         mock_subtensor_cls,
         mock_wallet_cls,
     ):
@@ -123,19 +150,22 @@ class TestChainInteraction(unittest.TestCase):
 
         mock_subtensor = MagicMock()
         mock_subtensor.network = "test"
-        mock_subtensor.get_all_revealed_commitments.return_value = {
-            "5FakeAddress": (
-                (
+        mock_subtensor.endpoint = "wss://test.example"
+        mock_subtensor.subnets.commitments.return_value = {
+            "5FakeAddress": SimpleNamespace(
+                revealed=[(
                     123,
                     '{"chute_slug":"chronoseek-runtime","runtime":"chutes"}',
-                ),
+                )],
+                encrypted=True,
             )
         }
         mock_subtensor_cls.return_value = mock_subtensor
 
         mock_metagraph = MagicMock()
         mock_metagraph.hotkeys = ["5FakeAddress"]
-        mock_metagraph_cls.return_value = mock_metagraph
+        mock_metagraph.neurons = []
+        mock_subtensor.subnets.metagraph.return_value = mock_metagraph
 
         test_args = [
             "miner.py",
@@ -150,8 +180,8 @@ class TestChainInteraction(unittest.TestCase):
             exit_code = miner_main()
 
         self.assertEqual(exit_code, 0)
-        mock_subtensor.get_all_revealed_commitments.assert_called_once_with(298)
-        mock_subtensor.set_reveal_commitment.assert_not_called()
+        mock_subtensor.subnets.commitments.assert_called_once_with(298)
+        mock_subtensor.submit_call.assert_not_called()
         printed = json.loads(mock_print.call_args.args[0])
         self.assertEqual(printed["hotkey"], "5FakeAddress")
         self.assertEqual(printed["netuid"], 298)
@@ -164,10 +194,8 @@ class TestChainInteraction(unittest.TestCase):
 
     @patch("bittensor.Wallet")
     @patch("bittensor.Subtensor")
-    @patch("bittensor.Metagraph")
     def test_miner_rejects_missing_subnet_on_selected_network(
         self,
-        mock_metagraph_cls,
         mock_subtensor_cls,
         mock_wallet_cls,
     ):
@@ -177,8 +205,8 @@ class TestChainInteraction(unittest.TestCase):
 
         mock_subtensor = MagicMock()
         mock_subtensor.network = "finney"
-        mock_subtensor.chain_endpoint = "wss://entrypoint-finney.opentensor.ai:443"
-        mock_subtensor.subnet_exists.return_value = False
+        mock_subtensor.endpoint = "wss://entrypoint-finney.opentensor.ai:443"
+        mock_subtensor.subnets.metagraph.return_value = None
         mock_subtensor_cls.return_value = mock_subtensor
 
         test_args = [
@@ -192,13 +220,14 @@ class TestChainInteraction(unittest.TestCase):
         ]
 
         with patch.object(sys, "argv", test_args), patch("builtins.print"), patch(
-            "bittensor.logging.error"
+            "miner.logger.error"
         ) as mock_log_error:
             exit_code = miner_main()
 
         self.assertEqual(exit_code, 1)
-        mock_subtensor.subnet_exists.assert_called_once_with(netuid=298)
-        mock_metagraph_cls.assert_not_called()
+        mock_subtensor.subnets.metagraph.assert_called_once_with(
+            298, commitments=False
+        )
         self.assertIn(
             "Subnet netuid=298 does not exist on network=finney",
             mock_log_error.call_args.args[0],
@@ -206,10 +235,8 @@ class TestChainInteraction(unittest.TestCase):
 
     @patch("bittensor.Wallet")
     @patch("bittensor.Subtensor")
-    @patch("bittensor.Metagraph")
     def test_miner_rejects_chute_id_only_submission_until_resolver_exists(
         self,
-        mock_metagraph_cls,
         mock_subtensor_cls,
         mock_wallet_cls,
     ):
@@ -219,11 +246,13 @@ class TestChainInteraction(unittest.TestCase):
 
         mock_subtensor = MagicMock()
         mock_subtensor.network = "test"
+        mock_subtensor.endpoint = "wss://test.example"
         mock_subtensor_cls.return_value = mock_subtensor
 
         mock_metagraph = MagicMock()
         mock_metagraph.hotkeys = ["5FakeAddress"]
-        mock_metagraph_cls.return_value = mock_metagraph
+        mock_metagraph.neurons = []
+        mock_subtensor.subnets.metagraph.return_value = mock_metagraph
 
         test_args = [
             "miner.py",
@@ -237,14 +266,12 @@ class TestChainInteraction(unittest.TestCase):
             exit_code = miner_main()
 
         self.assertEqual(exit_code, 1)
-        mock_subtensor.set_reveal_commitment.assert_not_called()
+        mock_subtensor.submit_call.assert_not_called()
 
     @patch("bittensor.Wallet")
     @patch("bittensor.Subtensor")
-    @patch("bittensor.Metagraph")
     def test_miner_rejects_second_submission_for_same_hotkey(
         self,
-        mock_metagraph_cls,
         mock_subtensor_cls,
         mock_wallet_cls,
     ):
@@ -254,14 +281,19 @@ class TestChainInteraction(unittest.TestCase):
 
         mock_subtensor = MagicMock()
         mock_subtensor.network = "test"
-        mock_subtensor.get_all_revealed_commitments.return_value = {
-            "5FakeAddress": ((100, "{}"),)
+        mock_subtensor.endpoint = "wss://test.example"
+        mock_subtensor.subnets.commitments.return_value = {
+            "5FakeAddress": SimpleNamespace(
+                revealed=[(100, "{}")],
+                encrypted=True,
+            )
         }
         mock_subtensor_cls.return_value = mock_subtensor
 
         mock_metagraph = MagicMock()
         mock_metagraph.hotkeys = ["5FakeAddress"]
-        mock_metagraph_cls.return_value = mock_metagraph
+        mock_metagraph.neurons = []
+        mock_subtensor.subnets.metagraph.return_value = mock_metagraph
 
         test_args = [
             "miner.py",
@@ -272,12 +304,12 @@ class TestChainInteraction(unittest.TestCase):
         ]
 
         with patch.object(sys, "argv", test_args), patch("builtins.print"), patch(
-            "bittensor.logging.error"
+            "miner.logger.error"
         ) as mock_log_error:
             exit_code = miner_main()
 
         self.assertEqual(exit_code, 1)
-        mock_subtensor.set_reveal_commitment.assert_not_called()
+        mock_subtensor.submit_call.assert_not_called()
         mock_log_error.assert_any_call(PERMANENT_SUBMISSION_ERROR)
 
 if __name__ == "__main__":

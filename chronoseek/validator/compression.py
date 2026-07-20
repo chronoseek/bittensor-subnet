@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-import bittensor as bt
-
+from chronoseek.logging import logger
 from chronoseek.validator.task_models import EncodingProfile
 
 
@@ -116,7 +115,7 @@ class CompositeCompressor:
                     output_path=output_path,
                 )
             except Exception as exc:
-                bt.logging.warning(
+                logger.warning(
                     f"{self.preferred_backend_name} compression failed; falling back to local ffmpeg: {exc}"
                 )
 

@@ -34,6 +34,7 @@ Required for normal validator operation:
 | `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
 | `NETUID` | Yes | ChronoSeek subnet netuid. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
+| `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION` | No | Defaults to `1`. Set to `0` only for tests that require replaceable miner submissions; validators then use the newest revealed submission and do not apply the duplicate-submission penalty. |
 | `CHUTES_API_KEY` | Yes | Used to query private Chutes runtimes. |
 | `HF_TOKEN` | Yes, unless `--task-dataset-path` is passed | Required for Hugging Face ActivityNet loading and model downloads. |
 
@@ -101,7 +102,7 @@ poetry run python validator.py \
   --netuid <netuid>
 ```
 
-The validator checks that the hotkey is registered, loads permanent miner submissions from chain, disqualifies hotkeys with multiple revealed submissions, health-checks eligible Chutes runtimes, then enters the scoring loop.
+The validator checks that the hotkey is registered, loads miner submissions from chain, health-checks eligible Chutes runtimes, then enters the scoring loop. By default, hotkeys with multiple revealed submissions are disqualified. With `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION=0`, the newest revealed submission is used instead.
 
 For a local preflight that does not query miners or set weights, generate one hardened task with the bundled smoke manifest:
 

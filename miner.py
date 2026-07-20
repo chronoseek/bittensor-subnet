@@ -11,9 +11,16 @@ import json
 import os
 import sys
 
-import bittensor as bt
 from dotenv import load_dotenv
 
+from chronoseek.bittensor_sdk import (
+    SubnetNotFoundError,
+    add_bittensor_arguments,
+    create_subtensor,
+    create_wallet,
+    fetch_metagraph,
+    parse_config,
+)
 from chronoseek.chain.submissions import (
     DuplicateMinerSubmissionError,
     MinerSubmission,
@@ -21,6 +28,7 @@ from chronoseek.chain.submissions import (
     get_hotkey_revealed_commitments,
 )
 from chronoseek.constants import (
+    DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
     DEFAULT_HOTKEY_NAME,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MECHID,
@@ -29,26 +37,22 @@ from chronoseek.constants import (
     DEFAULT_WALLET_NAME,
     DEFAULT_WALLET_PATH,
 )
+from chronoseek.logging import configure_logging as configure_application_logging
+from chronoseek.logging import logger
 
 load_dotenv()
 
 
-class SubnetNotFoundError(RuntimeError):
-    """Raised when the configured subnet is missing on the selected chain."""
-
-
-def enable_bittensor_cli_parsing() -> None:
-    """Bittensor 10.x disables argparse parsing unless this env flag opts in."""
-
-    os.environ["BT_NO_PARSE_CLI_ARGS"] = "false"
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def get_config():
-    enable_bittensor_cli_parsing()
     parser = argparse.ArgumentParser(description="Commit ChronoSeek miner metadata")
-    bt.Wallet.add_args(parser)
-    bt.Subtensor.add_args(parser)
-    bt.logging.add_args(parser)
+    add_bittensor_arguments(parser)
 
     parser.add_argument(
         "--network",
@@ -101,6 +105,15 @@ def get_config():
         action="store_true",
         help="Fetch and print revealed commitments for this wallet hotkey, then exit without submitting.",
     )
+    parser.add_argument(
+        "--enforce-one-hotkey-one-submission",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool(
+            "ENFORCE_ONE_HOTKEY_ONE_SUBMISSION",
+            DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+        ),
+        help="Reject repeat submissions for a hotkey. Enabled by default.",
+    )
 
     parser.set_defaults(
         **{
@@ -111,18 +124,15 @@ def get_config():
             "logging.level": os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
         }
     )
-    return bt.Config(parser)
+    return parse_config(parser)
 
 
 def configure_logging(config) -> None:
-    bt.logging(config=config, logging_dir=config.logging.logging_dir)
-    bt.logging.on()
-    if config.logging.level == "DEBUG":
-        bt.logging.set_debug(True)
-    elif config.logging.level == "TRACE":
-        bt.logging.set_trace(True)
-    else:
-        bt.logging.set_info(True)
+    configure_application_logging(
+        config.logging.level,
+        logging_dir=config.logging.logging_dir,
+        filename="miner.log",
+    )
 
 
 def get_wallet_hotkey_address(wallet) -> str | None:
@@ -139,45 +149,37 @@ def optional_text(value) -> str | None:
 def load_subtensor_and_metagraph(config):
     netuid = int(config.netuid)
     mechid = DEFAULT_MECHID
-    subtensor = bt.Subtensor(config=config)
+    subtensor = create_subtensor(config)
     network = optional_text(getattr(subtensor, "network", None))
-    chain_endpoint = optional_text(getattr(subtensor, "chain_endpoint", None))
-    bt.logging.info(
+    chain_endpoint = optional_text(getattr(subtensor, "endpoint", None))
+    logger.info(
         "Loading metagraph for "
         f"network={network}, "
         f"chain_endpoint={chain_endpoint}, "
         f"netuid={netuid}, mechid={mechid} "
         f"(Bittensor subnet mechanism {netuid}.{mechid})"
     )
-    if hasattr(subtensor, "subnet_exists") and not subtensor.subnet_exists(
-        netuid=netuid
-    ):
+    try:
+        metagraph = fetch_metagraph(subtensor, netuid)
+    except SubnetNotFoundError as exc:
         raise SubnetNotFoundError(
             f"Subnet netuid={netuid} does not exist on network={network} "
             f"({chain_endpoint}). Bittensor reports subnet mechanisms as "
             f"netuid.mechid, so {netuid}.{mechid} means netuid={netuid}, "
             f"mechid={mechid}. ChronoSeek uses mechid=0. If this is a "
             "testnet subnet, rerun with --network test."
-        )
-
-    metagraph = bt.Metagraph(
-        netuid=netuid,
-        mechid=mechid,
-        network=subtensor.network,
-        sync=False,
-    )
-    metagraph.sync(subtensor=subtensor)
+        ) from exc
     return subtensor, metagraph
 
 
 def assert_registered_hotkey(wallet_hotkey: str, metagraph, netuid: int) -> bool:
     if wallet_hotkey not in metagraph.hotkeys:
-        bt.logging.error(
+        logger.error(
             f"Miner hotkey {wallet_hotkey} is NOT registered on netuid {netuid}"
         )
         return False
 
-    bt.logging.info(
+    logger.info(
         f"Miner registered with UID: {metagraph.hotkeys.index(wallet_hotkey)}"
     )
     return True
@@ -232,21 +234,26 @@ async def check_existing_commitments(config, subtensor, metagraph, wallet_hotkey
 
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if not commits:
-        bt.logging.info(f"No revealed miner commitments found for {wallet_hotkey}.")
+        logger.info(f"No revealed miner commitments found for {wallet_hotkey}.")
     elif len(commits) > 1:
-        bt.logging.warning(
-            f"Found {len(commits)} revealed miner commitments for {wallet_hotkey}; validators disqualify duplicate-submitted hotkeys."
-        )
+        if config.enforce_one_hotkey_one_submission:
+            logger.warning(
+                f"Found {len(commits)} revealed miner commitments for {wallet_hotkey}; validators disqualify duplicate-submitted hotkeys."
+            )
+        else:
+            logger.info(
+                f"Found {len(commits)} revealed miner commitments for {wallet_hotkey}; enforcement is disabled and validators use the newest submission."
+            )
     else:
-        bt.logging.info(f"Found one revealed miner commitment for {wallet_hotkey}.")
+        logger.info(f"Found one revealed miner commitment for {wallet_hotkey}.")
     return 0
 
 
 async def submit_runtime_metadata(config) -> int:
-    wallet = bt.Wallet(config=config)
+    wallet = create_wallet(config)
     wallet_hotkey = get_wallet_hotkey_address(wallet)
     if not wallet_hotkey:
-        bt.logging.error(
+        logger.error(
             "Wallet hotkey is unavailable. Check WALLET_NAME, HOTKEY_NAME, and WALLET_PATH."
         )
         return 1
@@ -254,7 +261,7 @@ async def submit_runtime_metadata(config) -> int:
     try:
         subtensor, metagraph = load_subtensor_and_metagraph(config)
     except SubnetNotFoundError as exc:
-        bt.logging.error(str(exc))
+        logger.error(str(exc))
         return 1
 
     if config.check_existing:
@@ -271,15 +278,15 @@ async def submit_runtime_metadata(config) -> int:
     try:
         submission = build_submission_payload(config, wallet_hotkey)
     except Exception as exc:
-        bt.logging.error(f"Invalid miner submission metadata: {exc}")
-        bt.logging.error(
+        logger.error(f"Invalid miner submission metadata: {exc}")
+        logger.error(
             "Provide --endpoint or --chute-slug for the deployed runtime. --chute-id is metadata-only until validators can resolve it through Chutes."
         )
         return 1
 
     payload = submission.model_dump(mode="json", exclude_none=True)
     print(json.dumps(payload, indent=2, sort_keys=True))
-    bt.logging.info(
+    logger.info(
         f"Committing ChronoSeek v2 runtime metadata for {wallet_hotkey} on netuid={config.netuid}"
     )
     try:
@@ -289,16 +296,19 @@ async def submit_runtime_metadata(config) -> int:
             netuid=int(config.netuid),
             submission=submission,
             blocks_until_reveal=int(config.blocks_until_reveal),
+            enforce_one_hotkey_one_submission=bool(
+                config.enforce_one_hotkey_one_submission
+            ),
         )
     except DuplicateMinerSubmissionError as exc:
-        bt.logging.error(str(exc))
+        logger.error(str(exc))
         return 1
 
     if not success:
-        bt.logging.error("Chain rejected v2 miner submission commitment.")
+        logger.error("Chain rejected v2 miner submission commitment.")
         return 1
 
-    bt.logging.success("ChronoSeek v2 miner submission committed.")
+    logger.success("ChronoSeek v2 miner submission committed.")
     return 0
 
 

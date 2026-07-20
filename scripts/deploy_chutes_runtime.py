@@ -23,7 +23,6 @@ _ORIGINAL_ARGV = sys.argv[:]
 if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
     sys.argv = [sys.argv[0]]
 
-import bittensor as bt
 from dotenv import load_dotenv
 
 from chronoseek.chain.submissions import MinerSubmission
@@ -56,6 +55,8 @@ from chronoseek.constants import (
     DEFAULT_CHUTES_BASE_DOMAIN,
     DEFAULT_LOG_LEVEL,
 )
+from chronoseek.logging import configure_logging as configure_application_logging
+from chronoseek.logging import logger
 
 sys.argv = _ORIGINAL_ARGV
 load_dotenv()
@@ -198,14 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def configure_logging(config) -> None:
-    bt.logging.on()
-    level = str(config.log_level).upper()
-    if level == "DEBUG":
-        bt.logging.set_debug(True)
-    elif level == "TRACE":
-        bt.logging.set_trace(True)
-    else:
-        bt.logging.set_info(True)
+    configure_application_logging(config.log_level)
 
 
 def resolve_runtime_timestamp() -> str:
@@ -297,7 +291,7 @@ def print_results(metadata: RuntimeMetadata, config) -> None:
         output_path = Path(config.output_metadata_path).expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        bt.logging.success(f"Wrote deployment metadata to {output_path}")
+        logger.success(f"Wrote deployment metadata to {output_path}")
 
     print("\nCommit this deployment on-chain with miner.py:")
     print(shlex.join(miner_command(metadata, config)))
@@ -331,7 +325,7 @@ def print_warmup_followup(
         f"  GET {api_url}\n"
     )
     print(message)
-    bt.logging.warning(
+    logger.warning(
         "Chutes deployment succeeded, but warmup is still pending. "
         f"Run `{command}` or call GET {api_url}"
     )
@@ -359,12 +353,12 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
         chute_base_name,
         runtime_timestamp,
     )
-    bt.logging.info(f"Resolved Chutes username: {chutes_username}")
-    bt.logging.info(f"Resolved Chutes runtime timestamp: {runtime_timestamp}")
-    bt.logging.info(f"Resolved Chutes display label: {chute_display_name}")
-    bt.logging.info(f"Resolved Chutes API name: {chute_name}")
-    bt.logging.info(f"Resolved Chutes slug: {chute_slug}")
-    bt.logging.info(f"Resolved Chutes logo URL: {logo_url}")
+    logger.info(f"Resolved Chutes username: {chutes_username}")
+    logger.info(f"Resolved Chutes runtime timestamp: {runtime_timestamp}")
+    logger.info(f"Resolved Chutes display label: {chute_display_name}")
+    logger.info(f"Resolved Chutes API name: {chute_name}")
+    logger.info(f"Resolved Chutes slug: {chute_slug}")
+    logger.info(f"Resolved Chutes logo URL: {logo_url}")
     definition_metadata = metadata_from_chute_definition(
         config.chute_ref,
         chutes_username=chutes_username,
@@ -394,7 +388,7 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 timeout_seconds=min(float(config.chutes_timeout_seconds), 120.0),
             )
             raw_responses["logo"] = {"logo_id": logo_id, "url": logo_url}
-            bt.logging.info(f"Resolved Chutes logo ID: {logo_id}")
+            logger.info(f"Resolved Chutes logo ID: {logo_id}")
 
         if config.build:
             raw_responses["image"] = await build_image_via_api(
@@ -439,7 +433,7 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
                 metadata_from_chutes_response(raw_responses["chute"]),
                 chute_slug,
             )
-            bt.logging.success("Chutes runtime deployment completed successfully.")
+            logger.success("Chutes runtime deployment completed successfully.")
             if config.warmup:
                 warmup_target = (
                     api_metadata.chute_id or api_metadata.chute_slug or chute_name
@@ -539,10 +533,10 @@ async def main_async() -> int:
             )
 
         print_results(metadata, config)
-        bt.logging.success("Chutes API runtime metadata is ready for miner.py.")
+        logger.success("Chutes API runtime metadata is ready for miner.py.")
         return 0
     except Exception as exc:
-        bt.logging.error(f"Chutes API runtime deployment helper failed: {exc}")
+        logger.error(f"Chutes API runtime deployment helper failed: {exc}")
         return 1
 
 

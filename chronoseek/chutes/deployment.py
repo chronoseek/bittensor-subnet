@@ -21,11 +21,11 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import bittensor as bt
 import httpx
 
 from chronoseek.chutes.runtime import chutes_auth_headers_from_env
 from chronoseek.constants import DEFAULT_CHRONOSEEK_LOGO_URL
+from chronoseek.logging import logger
 
 YTDLP_COOKIES_ENV = "YTDLP_COOKIES"
 CHUTES_MINER_FILE_ROOT = "/opt/chronoseek/miner-files"
@@ -559,7 +559,7 @@ def resolve_ytdlp_cookies_source() -> Path | None:
     source = Path(raw_path).expanduser().resolve()
     if source.is_file():
         return source
-    bt.logging.warning(
+    logger.warning(
         f"{YTDLP_COOKIES_ENV} is set but is not a readable file; "
         f"skipping Chutes image copy: {source}"
     )
@@ -590,7 +590,7 @@ def _apply_ytdlp_cookies_file(
     image_path = f"{image_root.rstrip('/')}/ytdlp/{source_name}"
     image.add(source_rel, image_path, chmod="644")
     image.with_env(YTDLP_COOKIES_ENV, image_path)
-    bt.logging.info(
+    logger.info(
         f"Added yt-dlp cookies file to Chutes image at {image_path}."
     )
     return ChutesImageFile(
@@ -661,7 +661,7 @@ def _collect_build_context_paths(image: Any, *, include_cwd: bool) -> list[Path]
 def build_context_zip_bytes(image: Any, *, include_cwd: bool = False) -> bytes:
     cwd = Path.cwd().resolve()
     paths = _collect_build_context_paths(image, include_cwd=include_cwd)
-    bt.logging.info(f"Packaging {len(paths)} Chutes image build context files.")
+    logger.info(f"Packaging {len(paths)} Chutes image build context files.")
 
     buffer = BytesIO()
     with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED) as archive:
@@ -730,7 +730,7 @@ async def get_image_via_api(
     """Return Chutes image metadata, or None when the image does not exist."""
 
     url = f"{api_base_url.rstrip('/')}/images/{image_id}"
-    bt.logging.info(f"Checking Chutes image existence through API: GET {url}")
+    logger.info(f"Checking Chutes image existence through API: GET {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
         response = await client.get(
             url,
@@ -770,7 +770,7 @@ async def get_chutes_username_via_api(
     """Return the Chutes username associated with `CHUTES_API_KEY`."""
 
     url = f"{api_base_url.rstrip('/')}/users/me"
-    bt.logging.info(f"Resolving Chutes username through API: GET {url}")
+    logger.info(f"Resolving Chutes username through API: GET {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
         response = await client.get(
             url,
@@ -797,7 +797,7 @@ async def delete_image_via_api(
     """Delete a Chutes image by ID or name."""
 
     url = f"{api_base_url.rstrip('/')}/images/{image_id}"
-    bt.logging.warning(f"Deleting existing Chutes image through API: DELETE {url}")
+    logger.warning(f"Deleting existing Chutes image through API: DELETE {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
         response = await client.delete(
             url,
@@ -827,7 +827,7 @@ async def submit_image_build_via_api(
     timeout_seconds: float = 900.0,
 ) -> dict[str, Any]:
     url = f"{api_base_url.rstrip('/')}/images/"
-    bt.logging.info(f"Starting Chutes image build through API: POST {url}")
+    logger.info(f"Starting Chutes image build through API: POST {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
         response = await client.post(
             url,
@@ -852,7 +852,7 @@ async def upload_logo_via_api(
         raise ValueError("logo_url is required")
 
     timeout = max(1.0, float(timeout_seconds))
-    bt.logging.info(f"Downloading Chutes logo asset: {normalized_logo_url}")
+    logger.info(f"Downloading Chutes logo asset: {normalized_logo_url}")
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         logo_response = await client.get(
             normalized_logo_url,
@@ -870,7 +870,7 @@ async def upload_logo_via_api(
             or "image/png"
         )
         filename = Path(normalized_logo_url.split("?", 1)[0]).name or "logo.png"
-        bt.logging.info(
+        logger.info(
             f"Uploading Chutes logo through API: POST {api_base_url.rstrip('/')}/logos/"
         )
         upload_response = await client.post(
@@ -1015,7 +1015,7 @@ async def build_image_via_api(
                 image_label=image_label,
             )
         else:
-            bt.logging.warning(
+            logger.warning(
                 f"Chutes image already exists: {image_label} ({image_id})."
             )
         if not overwrite_existing:
@@ -1145,7 +1145,7 @@ async def deploy_chute_via_api(
         chute_display_name=chute_display_name,
     )
     url = f"{api_base_url.rstrip('/')}/chutes/"
-    bt.logging.info(f"Deploying Chutes runtime through API: POST {url}")
+    logger.info(f"Deploying Chutes runtime through API: POST {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
         response = await client.post(
             url,
@@ -1180,7 +1180,7 @@ async def warmup_chute_via_api(
     last_payload: dict[str, Any] = {}
 
     try:
-        bt.logging.info(f"Warming up Chutes runtime through API: GET {url}")
+        logger.info(f"Warming up Chutes runtime through API: GET {url}")
         async with httpx.AsyncClient(timeout=min(60.0, timeout)) as client:
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
@@ -1199,7 +1199,7 @@ async def warmup_chute_via_api(
                 status = str(last_payload.get("status") or "").strip().lower()
                 instance_count = last_payload.get("instance_count")
                 if status == "hot":
-                    bt.logging.success(
+                    logger.success(
                         f"Chutes runtime is hot: {target} "
                         f"({instance_count or 0} instances)."
                     )
@@ -1212,7 +1212,7 @@ async def warmup_chute_via_api(
                         f", bounty={bounty.get('amount', 0)}, "
                         f"boost={bounty.get('boost', 1.0)}x"
                     )
-                bt.logging.info(
+                logger.info(
                     f"Chutes runtime warmup status for {target}: "
                     f"{status or 'unknown'} ({instance_count or 0} instances"
                     f"{bounty_suffix})."
@@ -1247,7 +1247,7 @@ async def get_chute_via_api(
     """Load Chutes deployment metadata through `GET /chutes/{id_or_name}`."""
 
     url = f"{api_base_url.rstrip('/')}/chutes/{chute_id_or_name}"
-    bt.logging.info(f"Loading Chutes runtime metadata through API: GET {url}")
+    logger.info(f"Loading Chutes runtime metadata through API: GET {url}")
     async with httpx.AsyncClient(timeout=max(1.0, float(timeout_seconds))) as client:
         response = await client.get(
             url,

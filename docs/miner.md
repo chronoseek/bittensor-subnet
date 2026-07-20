@@ -154,6 +154,8 @@ poetry run python miner.py \
 
 Miner runtime submissions are permanent per hotkey. A hotkey can submit only once; to submit a different runtime later, register and use a new miner hotkey. Validators disqualify hotkeys with multiple revealed submissions and assign them zero score.
 
+For tests that require replacing a submitted runtime, set `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION=0` for both the miner and validator. The miner then skips its duplicate check, and the validator uses the newest revealed submission without applying the duplicate-submission penalty. Production behavior remains enabled by default.
+
 Before submitting, you can check whether the selected hotkey already has revealed commit data:
 
 ```bash

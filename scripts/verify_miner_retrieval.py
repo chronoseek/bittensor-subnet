@@ -13,7 +13,6 @@ import sys
 import uuid
 from pathlib import Path
 
-import bittensor as bt
 from dotenv import load_dotenv
 
 # Add project root to path
@@ -22,6 +21,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 load_dotenv()
 
 from chronoseek.miner.logic import MinerLogic, SearchPipelineError
+from chronoseek.logging import configure_logging
 from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
 from chronoseek.scoring import (
     STRICT_IOU_THRESHOLD,
@@ -201,7 +201,7 @@ def run_single_attempt(
 def main():
     args = parse_args()
 
-    bt.logging.set_info(True)
+    configure_logging("INFO")
     print("ChronoSeek Verification")
     print(f"Split: {args.split}")
     if args.video_url:

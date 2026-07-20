@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import bittensor as bt
+from bittensor_drand import get_encrypted_commitment
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -13,6 +14,8 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
+
+from chronoseek.logging import logger
 
 
 CHRONOSEEK_RUNTIME_PROTOCOL = "chronoseek-runtime-v2"
@@ -105,23 +108,49 @@ async def commit_miner_submission(
     netuid: int,
     submission: MinerSubmission,
     blocks_until_reveal: int,
+    enforce_one_hotkey_one_submission: bool = True,
 ) -> bool:
     wallet_hotkey = getattr(getattr(wallet, "hotkey", None), "ss58_address", None)
-    if wallet_hotkey and await hotkey_has_revealed_commitment(
-        subtensor=subtensor,
-        netuid=netuid,
-        hotkey=wallet_hotkey,
+    if (
+        enforce_one_hotkey_one_submission
+        and wallet_hotkey
+        and await hotkey_has_revealed_commitment(
+            subtensor=subtensor,
+            netuid=netuid,
+            hotkey=wallet_hotkey,
+        )
     ):
         raise DuplicateMinerSubmissionError(PERMANENT_SUBMISSION_ERROR)
 
-    result = subtensor.set_reveal_commitment(
-        wallet=wallet,
+    encrypted, reveal_round = get_encrypted_commitment(
+        serialize_submission(submission),
+        max(1, int(blocks_until_reveal)),
+        12,
+    )
+    call = bt.calls.Commitments.set_commitment(
         netuid=int(netuid),
-        data=serialize_submission(submission),
-        blocks_until_reveal=max(1, int(blocks_until_reveal)),
+        info={
+            "fields": [
+                [
+                    {
+                        "TimelockEncrypted": {
+                            "encrypted": encrypted,
+                            "reveal_round": reveal_round,
+                        }
+                    }
+                ]
+            ]
+        },
+    )
+    result = subtensor.submit_call(
+        call,
+        wallet,
+        signer="hotkey",
+        wait_for_inclusion=True,
+        wait_for_finalization=True,
     )
     response = await maybe_await(result)
-    return bool(getattr(response, "success", response))
+    return bool(response)
 
 
 def _sorted_hotkey_commits(hotkey_commits: Any) -> list[tuple[int, Any]]:
@@ -144,19 +173,19 @@ async def get_hotkey_revealed_commitments(
     netuid: int,
     hotkey: str,
 ) -> list[tuple[int, Any]]:
-    if not hasattr(subtensor, "get_all_revealed_commitments"):
+    subnet_api = getattr(subtensor, "subnets", None)
+    if subnet_api is None or not hasattr(subnet_api, "commitments"):
         return []
 
-    _patch_bittensor_commit_decoder()
     try:
-        commits = await maybe_await(subtensor.get_all_revealed_commitments(int(netuid)))
+        commits = await maybe_await(subnet_api.commitments(int(netuid)))
     except Exception as exc:
-        bt.logging.warning(f"Failed to read miner submissions from chain: {exc}")
+        logger.warning(f"Failed to read miner submissions from chain: {exc}")
         return []
 
     if not isinstance(commits, dict):
         return []
-    return _sorted_hotkey_commits(commits.get(hotkey))
+    return _revealed_commitment_history(commits.get(hotkey))
 
 
 async def hotkey_has_revealed_commitment(
@@ -174,60 +203,20 @@ async def hotkey_has_revealed_commitment(
     )
 
 
-def _patch_bittensor_commit_decoder() -> None:
-    """Patch Bittensor 10.x revealed commitment decoding when needed."""
+def _revealed_commitment_history(commitment: Any) -> list[tuple[int, Any]]:
+    """Return all readable values from a Bittensor 11 commitment record."""
 
-    try:
-        from bittensor.core.chain_data import utils as bt_utils
-        from bittensor.core import async_subtensor as bt_async
-    except Exception as exc:
-        bt.logging.debug(f"Skipping commitment decoder patch: {exc}")
-        return
+    if commitment is None:
+        return []
 
-    if getattr(bt_utils, "_chronoseek_safe_decode_patched", False):
-        return
-
-    def scale_offset(first_byte: int) -> int:
-        mode = first_byte & 0b11
-        if mode == 0:
-            return 1
-        if mode == 1:
-            return 2
-        return 4
-
-    def to_bytes(value) -> bytes:
-        if isinstance(value, (bytes, bytearray)):
-            return bytes(value)
-        if isinstance(value, str):
-            stripped = value.removeprefix("0x")
-            try:
-                return bytes.fromhex(stripped)
-            except ValueError:
-                return value.encode("latin-1", errors="replace")
-        return bytes(value)
-
-    def safe_decode(encoded_data):
-        commitment, revealed_block = encoded_data
-        raw = to_bytes(commitment)
-        offset = scale_offset(raw[0]) if raw else 0
-        return revealed_block, raw[offset:].decode("utf-8", errors="ignore")
-
-    def safe_decode_with_hotkey(encoded_data):
-        hotkey, data = encoded_data
-        decoded = []
-        for item in data:
-            try:
-                decoded.append(safe_decode(item))
-            except Exception as exc:
-                bt.logging.warning(
-                    f"Skipping malformed revealed commitment for {hotkey}: {exc}"
-                )
-        return hotkey, tuple(decoded)
-
-    bt_utils.decode_revealed_commitment = safe_decode
-    bt_utils.decode_revealed_commitment_with_hotkey = safe_decode_with_hotkey
-    bt_async.decode_revealed_commitment_with_hotkey = safe_decode_with_hotkey
-    bt_utils._chronoseek_safe_decode_patched = True
+    history = _sorted_hotkey_commits(getattr(commitment, "revealed", []))
+    encrypted = bool(getattr(commitment, "encrypted", False))
+    value = getattr(commitment, "value", None)
+    if not encrypted and value is not None:
+        current = (int(getattr(commitment, "block", 0)), value)
+        if current not in history:
+            history.append(current)
+    return sorted(history, key=lambda pair: pair[0])
 
 
 def _coerce_submission(
@@ -253,19 +242,22 @@ def _coerce_submission(
     try:
         return MinerSubmission(**payload)
     except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
-        bt.logging.debug(f"Rejected miner submission payload: {exc}")
+        logger.debug(f"Rejected miner submission payload: {exc}")
         return None
 
 
 async def load_chain_submissions(
     subtensor: Any,
     netuid: int,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
+    *,
+    enforce_one_hotkey_one_submission: bool = True,
 ) -> dict[str, MinerSubmission]:
     snapshot = await load_chain_submission_snapshot(
         subtensor=subtensor,
         netuid=netuid,
         metagraph=metagraph,
+        enforce_one_hotkey_one_submission=enforce_one_hotkey_one_submission,
     )
     return snapshot.submissions
 
@@ -273,47 +265,48 @@ async def load_chain_submissions(
 async def load_chain_submission_snapshot(
     subtensor: Any,
     netuid: int,
-    metagraph: bt.Metagraph,
+    metagraph: Any,
+    *,
+    enforce_one_hotkey_one_submission: bool = True,
 ) -> ChainSubmissionSnapshot:
     """Read valid v2 miner submissions and duplicate-submit hotkeys from chain.
 
-    Miner submissions are permanent. A hotkey with more than one revealed
-    commitment is disqualified instead of being allowed to keep its first
-    submission, because multiple submissions violate the one-runtime-per-hotkey
-    rule.
+    By default, a hotkey with more than one revealed commitment is
+    disqualified. When enforcement is disabled, the newest revealed submission
+    is used and no duplicate penalty is reported.
     """
 
-    if not hasattr(subtensor, "get_all_revealed_commitments"):
-        bt.logging.warning(
-            "Chain submission routing is configured, but this subtensor does not provide get_all_revealed_commitments."
+    subnet_api = getattr(subtensor, "subnets", None)
+    if subnet_api is None or not hasattr(subnet_api, "commitments"):
+        logger.warning(
+            "Chain submission routing is configured, but this subtensor does not provide subnets.commitments."
         )
         return ChainSubmissionSnapshot(submissions={}, duplicate_hotkeys=set())
 
-    _patch_bittensor_commit_decoder()
     try:
-        commits = await maybe_await(subtensor.get_all_revealed_commitments(netuid))
+        commits = await maybe_await(subnet_api.commitments(int(netuid)))
     except Exception as exc:
-        bt.logging.warning(f"Failed to read miner submissions from chain: {exc}")
+        logger.warning(f"Failed to read miner submissions from chain: {exc}")
         return ChainSubmissionSnapshot(submissions={}, duplicate_hotkeys=set())
 
     submissions: dict[str, MinerSubmission] = {}
     duplicate_hotkeys: set[str] = set()
     hotkeys = getattr(metagraph, "hotkeys", [])
     for uid, hotkey in enumerate(hotkeys):
-        hotkey_commits = commits.get(hotkey) if isinstance(commits, dict) else None
-        if not hotkey_commits:
+        commitment = commits.get(hotkey) if isinstance(commits, dict) else None
+        if commitment is None:
             continue
         try:
-            sorted_commits = _sorted_hotkey_commits(hotkey_commits)
+            sorted_commits = _revealed_commitment_history(commitment)
             if not sorted_commits:
                 continue
-            if len(sorted_commits) > 1:
+            if len(sorted_commits) > 1 and enforce_one_hotkey_one_submission:
                 duplicate_hotkeys.add(str(hotkey))
-                bt.logging.warning(
+                logger.warning(
                     f"Disqualifying hotkey {hotkey} with {len(sorted_commits)} revealed miner submissions; miner submissions are permanent and multiple submissions score zero."
                 )
                 continue
-            block, commit_data = sorted_commits[0]
+            block, commit_data = sorted_commits[-1]
             submission = _coerce_submission(
                 raw=commit_data,
                 hotkey=hotkey,
@@ -321,7 +314,7 @@ async def load_chain_submission_snapshot(
                 created_at_block=int(block),
             )
         except Exception as exc:
-            bt.logging.debug(
+            logger.debug(
                 f"Failed to parse latest submission for uid={uid} hotkey={hotkey}: {exc}"
             )
             continue
@@ -339,8 +332,12 @@ class MinerSubmissionResolver:
         self,
         *,
         cache_ttl_seconds: float = 300.0,
+        enforce_one_hotkey_one_submission: bool = True,
     ):
         self.cache_ttl_seconds = max(1.0, float(cache_ttl_seconds))
+        self.enforce_one_hotkey_one_submission = bool(
+            enforce_one_hotkey_one_submission
+        )
         self._cached_at = 0.0
         self._cached: dict[str, MinerSubmission] = {}
         self._cached_duplicate_hotkeys: set[str] = set()
@@ -353,7 +350,7 @@ class MinerSubmissionResolver:
         *,
         subtensor: Any,
         netuid: int,
-        metagraph: bt.Metagraph,
+        metagraph: Any,
     ) -> dict[str, MinerSubmission]:
         now = time.time()
         if self._cached_at and (now - self._cached_at) < self.cache_ttl_seconds:
@@ -363,12 +360,13 @@ class MinerSubmissionResolver:
             subtensor=subtensor,
             netuid=netuid,
             metagraph=metagraph,
+            enforce_one_hotkey_one_submission=self.enforce_one_hotkey_one_submission,
         )
         submissions = snapshot.submissions
         self._cached = dict(submissions)
         self._cached_duplicate_hotkeys = set(snapshot.duplicate_hotkeys)
         self._cached_at = now
-        bt.logging.info(
+        logger.info(
             "Loaded v2 miner submissions from chain | "
             f"valid={len(submissions)} | duplicate_hotkeys={len(snapshot.duplicate_hotkeys)}"
         )

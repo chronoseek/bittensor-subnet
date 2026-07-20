@@ -1,10 +1,11 @@
 import os
 import torch
 import numpy as np
-import bittensor as bt
 from typing import List
 from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
+
+from chronoseek.logging import logger
 
 
 class CLIPProcessorEngine:
@@ -14,11 +15,11 @@ class CLIPProcessorEngine:
 
     def __init__(self, model_id: str = "openai/clip-vit-base-patch32"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        bt.logging.info(f"Loading CLIP model '{model_id}' on {self.device}...")
+        logger.info(f"Loading CLIP model '{model_id}' on {self.device}...")
 
         token = os.getenv("HF_TOKEN")
         if not token:
-            bt.logging.warning(
+            logger.warning(
                 "HF_TOKEN not found in environment. Public models may be rate-limited."
             )
 
@@ -27,9 +28,9 @@ class CLIPProcessorEngine:
                 self.device
             )
             self.processor = CLIPProcessor.from_pretrained(model_id, token=token)
-            bt.logging.success("CLIP model loaded successfully.")
+            logger.success("CLIP model loaded successfully.")
         except Exception as e:
-            bt.logging.error(f"Failed to load CLIP model: {e}")
+            logger.error(f"Failed to load CLIP model: {e}")
             raise e
 
     def compute_similarity(self, query: str, images: List[Image.Image]) -> np.ndarray:
@@ -86,7 +87,7 @@ class CLIPProcessorEngine:
             return (scores - score_min) / (score_max - score_min)
 
         except Exception as e:
-            bt.logging.error(f"Inference failed: {e}")
+            logger.error(f"Inference failed: {e}")
             return np.array([])
 
     def compute_text_similarity(self, query: str, texts: List[str]) -> np.ndarray:
@@ -112,7 +113,7 @@ class CLIPProcessorEngine:
 
             return (scores - score_min) / (score_max - score_min)
         except Exception as e:
-            bt.logging.error(f"Transcript scoring failed: {e}")
+            logger.error(f"Transcript scoring failed: {e}")
             return np.array([])
 
     def _encode_texts(self, texts: List[str]) -> torch.Tensor:

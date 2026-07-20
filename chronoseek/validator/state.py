@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from threading import Lock
+from typing import Any
 
 import bittensor as bt
 import numpy as np
@@ -10,7 +11,7 @@ from chronoseek.validator.telemetry import ValidatorTelemetryState
 @dataclass
 class ValidatorRuntimeState:
     wallet: bt.Wallet
-    metagraph: bt.Metagraph
+    metagraph: Any
     scores: np.ndarray
     score_lock: Lock
     metagraph_lock: Lock = field(default_factory=Lock)
