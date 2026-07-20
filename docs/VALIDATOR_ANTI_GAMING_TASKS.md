@@ -18,8 +18,8 @@ The hardened flow is:
    same-video hard negatives when they fit inside the configured duration budget.
 4. The validator re-encodes/compresses the clip with a randomized transform
    profile to strip metadata, vary resolution/bitrate, and reduce size.
-5. The validator uploads the task clip to Hippius public S3.
-6. The validator sends miners only the Hippius URL, query variant, request ID, protocol version, and `top_k=1`.
+5. The validator uses the Vidaio-returned compressed URL when Vidaio succeeds, or uploads the locally compressed fallback clip to Hippius public S3.
+6. The validator sends miners only the compressed clip URL, query variant, request ID, protocol version, and `top_k=1`.
 7. The validator scores miner responses against clip-local shifted ground truths.
 8. At a configurable low rate, the validator converts hardened tasks into
    internal canaries for absent, hard-negative, or repeated-moment probes.
@@ -40,11 +40,11 @@ The validator task flow should run inside the existing validator loop before min
 4. Select a randomized crop window around the target interval group.
 5. Download the source video to local validator cache.
 6. Crop and re-encode the selected window with ffmpeg.
-7. Optionally attempt Vidaio compression if configured.
-8. If Vidaio is disabled or fails, use the local ffmpeg-compressed output.
-9. Upload the final MP4 to Hippius public S3.
-10. Record the upload in the local artifact manifest.
-11. Build a protocol-compatible `VideoSearchRequest` using the Hippius URL.
+7. If enabled, attempt Vidaio compression using a temporary public task artifact URL.
+8. If Vidaio succeeds, send miners the compressed video URL returned by Vidaio.
+9. If Vidaio is disabled or fails, use local ffmpeg compression and upload that final MP4 to Hippius public S3.
+10. Record the miner-facing artifact URL in the local artifact manifest.
+11. Build a protocol-compatible `VideoSearchRequest` using the miner-facing compressed clip URL.
 12. Query responsive miners with `top_k=1`.
 13. Score only against clip-local shifted ground truths.
 14. Periodically clean expired local clips and Hippius objects.
@@ -115,15 +115,21 @@ Keep task-domain logic under `chronoseek/validator/`:
 | `query_variants.py` | Private query variant manifest loading and deterministic fallback variants. |
 | `clipper.py` | Source video download, crop planning, ffmpeg crop, metadata stripping, and local re-encode. |
 | `compression.py` | Local ffmpeg compression, shared compression result types, and fallback orchestration. |
-| `artifact_manifest.py` | Local JSON manifest for uploaded task clips, expiry, cleanup, and replay metadata. |
-| `hardened_task_gen.py` | Orchestrates sampler, query variants, clipper, compressor, storage, and manifest into `generate_task()`. |
+| `task_transforms.py` | Stable per-task encoding variants, hard-negative metadata, and transform application. |
+| `canary_tasks.py` | Canary task selection and mutation policy. |
+| `task_exposure.py` | Active-task diversity and exposure limits. |
+| `artifact_publication.py` | Provider-neutral publication of local or already-hosted compressed artifacts. |
+| `artifact_manifest.py` | Local JSON manifest for miner-facing task artifact URLs, expiry, cleanup, and replay metadata. |
+| `task_generator_factory.py` | Constructs legacy or hardened task generators from validator configuration. |
+| `hardened_task_gen.py` | Coordinates the hardened task pipeline, retries, cleanup, and manifest recording. |
 
 Keep provider-specific integration code outside the validator package, parallel to `chronoseek/chain/` and `chronoseek/chutes/`:
 
 | Module | Responsibility |
 | --- | --- |
 | `chronoseek.hippius.s3` | Hippius S3 upload, download, delete, public URL construction, and credentials validation through the MinIO SDK. |
-| `chronoseek.video.vidaio` | Optional Vidaio compression adapter. |
+| `chronoseek.video.vidaio_client` | Vidaio HTTP submission, polling, rate-limit handling, and result retrieval. |
+| `chronoseek.video.vidaio` | Validator compression adapters for public URLs and temporary Hippius inputs. |
 
 `HardenedActivityNetTaskGenerator` should accept storage and compression interfaces rather than concrete provider classes.
 
@@ -173,14 +179,15 @@ Use Hippius public S3 path-style URLs for miner-facing task clips (`https://s3.h
 
 By default, expired-task cleanup removes local files and manifest entries only. Use `--task-delete-remote-artifacts` only if uploaded Hippius task clips should also be deleted.
 
-### Optional Vidaio
+### Vidaio
 
 ```env
-VIDAIO_API_BASE_URL=
+VIDAIO_COMPRESSION_ENABLED=1
 VIDAIO_API_KEY=
+VIDAIO_POLL_INTERVAL_SECONDS=15
 ```
 
-Vidaio must be optional and remains disabled by default because no public API is available yet. Enable it with `--vidaio-compression-enabled` or `DEFAULT_VIDAIO_COMPRESSION_ENABLED`. If enabled but unavailable, invalid, or timed out, validation must fall back to local ffmpeg compression.
+Vidaio compression is enabled by default through the public API. Validators upload a temporary public source clip, submit that URL to Vidaio, send miners the compressed video URL returned by Vidaio, and delete the temporary source object best-effort. The validator does not re-upload successful Vidaio outputs. `VIDAIO_POLL_INTERVAL_SECONDS` defaults to 15 seconds to stay below Vidaio workflow-read rate limits. Set `VIDAIO_COMPRESSION_ENABLED=0` or pass `--disable-vidaio-compression` to use local ffmpeg directly. If Vidaio is disabled, unavailable, invalid, or timed out, validation falls back to local ffmpeg compression and uploads the locally compressed MP4 to Hippius.
 
 ## Implementation Checklist
 
@@ -260,18 +267,18 @@ Tests:
 - Output metadata does not include source URL or ActivityNet identifiers.
 - Local clip cleanup removes temporary source artifacts.
 
-### 6. Add Optional Vidaio Adapter
+### 6. Add Vidaio Adapter
 
 - Implement `chronoseek.video.vidaio`.
-- Define a common `compress(input_path) -> output_path` interface.
+- Define a common `compress(input_path, output_path) -> CompressionResult` interface that can return either a local output path or a hosted compressed URL.
 - Keep local ffmpeg compression and fallback orchestration in `chronoseek.validator.compression`.
-- Vidaio adapter is enabled only by config.
+- Vidaio adapter is enabled by default and can be disabled by config.
 - If Vidaio fails, falls back to local ffmpeg.
 
 Tests:
 
 - Local ffmpeg compressor produces valid MP4.
-- Vidaio success path returns compressed output.
+- Vidaio success path returns the hosted compressed video URL.
 - Vidaio timeout/error/invalid output falls back to ffmpeg.
 - Validator liveness does not depend on Vidaio.
 
@@ -398,7 +405,7 @@ The rollout order below records the intended staged path. Items 1 through 7 are 
 
 - Hippius public S3 URL mode is the default delivery path.
 - Local ffmpeg compression is required on validator hosts.
-- Vidaio is optional until a stable API contract is confirmed.
+- Vidaio uses the public compression API by default, with local ffmpeg kept as the liveness fallback.
 - Short TTL cleanup is the default, with `DEFAULT_TASK_CLIP_TTL_HOURS=6`.
 - Generated task artifacts and private query variants must not be committed.
 - No public protocol change is required.

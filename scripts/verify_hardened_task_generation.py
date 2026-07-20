@@ -20,6 +20,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 load_dotenv()
 
+from chronoseek.constants import DEFAULT_VIDAIO_API_BASE_URL
+
 
 DEFAULT_CACHE_DIR = str(Path.home() / ".cache" / "chronoseek" / "hardened-task-verifier")
 
@@ -271,15 +273,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--use-vidaio",
         action="store_true",
-        default=env_bool("VIDAIO_COMPRESSION_ENABLED", False),
+        default=env_bool("VIDAIO_COMPRESSION_ENABLED", True),
         help="Try Vidaio compression before local ffmpeg, matching validator behavior.",
     )
-    parser.add_argument("--vidaio-api-base-url", default=os.getenv("VIDAIO_API_BASE_URL", ""))
+    parser.add_argument(
+        "--disable-vidaio",
+        action="store_false",
+        dest="use_vidaio",
+        help="Skip Vidaio and use local ffmpeg compression directly.",
+    )
+    parser.add_argument(
+        "--vidaio-api-base-url",
+        default=DEFAULT_VIDAIO_API_BASE_URL,
+    )
     parser.add_argument("--vidaio-api-key", default=os.getenv("VIDAIO_API_KEY", ""))
     parser.add_argument(
         "--vidaio-timeout-seconds",
         type=float,
         default=env_float("VIDAIO_TIMEOUT_SECONDS", 60.0),
+    )
+    parser.add_argument(
+        "--vidaio-poll-interval-seconds",
+        type=float,
+        default=env_float("VIDAIO_POLL_INTERVAL_SECONDS", 15.0),
     )
     parser.add_argument(
         "--upload-to-hippius",
@@ -383,7 +399,7 @@ def build_generator(args: argparse.Namespace):
     from chronoseek.validator.task_gen import ActivityNetTaskGenerator
     from chronoseek.validator.task_models import EncodingProfile
     from chronoseek.validator.task_sampler import ActivityNetTaskSampler
-    from chronoseek.video.vidaio import VidaioCompressor
+    from chronoseek.video.vidaio import StorageBackedVidaioCompressor, VidaioCompressor
 
     cache_dir = Path(args.cache_dir).expanduser()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -431,14 +447,22 @@ def build_generator(args: argparse.Namespace):
         download_timeout_seconds=args.source_download_timeout_seconds,
         encoding_profile=encoding_profile,
     )
+    manifest = TaskArtifactManifest(str(manifest_path))
+    storage = build_storage(args, cache_dir)
     local_compressor = LocalFfmpegCompressor(encoding_profile=encoding_profile)
     vidaio_compressor = None
     if args.use_vidaio:
-        vidaio_compressor = VidaioCompressor(
-            api_base_url=args.vidaio_api_base_url,
-            api_key=args.vidaio_api_key or None,
-            timeout_seconds=args.vidaio_timeout_seconds,
-            encoding_profile=encoding_profile,
+        vidaio_compressor = StorageBackedVidaioCompressor(
+            vidaio_compressor=VidaioCompressor(
+                api_base_url=args.vidaio_api_base_url,
+                api_key=args.vidaio_api_key or None,
+                timeout_seconds=args.vidaio_timeout_seconds,
+                poll_interval_seconds=args.vidaio_poll_interval_seconds,
+                encoding_profile=encoding_profile,
+            ),
+            storage=storage,
+            artifact_prefix=f"{args.artifact_prefix.strip('/')}/vidaio-inputs",
+            delete_remote_artifacts=True,
         )
     compressor = CompositeCompressor(
         local_compressor=local_compressor,
@@ -446,8 +470,6 @@ def build_generator(args: argparse.Namespace):
         preferred_enabled=args.use_vidaio,
         preferred_backend_name="Vidaio",
     )
-    manifest = TaskArtifactManifest(str(manifest_path))
-    storage = build_storage(args, cache_dir)
     generator = HardenedActivityNetTaskGenerator(
         sampler=recording_sampler,
         query_selector=QueryVariantSelector(args.query_variants_path or None),

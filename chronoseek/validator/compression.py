@@ -18,6 +18,7 @@ class CompressionResult:
     path: str
     profile_name: str
     backend: str
+    public_url: str = ""
 
 
 class VideoCompressor(Protocol):
@@ -95,6 +96,17 @@ class CompositeCompressor:
         self.preferred_compressor = preferred_compressor
         self.preferred_enabled = bool(preferred_enabled)
         self.preferred_backend_name = preferred_backend_name or "remote"
+
+    @property
+    def encoding_profile(self) -> EncodingProfile:
+        profile = getattr(self.local_compressor, "encoding_profile", None)
+        return profile if isinstance(profile, EncodingProfile) else EncodingProfile()
+
+    @encoding_profile.setter
+    def encoding_profile(self, profile: EncodingProfile) -> None:
+        for compressor in (self.local_compressor, self.preferred_compressor):
+            if compressor is not None and hasattr(compressor, "encoding_profile"):
+                compressor.encoding_profile = profile
 
     def compress(self, *, input_path: str, output_path: str) -> CompressionResult:
         if self.preferred_enabled and self.preferred_compressor is not None:

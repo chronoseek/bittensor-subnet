@@ -2,7 +2,7 @@
 
 This guide is for operators running a ChronoSeek validator.
 
-Validators generate synthetic video-search tasks, query miner Chutes runtimes, score responses, and set on-chain weights. In hardened mode, validators also create private task clips, upload them to Hippius, and send miners only the clipped task URL plus query.
+Validators generate synthetic video-search tasks, query miner Chutes runtimes, score responses, and set on-chain weights. In hardened mode, validators also create private task clips and send miners only a compressed clipped task URL plus query. The final URL comes from Vidaio when remote compression succeeds, or from validator-managed Hippius upload after local ffmpeg fallback.
 
 ## Prerequisites
 
@@ -47,13 +47,14 @@ Hardened task generation:
 | `HIPPIUS_S3_SECRET_ACCESS_KEY` | Normal validator operation | Hippius S3 secret key. |
 | `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, bucket, or region constants when a deployment uses different Hippius-compatible storage. |
 
-Optional Vidaio compression:
+Vidaio compression:
 
-| Variable | Required when | Notes |
+| Setting | Required when | Notes |
 | --- | --- | --- |
-| `--vidaio-compression-enabled` or `DEFAULT_VIDAIO_COMPRESSION_ENABLED` | Enabling Vidaio | Disabled by default because no public Vidaio API is available yet. When enabled, tries Vidaio before local ffmpeg compression. |
-| `VIDAIO_API_BASE_URL` | Vidaio is enabled | Vidaio compression API base URL. |
-| `VIDAIO_API_KEY` | If required by Vidaio | Bearer token sent to Vidaio. |
+| `VIDAIO_COMPRESSION_ENABLED`, `DEFAULT_VIDAIO_COMPRESSION_ENABLED`, or `--disable-vidaio-compression` | Normal validator operation | Enabled by default. Set `VIDAIO_COMPRESSION_ENABLED=0` or pass `--disable-vidaio-compression` to use local ffmpeg directly. |
+| `DEFAULT_VIDAIO_API_BASE_URL` or `--vidaio-api-base-url` | Non-default Vidaio endpoint only | Defaults to `https://api.vidaio.io`; not configured through `.env`. |
+| `VIDAIO_API_KEY` | Vidaio protected endpoints | API key sent as the `X-API-Key` header. |
+| `VIDAIO_POLL_INTERVAL_SECONDS` or `--vidaio-poll-interval-seconds` | Vidaio workflow polling | Defaults to `15` seconds to stay below the 6-read/minute workflow-read limit. |
 
 Optional shared validator/miner video access:
 
@@ -115,10 +116,10 @@ With `DEFAULT_ENABLE_HARDENED_TASKS=True`, validators:
 1. Sample an ActivityNet task internally.
 2. Download the source video on the validator side.
 3. Clip and re-encode the relevant window.
-4. Optionally try Vidaio compression.
-5. Fall back to local ffmpeg compression when Vidaio is disabled or unavailable.
-6. Upload the final clip to Hippius S3.
-7. Query miners with only the Hippius URL, query text, request ID, and `top_k=1`.
+4. If enabled, upload a temporary public source clip and try Vidaio compression.
+5. When Vidaio succeeds, use the compressed video URL returned by Vidaio.
+6. Fall back to local ffmpeg compression and upload that final clip to Hippius S3 when Vidaio is disabled or unavailable.
+7. Query miners with only the miner-facing compressed clip URL, query text, request ID, and `top_k=1`.
 8. Score against clip-local ground truth intervals.
 
 Hippius public URLs use this shape:
@@ -127,7 +128,7 @@ Hippius public URLs use this shape:
 https://s3.hippius.com/chronoseek/task-clips/<video-file-name-or-id>
 ```
 
-At hardened validator startup, ChronoSeek checks that the configured Hippius bucket exists and applies a public-read bucket policy for `s3:GetObject` so miners can download uploaded task clips without Hippius credentials.
+At hardened validator startup, ChronoSeek checks that the configured Hippius bucket exists and applies a public-read bucket policy for `s3:GetObject` so Vidaio can fetch temporary source clips and miners can download locally compressed fallback task clips without Hippius credentials.
 
 Uploaded Hippius videos are kept by default. Use `--task-delete-remote-artifacts` only if the validator should delete expired remote artifacts during cleanup.
 

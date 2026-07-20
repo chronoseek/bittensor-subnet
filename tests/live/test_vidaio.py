@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from chronoseek.constants import DEFAULT_VIDAIO_API_BASE_URL
 from chronoseek.video.vidaio import VidaioCompressor
 from live_helpers import env_value, require_live
 
@@ -15,20 +16,21 @@ pytestmark = pytest.mark.live
 
 
 def test_live_vidaio_compress() -> None:
-    """Compress one real local video file through Vidaio."""
+    """Compress one public video URL through Vidaio."""
 
-    require_live("CHRONOSEEK_LIVE_VIDAIO", "VIDAIO_API_BASE_URL", "LIVE_VIDAIO_INPUT_PATH")
+    require_live("CHRONOSEEK_LIVE_VIDAIO", "VIDAIO_API_KEY", "LIVE_VIDAIO_INPUT_URL")
 
-    input_path = Path(env_value("LIVE_VIDAIO_INPUT_PATH")).expanduser()
-    assert input_path.is_file()
-    with tempfile.TemporaryDirectory(prefix="chronoseek-live-vidaio-") as tmp_dir:
-        output_path = Path(tmp_dir) / "compressed.mp4"
-        result = VidaioCompressor(
-            api_base_url=env_value("VIDAIO_API_BASE_URL"),
-            api_key=env_value("VIDAIO_API_KEY") or None,
-            timeout_seconds=float(env_value("VIDAIO_TIMEOUT_SECONDS", "60")),
-        ).compress(input_path=str(input_path), output_path=str(output_path))
+    output_path = Path(tempfile.gettempdir()) / "chronoseek-live-vidaio-unused.mp4"
+    result = VidaioCompressor(
+        api_base_url=DEFAULT_VIDAIO_API_BASE_URL,
+        api_key=env_value("VIDAIO_API_KEY") or None,
+        timeout_seconds=float(env_value("VIDAIO_TIMEOUT_SECONDS", "60")),
+        poll_interval_seconds=float(env_value("VIDAIO_POLL_INTERVAL_SECONDS", "15")),
+    ).compress_url(
+        video_url=env_value("LIVE_VIDAIO_INPUT_URL"),
+        output_path=str(output_path),
+    )
 
-        assert result.backend == "vidaio"
-        assert output_path.exists()
-        assert output_path.stat().st_size > 0
+    assert result.backend == "vidaio"
+    assert result.public_url.startswith(("http://", "https://"))
+    assert result.path == ""

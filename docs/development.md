@@ -26,8 +26,12 @@ ChronoSeek keeps provider and domain logic separated:
 | `chronoseek.chutes.runtime` | Chutes endpoint resolution, auth headers, and runtime health checks. |
 | `chronoseek.hippius.s3` | Hippius S3-compatible upload, download, delete, public URL construction, and URL parsing through MinIO. |
 | `chronoseek.video.downloader` | Shared validator/miner video acquisition routing. |
-| `chronoseek.video.vidaio` | Optional Vidaio compression adapter. |
-| `chronoseek.validator.*` | Dataset loading, task sampling, clipping, compression fallback, task manifests, scoring, and validator orchestration. |
+| `chronoseek.video.vidaio_client` | Vidaio HTTP workflow, polling, rate-limit handling, and result retrieval. |
+| `chronoseek.video.vidaio` | Vidaio compressor adapters for URL and storage-backed inputs. |
+| `chronoseek.validator.task_generator_factory` | Validator task-generator dependency construction. |
+| `chronoseek.validator.task_transforms` | Hardened encoding variants and transform metadata. |
+| `chronoseek.validator.artifact_publication` | Provider-neutral local and hosted artifact publication. |
+| `chronoseek.validator.*` | Dataset loading, task sampling, canaries, exposure limits, manifests, scoring, and validator orchestration. |
 
 Legacy compatibility modules for video downloader, validator storage, and Vidaio were removed. Use the canonical modules above.
 
@@ -251,9 +255,9 @@ poetry run pytest tests/live/test_chain.py::test_live_chain_fetch_submissions -s
 ```bash
 CHRONOSEEK_LIVE_TESTS=1 \
 CHRONOSEEK_LIVE_VIDAIO=1 \
-VIDAIO_API_BASE_URL="<vidaio-api-base-url>" \
 VIDAIO_API_KEY="<vidaio-api-key>" \
-LIVE_VIDAIO_INPUT_PATH="/path/to/input.mp4" \
+VIDAIO_POLL_INTERVAL_SECONDS=15 \
+LIVE_VIDAIO_INPUT_URL="https://example.com/input.mp4" \
 poetry run pytest tests/live/test_vidaio.py::test_live_vidaio_compress -s
 ```
 

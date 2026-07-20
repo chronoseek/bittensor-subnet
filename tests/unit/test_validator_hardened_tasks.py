@@ -289,6 +289,16 @@ class FakeCompressor:
         )
 
 
+class FakeHostedCompressor:
+    def compress(self, *, input_path: str, output_path: str):
+        return CompressionResult(
+            path="",
+            profile_name="h264-720p-v1",
+            backend="vidaio",
+            public_url="https://vidaio.hippius.example/compressed-task.mp4",
+        )
+
+
 class FakeStorage:
     def __init__(self):
         self.uploads = []
@@ -427,6 +437,53 @@ def test_hardened_generator_outputs_clip_local_protocol_task(tmp_path):
     assert task.transform_metadata["encoding_profile"] == task.transform_id
     assert task.hard_negative_count == 1
     assert len(task.hard_negative_source_caption_ids) == 1
+
+
+def test_hardened_generator_uses_hosted_compression_url_without_reupload(tmp_path):
+    variants_path = tmp_path / "variants.json"
+    variants_path.write_text(json.dumps({"raw caption": ["private query"]}))
+    sampler = ActivityNetTaskSampler(
+        [
+            {
+                "task_id": "video-1",
+                "video_url": "https://example.com/source.mp4",
+                "caption_intervals": {"raw caption": [(12, 15)]},
+            }
+        ],
+        validator_hotkey="hotkey",
+        task_secret="secret",
+        video_cooldown_seconds=0,
+        caption_cooldown_seconds=0,
+    )
+    manifest = TaskArtifactManifest(tmp_path / "manifest.json")
+    storage = FakeStorage()
+    generator = HardenedActivityNetTaskGenerator(
+        sampler=sampler,
+        query_selector=QueryVariantSelector(str(variants_path)),
+        clipper=FakeClipper(tmp_path),
+        compressor=FakeHostedCompressor(),
+        storage=storage,
+        manifest=manifest,
+        validator_hotkey="hotkey",
+        current_block_provider=lambda: 123,
+        config=HardenedTaskGeneratorConfig(
+            artifact_prefix="task-clips",
+            ttl_hours=6,
+            cleanup_interval_seconds=900,
+            max_generation_attempts=1,
+            enable_adversarial_transforms=False,
+        ),
+    )
+
+    task = generator.generate_task()
+    entry = manifest.entries[task.task_id]
+
+    assert task.video_url == "https://vidaio.hippius.example/compressed-task.mp4"
+    assert task.artifact_url == task.video_url
+    assert task.artifact_key == ""
+    assert entry.public_url == task.video_url
+    assert entry.object_key == ""
+    assert storage.uploads == []
 
 
 def test_hardened_generator_can_emit_absent_canary_task(tmp_path):

@@ -136,7 +136,7 @@ class TaskArtifactManifest:
                     local_path.unlink()
                 except OSError:
                     pass
-            if delete_remote is not None:
+            if delete_remote is not None and entry.object_key:
                 delete_remote(entry.object_key)
 
         if expired:

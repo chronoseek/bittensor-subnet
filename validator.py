@@ -19,7 +19,29 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from chronoseek.validator import task_gen as task_gen_module
+
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def enable_bittensor_cli_parsing() -> None:
+    """Bittensor 10.x disables argparse parsing unless this env flag opts in."""
+
+    os.environ["BT_NO_PARSE_CLI_ARGS"] = "false"
+
 from chronoseek.validator import forward as forward_module
 from chronoseek.constants import (
     DEFAULT_ABSENT_CANARY_QUERIES,
@@ -32,6 +54,7 @@ from chronoseek.constants import (
     DEFAULT_ENABLE_TASK_ENCODING_PROFILE_VARIANTS,
     DEFAULT_HF_ACTIVITYNET_FILENAME,
     DEFAULT_HF_CACHE_DIR,
+    DEFAULT_HARDENED_TASK_MAX_GENERATION_ATTEMPTS,
     DEFAULT_HIPPIUS_S3_BUCKET,
     DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
     DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
@@ -85,6 +108,7 @@ from chronoseek.constants import (
     DEFAULT_VALIDATOR_TASK_SECRET,
     DEFAULT_VIDAIO_API_BASE_URL,
     DEFAULT_VIDAIO_COMPRESSION_ENABLED,
+    DEFAULT_VIDAIO_POLL_INTERVAL_SECONDS,
     DEFAULT_VIDAIO_TIMEOUT_SECONDS,
     DEFAULT_VIDEO_AVAILABILITY_CACHE_PATH,
     DEFAULT_VIDEO_AVAILABILITY_CACHE_TTL_HOURS,
@@ -93,26 +117,17 @@ from chronoseek.constants import (
     DEFAULT_WALLET_PATH,
 )
 from chronoseek.scoring import LatencyScoringConfig
-from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
-from chronoseek.validator.artifact_manifest import TaskArtifactManifest
 from chronoseek.validator.aggregation import (
     ScoreAggregationConfig,
     update_miner_score,
 )
-from chronoseek.validator.clipper import FfmpegClipper
-from chronoseek.validator.compression import (
-    CompositeCompressor,
-    LocalFfmpegCompressor,
+from chronoseek.validator.config_values import (
+    get_config_bool,
+    get_config_float,
+    get_config_str,
 )
-from chronoseek.validator.hardened_task_gen import (
-    HardenedActivityNetTaskGenerator,
-    HardenedTaskGeneratorConfig,
-)
-from chronoseek.validator.query_variants import QueryVariantSelector
 from chronoseek.validator.state import ValidatorRuntimeState
-from chronoseek.validator.task_models import EncodingProfile
-from chronoseek.validator.task_sampler import ActivityNetTaskSampler
-from chronoseek.video.vidaio import VidaioCompressor
+from chronoseek.validator.task_generator_factory import build_validator_task_generator
 from chronoseek.chain.submissions import (
     MinerSubmissionResolver,
 )
@@ -364,177 +379,6 @@ def build_emission_weights(
 
 def normalize_miner_emission_burn_percent(value: float) -> float:
     return max(0.0, min(float(value), 100.0))
-
-
-def get_config_float(config: bt.Config, name: str, default: float) -> float:
-    value = getattr(config, name, default)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def get_config_str(config: bt.Config, name: str, default: str = "") -> str:
-    value = getattr(config, name, default)
-    return value if isinstance(value, str) else default
-
-
-def get_config_bool(config: bt.Config, name: str, default: bool) -> bool:
-    value = getattr(config, name, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"0", "false", "no", "off"}
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return default
-
-
-def build_validator_task_generator(
-    *,
-    config: bt.Config,
-    availability_checker: VideoAvailabilityChecker,
-    validator_hotkey: str,
-    current_block_provider,
-):
-    source_task_gen = task_gen_module.ActivityNetTaskGenerator(
-        dataset_path=config.task_dataset_path or None,
-        split=config.task_split,
-        cache_dir=config.hf_cache_dir or None,
-        dataset_filename=config.hf_activitynet_filename or None,
-        require_accessible_videos=config.require_accessible_videos,
-        availability_checker=availability_checker,
-        max_sampling_attempts=config.task_max_sampling_attempts,
-    )
-
-    if not get_config_bool(config, "enable_hardened_tasks", False):
-        bt.logging.info("Validator task generation configured | mode=legacy-activitynet")
-        return source_task_gen
-
-    task_secret = str(config.validator_task_secret or "").strip()
-    if not task_secret:
-        raise ValueError(
-            "Hardened task generation requires VALIDATOR_TASK_SECRET "
-            "or --validator-task-secret."
-        )
-    hippius_access_key_id = os.getenv("HIPPIUS_S3_ACCESS_KEY_ID", "").strip()
-    hippius_secret_access_key = os.getenv("HIPPIUS_S3_SECRET_ACCESS_KEY", "").strip()
-    vidaio_api_key = os.getenv("VIDAIO_API_KEY", "").strip() or None
-
-    task_cache_dir = Path(config.task_clip_cache_dir).expanduser()
-    task_cache_dir.mkdir(parents=True, exist_ok=True)
-    raw_manifest_path = str(config.task_artifact_manifest_path or "").strip()
-    if raw_manifest_path:
-        manifest_path = Path(raw_manifest_path).expanduser()
-    else:
-        manifest_path = task_cache_dir / "artifact_manifest.json"
-
-    encoding_profile = EncodingProfile(
-        name=config.task_encoding_profile_name,
-        max_width=int(config.task_clip_max_width),
-        max_height=int(config.task_clip_max_height),
-        video_bitrate=config.task_clip_video_bitrate,
-        audio_bitrate=config.task_clip_audio_bitrate,
-    )
-    sampler = ActivityNetTaskSampler(
-        source_task_gen.dataset,
-        validator_hotkey=validator_hotkey,
-        task_secret=task_secret,
-        video_cooldown_seconds=float(config.task_video_cooldown_hours) * 3600.0,
-        caption_cooldown_seconds=float(config.task_caption_cooldown_hours) * 3600.0,
-        availability_checker=availability_checker,
-        require_accessible_videos=config.require_accessible_videos,
-        max_sampling_attempts=config.task_max_sampling_attempts,
-    )
-    clipper = FfmpegClipper(
-        cache_dir=str(task_cache_dir),
-        min_clip_duration_seconds=config.task_min_clip_duration_seconds,
-        max_clip_duration_seconds=config.task_max_clip_duration_seconds,
-        download_timeout_seconds=config.task_source_download_timeout_seconds,
-        encoding_profile=encoding_profile,
-    )
-    local_compressor = LocalFfmpegCompressor(encoding_profile=encoding_profile)
-    vidaio_compressor = None
-    if get_config_bool(config, "vidaio_compression_enabled", False):
-        vidaio_compressor = VidaioCompressor(
-            api_base_url=config.vidaio_api_base_url,
-            api_key=vidaio_api_key,
-            timeout_seconds=config.vidaio_timeout_seconds,
-            encoding_profile=encoding_profile,
-        )
-    compressor = CompositeCompressor(
-        local_compressor=local_compressor,
-        preferred_compressor=vidaio_compressor,
-        preferred_enabled=get_config_bool(config, "vidaio_compression_enabled", False),
-        preferred_backend_name="Vidaio",
-    )
-    storage = HippiusS3StorageClient(
-        HippiusS3Config(
-            endpoint_url=config.hippius_s3_endpoint_url,
-            public_base_url=config.hippius_s3_public_base_url,
-            bucket=config.hippius_s3_bucket,
-            access_key_id=hippius_access_key_id,
-            secret_access_key=hippius_secret_access_key,
-            region=config.hippius_s3_region,
-        ),
-        timeout_seconds=config.hippius_s3_timeout_seconds,
-    )
-    storage.ensure_bucket_public()
-    bt.logging.info(
-        f"Hippius task bucket ready and public-readable | bucket={config.hippius_s3_bucket}"
-    )
-    manifest = TaskArtifactManifest(str(manifest_path))
-    hardened_gen = HardenedActivityNetTaskGenerator(
-        sampler=sampler,
-        query_selector=QueryVariantSelector(config.task_query_variants_path or None),
-        clipper=clipper,
-        compressor=compressor,
-        storage=storage,
-        manifest=manifest,
-        validator_hotkey=validator_hotkey,
-        current_block_provider=current_block_provider,
-        config=HardenedTaskGeneratorConfig(
-            artifact_prefix=config.task_artifact_prefix,
-            ttl_hours=config.task_clip_ttl_hours,
-            cleanup_interval_seconds=config.task_clip_cleanup_interval_seconds,
-            max_generation_attempts=config.hardened_task_max_generation_attempts,
-            delete_remote_artifacts=get_config_bool(
-                config,
-                "task_delete_remote_artifacts",
-                False,
-            ),
-            enable_adversarial_transforms=get_config_bool(
-                config,
-                "enable_adversarial_task_transforms",
-                True,
-            ),
-            enable_encoding_profile_variants=get_config_bool(
-                config,
-                "enable_task_encoding_profile_variants",
-                True,
-            ),
-            canary_task_rate=float(config.canary_task_rate),
-            absent_canary_queries=tuple(
-                query.strip()
-                for query in str(config.absent_canary_queries or "").split("|")
-                if query.strip()
-            )
-            or HardenedTaskGeneratorConfig.absent_canary_queries,
-            max_active_tasks_per_source_video=int(
-                config.max_active_tasks_per_source_video
-            ),
-            max_active_tasks_per_source_caption=int(
-                config.max_active_tasks_per_source_caption
-            ),
-            max_active_tasks_per_query_variant=int(
-                config.max_active_tasks_per_query_variant
-            ),
-            max_active_tasks_per_transform=int(config.max_active_tasks_per_transform),
-        ),
-    )
-    hardened_gen.cleanup_expired(force=True)
-    bt.logging.info("Validator task generation configured | mode=hardened-activitynet")
-    return hardened_gen
 
 
 async def run_validator_loop(
@@ -838,6 +682,7 @@ def get_config():
     of environment variables so operators only need to provide identity,
     credentials, and secrets in `.env`.
     """
+    enable_bittensor_cli_parsing()
     parser = argparse.ArgumentParser(description="ChronoSeek Validator")
 
     # Add bittensor arguments first
@@ -1155,20 +1000,36 @@ def get_config():
     parser.add_argument(
         "--vidaio-compression-enabled",
         action="store_true",
-        default=DEFAULT_VIDAIO_COMPRESSION_ENABLED,
-        help="Try Vidaio compression before falling back to local ffmpeg.",
+        default=env_bool(
+            "VIDAIO_COMPRESSION_ENABLED", DEFAULT_VIDAIO_COMPRESSION_ENABLED
+        ),
+        help="Try Vidaio compression before falling back to local ffmpeg. Enabled by default.",
+    )
+    parser.add_argument(
+        "--disable-vidaio-compression",
+        action="store_false",
+        dest="vidaio_compression_enabled",
+        help="Skip Vidaio compression and use local ffmpeg compression directly.",
     )
     parser.add_argument(
         "--vidaio-api-base-url",
         type=str,
-        default=os.getenv("VIDAIO_API_BASE_URL", DEFAULT_VIDAIO_API_BASE_URL),
-        help="Optional Vidaio compression API base URL.",
+        default=DEFAULT_VIDAIO_API_BASE_URL,
+        help="Vidaio compression API base URL.",
     )
     parser.add_argument(
         "--vidaio-timeout-seconds",
         type=float,
-        default=DEFAULT_VIDAIO_TIMEOUT_SECONDS,
+        default=env_float("VIDAIO_TIMEOUT_SECONDS", DEFAULT_VIDAIO_TIMEOUT_SECONDS),
         help="Vidaio compression timeout in seconds.",
+    )
+    parser.add_argument(
+        "--vidaio-poll-interval-seconds",
+        type=float,
+        default=env_float(
+            "VIDAIO_POLL_INTERVAL_SECONDS", DEFAULT_VIDAIO_POLL_INTERVAL_SECONDS
+        ),
+        help="Seconds between Vidaio workflow status reads.",
     )
     parser.add_argument(
         "--video-availability-cache-path",

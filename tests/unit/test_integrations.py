@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+import requests
 from minio.error import S3Error
 
 from chronoseek.hippius.s3 import (
@@ -10,8 +11,13 @@ from chronoseek.hippius.s3 import (
     HippiusS3StorageClient,
     parse_hippius_s3_url,
 )
-from chronoseek.validator.compression import CompositeCompressor, CompressionResult
-from chronoseek.video.vidaio import VidaioCompressor
+
+from chronoseek.validator.compression import (
+    CompositeCompressor,
+    CompressionResult,
+    CompressionUnavailable,
+)
+from chronoseek.video.vidaio import StorageBackedVidaioCompressor, VidaioCompressor
 
 
 def test_hippius_storage_public_url_and_config_validation():
@@ -269,42 +275,289 @@ def test_hippius_storage_accepts_existing_public_bucket_policy(monkeypatch):
     }
 
 
-def test_vidaio_compressor_writes_video_response(monkeypatch, tmp_path):
-    input_path = tmp_path / "input.mp4"
+def test_vidaio_compressor_runs_public_workflow(monkeypatch, tmp_path):
     output_path = tmp_path / "output.mp4"
-    input_path.write_bytes(b"raw-video")
-    captured = {}
+    calls = []
 
     class FakeResponse:
-        headers = {"Content-Type": "video/mp4"}
-        content = b"compressed-video"
+        def __init__(self, payload=None, content=b""):
+            self._payload = payload or {}
+            self.content = content
 
         def raise_for_status(self):
             return None
 
-    def fake_post(url, *, headers, files, timeout):
-        captured["url"] = url
-        captured["headers"] = headers
-        captured["timeout"] = timeout
-        captured["filename"] = files["file"][0]
-        return FakeResponse()
+        def json(self):
+            return self._payload
 
-    monkeypatch.setattr("chronoseek.video.vidaio.requests.post", fake_post)
+    def fake_post(url, *, headers, json, timeout):
+        calls.append(("POST", url, headers, json, timeout))
+        return FakeResponse(
+            {
+                "operation": "compression",
+                "task_id": "task-123",
+                "status": "queued",
+                "message": "queued",
+            }
+        )
+
+    def fake_get(url, *, headers=None, timeout):
+        calls.append(("GET", url, headers, timeout))
+        if url.endswith("/compression/task-123"):
+            return FakeResponse(
+                {
+                    "operation": "compression",
+                    "task_id": "task-123",
+                    "status": "completed",
+                }
+            )
+        if url.endswith("/compression/task-123/result"):
+            return FakeResponse(
+                {
+                    "task_id": "task-123",
+                    "download_url": "https://storage.example/output.mp4",
+                }
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.post", fake_post)
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.get", fake_get)
 
     result = VidaioCompressor(
-        api_base_url="https://vidaio.example/api",
+        api_base_url="https://api.vidaio.io",
         api_key="token",
         timeout_seconds=12,
+        poll_interval_seconds=0.25,
+    ).compress_url(
+        video_url="https://public.example/input.mp4",
+        output_path=str(output_path),
+    )
+
+    assert result.backend == "vidaio"
+    assert result.path == ""
+    assert result.public_url == "https://storage.example/output.mp4"
+    assert calls[0] == (
+        "POST",
+        "https://api.vidaio.io/compression",
+        {"X-API-Key": "token"},
+        {
+            "video_url": "https://public.example/input.mp4",
+            "compression_type": "High",
+            "tier": "Standard",
+        },
+        12.0,
+    )
+    assert not output_path.exists()
+
+
+def test_vidaio_compressor_reports_http_response_code(monkeypatch, tmp_path):
+    class FakeResponse:
+        status_code = 402
+
+        def raise_for_status(self):
+            raise requests.HTTPError("402 Payment Required")
+
+        def json(self):
+            return {"detail": "payment required"}
+
+    def fake_post(url, *, headers, json, timeout):
+        return FakeResponse()
+
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.post", fake_post)
+
+    with pytest.raises(CompressionUnavailable) as exc_info:
+        VidaioCompressor(
+            api_base_url="https://api.vidaio.io",
+            api_key="token",
+            timeout_seconds=12,
+        ).compress_url(
+            video_url="https://public.example/input.mp4",
+            output_path=str(tmp_path / "output.mp4"),
+        )
+
+    assert "HTTP 402" in str(exc_info.value)
+    assert "detail=payment required" in str(exc_info.value)
+
+
+def test_vidaio_compressor_backs_off_on_status_rate_limit(monkeypatch, tmp_path):
+    sleeps = []
+    now = [100.0]
+
+    class FakeResponse:
+        def __init__(self, payload=None, *, status_code=200, headers=None):
+            self._payload = payload or {}
+            self.status_code = status_code
+            self.headers = headers or {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(str(self.status_code))
+
+        def json(self):
+            return self._payload
+
+    status_calls = []
+
+    def fake_monotonic():
+        return now[0]
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    def fake_post(url, *, headers, json, timeout):
+        return FakeResponse(
+            {
+                "operation": "compression",
+                "task_id": "task-123",
+                "status": "queued",
+                "message": "queued",
+            }
+        )
+
+    def fake_get(url, *, headers=None, timeout=None):
+        if url.endswith("/compression/task-123"):
+            status_calls.append(url)
+            if len(status_calls) == 1:
+                return FakeResponse(
+                    {"detail": "Rate limit exceeded"},
+                    status_code=429,
+                    headers={"Retry-After": "1"},
+                )
+            return FakeResponse(
+                {
+                    "operation": "compression",
+                    "task_id": "task-123",
+                    "status": "completed",
+                }
+            )
+        if url.endswith("/compression/task-123/result"):
+            return FakeResponse(
+                {
+                    "task_id": "task-123",
+                    "download_url": "https://storage.example/output.mp4",
+                }
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr("chronoseek.video.vidaio_client.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("chronoseek.video.vidaio_client.time.sleep", fake_sleep)
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.post", fake_post)
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.get", fake_get)
+
+    result = VidaioCompressor(
+        api_base_url="https://api.vidaio.io",
+        api_key="token",
+        timeout_seconds=30,
+        poll_interval_seconds=0.25,
+    ).compress_url(
+        video_url="https://public.example/input.mp4",
+        output_path=str(tmp_path / "output.mp4"),
+    )
+
+    assert result.public_url == "https://storage.example/output.mp4"
+    assert len(status_calls) == 2
+    assert sleeps == [0.25, 1.0]
+
+
+def test_vidaio_compressor_includes_failure_status(monkeypatch, tmp_path):
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, *, headers, json, timeout):
+        return FakeResponse(
+            {
+                "operation": "compression",
+                "task_id": "task-123",
+                "status": "queued",
+                "message": "queued",
+            }
+        )
+
+    def fake_get(url, *, headers=None, timeout):
+        return FakeResponse(
+            {
+                "operation": "compression",
+                "task_id": "task-123",
+                "status": "failed",
+                "message": "source video could not be downloaded",
+            }
+        )
+
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.post", fake_post)
+    monkeypatch.setattr("chronoseek.video.vidaio_client.requests.get", fake_get)
+
+    with pytest.raises(CompressionUnavailable) as exc_info:
+        VidaioCompressor(
+            api_base_url="https://api.vidaio.io",
+            api_key="token",
+            timeout_seconds=12,
+            poll_interval_seconds=0.25,
+        ).compress_url(
+            video_url="https://public.example/input.mp4",
+            output_path=str(tmp_path / "output.mp4"),
+        )
+
+    assert "task_id=task-123" in str(exc_info.value)
+    assert "status=failed" in str(exc_info.value)
+    assert "source video could not be downloaded" in str(exc_info.value)
+
+
+def test_storage_backed_vidaio_compressor_uploads_temp_source(monkeypatch, tmp_path):
+    input_path = tmp_path / "input.mp4"
+    output_path = tmp_path / "output.mp4"
+    input_path.write_bytes(b"raw-video")
+
+    class FakeStorage:
+        def __init__(self):
+            self.uploaded = []
+            self.deleted = []
+
+        def upload_file(self, *, local_path: str, object_key: str, content_type: str):
+            self.uploaded.append((local_path, object_key, content_type))
+            return f"https://public.example/{object_key}"
+
+        def delete_object(self, object_key: str):
+            self.deleted.append(object_key)
+
+    captured = {}
+
+    def fake_compress_url(self, *, video_url: str, output_path: str):
+        captured["video_url"] = video_url
+        return CompressionResult(
+            path="",
+            profile_name=self.encoding_profile.name,
+            backend="vidaio",
+            public_url="https://storage.example/compressed.mp4",
+        )
+
+    monkeypatch.setattr(VidaioCompressor, "compress_url", fake_compress_url)
+    storage = FakeStorage()
+
+    result = StorageBackedVidaioCompressor(
+        vidaio_compressor=VidaioCompressor(
+            api_base_url="https://api.vidaio.io",
+            api_key=None,
+            timeout_seconds=12,
+        ),
+        storage=storage,
+        artifact_prefix="task-clips/vidaio-inputs",
     ).compress(input_path=str(input_path), output_path=str(output_path))
 
-    assert output_path.read_bytes() == b"compressed-video"
     assert result.backend == "vidaio"
-    assert captured == {
-        "url": "https://vidaio.example/api/compress",
-        "headers": {"Authorization": "Bearer token"},
-        "timeout": 12.0,
-        "filename": "task.mp4",
-    }
+    assert result.public_url == "https://storage.example/compressed.mp4"
+    assert not output_path.exists()
+    assert storage.uploaded[0][0] == str(input_path)
+    assert storage.uploaded[0][1].startswith("task-clips/vidaio-inputs/")
+    assert storage.deleted == [storage.uploaded[0][1]]
+    assert captured["video_url"].startswith("https://public.example/task-clips/vidaio-inputs/")
 
 
 def test_composite_compressor_falls_back_to_local_compressor(tmp_path):
