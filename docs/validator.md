@@ -46,7 +46,8 @@ Hardened task generation:
 | `VALIDATOR_TASK_SECRET` or `--validator-task-secret` | Normal validator operation | Set a long random secret. Used for private deterministic sampling. |
 | `HIPPIUS_S3_ACCESS_KEY_ID` | Normal validator operation | Hippius S3 access key ID. |
 | `HIPPIUS_S3_SECRET_ACCESS_KEY` | Normal validator operation | Hippius S3 secret key. |
-| `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, bucket, or region constants when a deployment uses different Hippius-compatible storage. |
+| `HIPPIUS_S3_BUCKET` or `--hippius-s3-bucket` | Normal validator operation | Defaults to `chronoseek`, but that name may already be owned by another operator. Set this to a bucket your Hippius credentials own or can create — startup calls `set_bucket_policy` on it and fails with `AccessDenied` otherwise. |
+| `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, or region constants when a deployment uses different Hippius-compatible storage. |
 
 Vidaio compression:
 

@@ -995,8 +995,8 @@ def get_config():
     parser.add_argument(
         "--hippius-s3-bucket",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_BUCKET,
-        help="Hippius S3 bucket for validator task clips.",
+        default=os.getenv("HIPPIUS_S3_BUCKET", DEFAULT_HIPPIUS_S3_BUCKET),
+        help="Hippius S3 bucket for validator task clips. Defaults to HIPPIUS_S3_BUCKET.",
     )
     parser.add_argument(
         "--hippius-s3-region",

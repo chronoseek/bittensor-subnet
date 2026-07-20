@@ -2,7 +2,7 @@
 name = "chronoseek-subnet"
 version = "2.0.0"
 description = "ChronoSeek (Semantic Video Moment Retrieval) on Bittensor"
-authors = ["CreativeEssence <connor@chronoseek.org"]
+authors = ["CreativeEssence <connor@chronoseek.org>"]
 readme = "README.md"
 packages = [
     { include = "chronoseek" }
