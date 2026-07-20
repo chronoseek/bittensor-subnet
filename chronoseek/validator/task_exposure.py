@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
-import bittensor as bt
-
+from chronoseek.logging import logger
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
 
 
@@ -44,7 +43,7 @@ class ActiveTaskExposureGuard:
             )
             if count < int(limit):
                 continue
-            bt.logging.debug(
+            logger.debug(
                 "Skipping hardened task candidate due to exposure limit | "
                 f"field={field_name} | value={value} | count={count} | limit={limit}"
             )

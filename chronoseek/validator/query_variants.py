@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import bittensor as bt
+from chronoseek.logging import logger
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class QueryVariantSelector:
         self._variants: dict[str, list[str]] = {}
         if self.path:
             self._variants = self._load_manifest(self.path)
-            bt.logging.info(
+            logger.info(
                 f"Loaded {sum(len(v) for v in self._variants.values())} private query variants from {self.path}."
             )
 
@@ -109,7 +109,7 @@ class QueryVariantSelector:
         if not candidates:
             candidates = self._fallback_variants(caption)
             source = "fallback"
-            bt.logging.warning(
+            logger.warning(
                 "No private query variant was found for sampled ActivityNet caption; using deterministic fallback wording."
             )
 

@@ -14,6 +14,7 @@ from chronoseek.protocol_models import (
     VideoSearchRequest,
     VideoSearchResponse,
 )
+from chronoseek.logging import logger
 from chronoseek.scoring import LatencyScoringConfig, score_response
 from chronoseek.epistula import generate_header
 from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
@@ -76,7 +77,7 @@ async def query_miner(
         )
         resp.raise_for_status()
         latency = time.time() - start_time
-        bt.logging.info(f"Query miner {uid} ({hotkey}, {endpoint}) response: {resp.json()}")
+        logger.info(f"Query miner {uid} ({hotkey}, {endpoint}) response: {resp.json()}")
         return MinerQueryResult(
             response=VideoSearchResponse(**resp.json()), latency=latency
         )
@@ -94,7 +95,7 @@ async def query_miner(
         except (ValueError, json.JSONDecodeError, TypeError):
             pass
 
-        bt.logging.warning(
+        logger.warning(
             f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
@@ -104,7 +105,7 @@ async def query_miner(
         )
     except httpx.TimeoutException as exc:
         failure = MinerQueryFailure(kind="timeout", message=str(exc))
-        bt.logging.warning(
+        logger.warning(
             f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
@@ -114,7 +115,7 @@ async def query_miner(
         )
     except httpx.ConnectError as exc:
         failure = MinerQueryFailure(kind="connect_error", message=str(exc))
-        bt.logging.warning(
+        logger.warning(
             f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
@@ -124,7 +125,7 @@ async def query_miner(
         )
     except Exception as exc:
         failure = MinerQueryFailure(kind="unexpected_error", message=str(exc))
-        bt.logging.warning(
+        logger.warning(
             f"Failed to query miner {uid} ({hotkey}, {endpoint}): {failure.message}"
         )
         return MinerQueryResult(
@@ -155,7 +156,7 @@ async def query_uid(
 ) -> Tuple[int, float]:
     async with semaphore:
         uid = miner_endpoint.uid
-        bt.logging.debug(
+        logger.debug(
             f"Querying miner {uid} runtime from chain submission at {miner_endpoint.endpoint}..."
         )
         result = await query_miner(
@@ -193,7 +194,7 @@ async def query_uid(
                             hard_negative_count=hard_negative_count,
                         )
                     )
-                bt.logging.success(
+                logger.success(
                     f"[UID {uid}] Empty canary response accepted | "
                     f"Request: {request_model.request_id} | "
                     f"Latency: {latency:.2f}s | Score: {score:.4f}"
@@ -210,7 +211,7 @@ async def query_uid(
                 if result.failure.message:
                     parts.append(result.failure.message)
                 failure_suffix = " | Failure: " + " | ".join(parts)
-            bt.logging.warning(
+            logger.warning(
                 f"[UID {uid}] No results | Request: {request_model.request_id} | Latency: {latency:.2f}s | Score: 0.0000{failure_suffix}"
             )
             if telemetry_recorder is not None:
@@ -266,7 +267,7 @@ async def query_uid(
                     top_end=float(result.end),
                 )
             )
-        bt.logging.success(
+        logger.success(
             f"[UID {uid}] Request: {request_model.request_id} | Score: {score:.4f} | Latency: {latency:.2f}s | Result: {res_str}"
         )
         return int(uid), score
@@ -295,25 +296,25 @@ async def run_step(
     """
 
     # 1. Generate Task
-    bt.logging.info("=" * 50)
-    bt.logging.info(f"STARTING VALIDATION STEP")
-    bt.logging.info("=" * 50)
+    logger.info("=" * 50)
+    logger.info(f"STARTING VALIDATION STEP")
+    logger.info("=" * 50)
 
-    bt.logging.info(">>> Phase 1: Task Generation (ActivityNet)")
+    logger.info(">>> Phase 1: Task Generation (ActivityNet)")
     try:
         normalized_task = normalize_generated_task(
             task_gen.generate_task(),
             default_top_k=validator_eval_top_k,
         )
     except RuntimeError as exc:
-        bt.logging.warning(
+        logger.warning(
             f"Task generation could not find an accessible video: {exc}. Refreshing video availability checks and retrying."
         )
         refreshed_entries = 0
         refresh_lookup = getattr(task_gen, "refresh_video_lookup", None)
         if callable(refresh_lookup):
             refreshed_entries = int(refresh_lookup())
-            bt.logging.info(
+            logger.info(
                 f"Refreshed {refreshed_entries} cached unavailable video availability entries."
             )
         try:
@@ -322,10 +323,10 @@ async def run_step(
                 default_top_k=validator_eval_top_k,
             )
         except RuntimeError as retry_exc:
-            bt.logging.warning(
+            logger.warning(
                 f"Skipping validation step because no accessible validator task was found after retry: {retry_exc}"
             )
-            bt.logging.info("=" * 50)
+            logger.info("=" * 50)
             return []
     request_id = normalized_task.request_id or f"validation-{uuid4()}"
     video_url = normalized_task.video_url
@@ -335,19 +336,19 @@ async def run_step(
     artifact_host = urlparse(video_url).netloc or "unknown"
     task_family = normalized_task.task_family or "legacy-activitynet"
 
-    bt.logging.info("-" * 40)
-    bt.logging.info(f"Request ID:  {request_id}")
-    bt.logging.info(f"Task ID:     {normalized_task.task_id or 'legacy-task'}")
-    bt.logging.info(f"Artifact Host: {artifact_host}")
-    bt.logging.info(f"Query Variant: {normalized_task.query_variant_id or 'legacy-query'}")
+    logger.info("-" * 40)
+    logger.info(f"Request ID:  {request_id}")
+    logger.info(f"Task ID:     {normalized_task.task_id or 'legacy-task'}")
+    logger.info(f"Artifact Host: {artifact_host}")
+    logger.info(f"Query Variant: {normalized_task.query_variant_id or 'legacy-query'}")
     if normalized_task.canary_kind:
-        bt.logging.info(
+        logger.info(
             f"Canary: {normalized_task.canary_kind} | "
             f"expects_empty={normalized_task.expects_empty_response}"
         )
-    bt.logging.info(f"Clip Duration: {clip_duration if clip_duration is not None else 'unknown'}")
-    bt.logging.info(f"Ground Truth Count: {len(ground_truths)}")
-    bt.logging.info("-" * 40)
+    logger.info(f"Clip Duration: {clip_duration if clip_duration is not None else 'unknown'}")
+    logger.info(f"Ground Truth Count: {len(ground_truths)}")
+    logger.info("-" * 40)
 
     request_model = VideoSearchRequest(
         request_id=request_id,
@@ -359,7 +360,7 @@ async def run_step(
     scores = []
 
     miner_endpoints = list(miner_endpoints or [])
-    bt.logging.info(
+    logger.info(
         "\n>>> Phase 2: Querying Miners "
         f"({len(metagraph.uids)} total | selected={len(miner_endpoints)} | "
         f"routing=chain+chutes)"
@@ -392,11 +393,11 @@ async def run_step(
         )
 
     if not tasks:
-        bt.logging.warning("No eligible miners were selected for this validation step.")
-        bt.logging.info("=" * 50)
+        logger.warning("No eligible miners were selected for this validation step.")
+        logger.info("=" * 50)
         return []
 
     scores.extend(await asyncio.gather(*tasks))
 
-    bt.logging.info("=" * 50)
+    logger.info("=" * 50)
     return scores

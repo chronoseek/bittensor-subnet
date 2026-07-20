@@ -5,7 +5,6 @@ import shutil
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-import bittensor as bt
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urlparse
@@ -20,6 +19,7 @@ from chronoseek.hippius.s3 import (
     download_public_file,
     parse_hippius_s3_url,
 )
+from chronoseek.logging import logger
 
 
 @dataclass
@@ -316,7 +316,7 @@ class VideoDownloader:
             if os.path.isfile(path):
                 opts["cookiefile"] = path
             else:
-                bt.logging.warning(
+                logger.warning(
                     f"{cls._ENV_YTDLP_COOKIES_FILE} is set but not a readable file: {path}"
                 )
         browser = cls._env_value(
@@ -404,7 +404,7 @@ class VideoDownloader:
             err_text = str(exc)
             if cls._is_youtube_bot_or_signin_error(err_text):
                 if not cookie_opts:
-                    bt.logging.error(
+                    logger.error(
                         "YouTube blocked this download (bot check). Export cookies from a "
                         "logged-in browser and set "
                         f"{cls._ENV_YTDLP_COOKIES_FILE} to the cookies.txt path, or set "
@@ -413,7 +413,7 @@ class VideoDownloader:
                         "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
                     )
                 else:
-                    bt.logging.error(
+                    logger.error(
                         "YouTube still blocked this download after applying cookies "
                         f"({cls._ENV_YTDLP_COOKIES_FILE} / "
                         f"{cls._ENV_YTDLP_COOKIES_BROWSER}). Re-export a fresh cookies.txt "
@@ -445,7 +445,7 @@ class VideoDownloader:
                 elif os.path.exists(cleanup_path):
                     os.remove(cleanup_path)
             except Exception as exc:
-                bt.logging.warning(
+                logger.warning(
                     f"Failed to clean up downloaded video artifact {cleanup_path}: {exc}"
                 )
 
@@ -462,13 +462,13 @@ class VideoDownloader:
         """
         attempts = VideoDownloader._download_attempts(url)
         if len(attempts) == 1:
-            bt.logging.info(f"Downloader strategy: {attempts[0][0]} only.")
+            logger.info(f"Downloader strategy: {attempts[0][0]} only.")
         elif attempts[0][0] == "hippius-s3":
-            bt.logging.info("Downloader strategy: Hippius S3 first, HTTP fallback.")
+            logger.info("Downloader strategy: Hippius S3 first, HTTP fallback.")
         elif attempts[0][0] == "yt-dlp":
-            bt.logging.info("Downloader strategy: yt-dlp first, HTTP fallback.")
+            logger.info("Downloader strategy: yt-dlp first, HTTP fallback.")
         else:
-            bt.logging.info("Downloader strategy: HTTP first, yt-dlp fallback.")
+            logger.info("Downloader strategy: HTTP first, yt-dlp fallback.")
 
         failures: list[DownloadAttemptFailure] = []
         for method_name, downloader in attempts:
@@ -482,7 +482,7 @@ class VideoDownloader:
                         "downloaded file is not a video container (often HTML from a watch page)"
                     )
 
-                bt.logging.info(f"Video download succeeded via {method_name}.")
+                logger.info(f"Video download succeeded via {method_name}.")
                 return downloaded_video
             except Exception as e:
                 failures.append(
@@ -491,14 +491,14 @@ class VideoDownloader:
                         message=str(e),
                     )
                 )
-                bt.logging.warning(
+                logger.warning(
                     f"Video download attempt via {method_name} failed: {e}"
                 )
                 VideoDownloader.cleanup(downloaded_video)
 
         if failures:
             error = VideoDownloadError(url=url, failures=failures)
-            bt.logging.error(f"Failed to download video: {error}")
+            logger.error(f"Failed to download video: {error}")
             if raise_on_failure:
                 raise error
         return None

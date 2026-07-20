@@ -1,7 +1,8 @@
 import cv2
 from PIL import Image
 from typing import List, Sequence, Tuple
-import bittensor as bt
+
+from chronoseek.logging import logger
 
 
 class FrameExtractor:
@@ -22,12 +23,12 @@ class FrameExtractor:
             cap = cv2.VideoCapture(video_path)
 
             if not cap.isOpened():
-                bt.logging.warning(f"Could not open video: {video_path}")
+                logger.warning(f"Could not open video: {video_path}")
                 return []
 
             video_fps = cap.get(cv2.CAP_PROP_FPS)
             if video_fps <= 0:
-                bt.logging.warning(f"Invalid FPS in video: {video_path}")
+                logger.warning(f"Invalid FPS in video: {video_path}")
                 return []
 
             frame_interval = int(video_fps / fps)
@@ -54,7 +55,7 @@ class FrameExtractor:
             return frames
 
         except Exception as e:
-            bt.logging.error(f"Error extracting frames: {e}")
+            logger.error(f"Error extracting frames: {e}")
             return []
 
     @staticmethod
@@ -94,12 +95,12 @@ class FrameExtractor:
         try:
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
-                bt.logging.warning(f"Could not open video: {video_path}")
+                logger.warning(f"Could not open video: {video_path}")
                 return []
 
             video_fps = cap.get(cv2.CAP_PROP_FPS)
             if video_fps <= 0:
-                bt.logging.warning(f"Invalid FPS in video: {video_path}")
+                logger.warning(f"Invalid FPS in video: {video_path}")
                 cap.release()
                 return []
 
@@ -131,5 +132,5 @@ class FrameExtractor:
             cap.release()
             return frames
         except Exception as e:
-            bt.logging.error(f"Error extracting frames in windows: {e}")
+            logger.error(f"Error extracting frames in windows: {e}")
             return []

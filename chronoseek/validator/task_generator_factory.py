@@ -2,10 +2,9 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-import bittensor as bt
-
 from chronoseek.constants import DEFAULT_VIDAIO_COMPRESSION_ENABLED
 from chronoseek.hippius.s3 import HippiusS3Config, HippiusS3StorageClient
+from chronoseek.logging import logger
 from chronoseek.validator import task_gen as task_gen_module
 from chronoseek.validator.artifact_manifest import TaskArtifactManifest
 from chronoseek.validator.clipper import FfmpegClipper
@@ -89,7 +88,7 @@ def _storage(config: Any) -> HippiusS3StorageClient:
         timeout_seconds=config.hippius_s3_timeout_seconds,
     )
     storage.ensure_bucket_public()
-    bt.logging.info(
+    logger.info(
         f"Hippius task bucket ready and public-readable | bucket={config.hippius_s3_bucket}"
     )
     return storage
@@ -145,7 +144,7 @@ def build_validator_task_generator(
         max_sampling_attempts=config.task_max_sampling_attempts,
     )
     if not get_config_bool(config, "enable_hardened_tasks", False):
-        bt.logging.info("Validator task generation configured | mode=legacy-activitynet")
+        logger.info("Validator task generation configured | mode=legacy-activitynet")
         return source_task_generator
 
     task_secret = str(config.validator_task_secret or "").strip()
@@ -190,5 +189,5 @@ def build_validator_task_generator(
         config=_hardened_config(config),
     )
     generator.cleanup_expired(force=True)
-    bt.logging.info("Validator task generation configured | mode=hardened-activitynet")
+    logger.info("Validator task generation configured | mode=hardened-activitynet")
     return generator

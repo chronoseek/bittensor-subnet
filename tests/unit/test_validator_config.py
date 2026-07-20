@@ -5,6 +5,26 @@ from unittest.mock import patch
 from validator import get_config
 
 
+def test_validator_submission_enforcement_defaults_to_enabled():
+    with patch.dict(os.environ, {}, clear=True):
+        with patch.object(sys, "argv", ["validator.py"]):
+            config = get_config()
+
+    assert config.enforce_one_hotkey_one_submission is True
+
+
+def test_validator_submission_enforcement_can_be_disabled_by_environment():
+    with patch.dict(
+        os.environ,
+        {"ENFORCE_ONE_HOTKEY_ONE_SUBMISSION": "false"},
+        clear=True,
+    ):
+        with patch.object(sys, "argv", ["validator.py"]):
+            config = get_config()
+
+    assert config.enforce_one_hotkey_one_submission is False
+
+
 def test_validator_vidaio_defaults_to_public_api():
     with patch.dict(os.environ, {}, clear=True):
         with patch.object(sys, "argv", ["validator.py"]):

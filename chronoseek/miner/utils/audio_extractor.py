@@ -5,7 +5,7 @@ import tempfile
 import wave
 from dataclasses import dataclass
 
-import bittensor as bt
+from chronoseek.logging import logger
 
 
 @dataclass
@@ -24,7 +24,7 @@ class AudioExtractor:
     def extract_audio(video_path: str, timeout: int = 60) -> ExtractedAudio | None:
         ffmpeg_path = shutil.which("ffmpeg")
         if not ffmpeg_path:
-            bt.logging.warning("ffmpeg is not available. Skipping audio extraction.")
+            logger.warning("ffmpeg is not available. Skipping audio extraction.")
             return None
 
         fd, output_path = tempfile.mkstemp(prefix="chronoseek-audio-", suffix=".wav")
@@ -56,7 +56,7 @@ class AudioExtractor:
             )
             if completed.returncode != 0:
                 stderr = (completed.stderr or "").strip()
-                bt.logging.warning(
+                logger.warning(
                     f"Audio extraction failed or no audio track was present: {stderr or 'ffmpeg returned non-zero exit status.'}"
                 )
                 AudioExtractor.cleanup(
@@ -70,7 +70,7 @@ class AudioExtractor:
 
             duration_sec = AudioExtractor._get_wav_duration(output_path)
             if duration_sec <= 0:
-                bt.logging.warning(
+                logger.warning(
                     "Audio extraction produced an empty or unreadable WAV file."
                 )
                 AudioExtractor.cleanup(
@@ -88,7 +88,7 @@ class AudioExtractor:
                 cleanup_paths=cleanup_paths,
             )
         except Exception as exc:
-            bt.logging.warning(f"Audio extraction failed: {exc}")
+            logger.warning(f"Audio extraction failed: {exc}")
             AudioExtractor.cleanup(
                 ExtractedAudio(
                     path=output_path,
@@ -120,6 +120,6 @@ class AudioExtractor:
                 if os.path.exists(cleanup_path):
                     os.remove(cleanup_path)
             except Exception as exc:
-                bt.logging.warning(
+                logger.warning(
                     f"Failed to clean up extracted audio artifact {cleanup_path}: {exc}"
                 )
