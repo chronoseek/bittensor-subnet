@@ -351,7 +351,12 @@ class VideoDownloader:
         runtimes["deno"] = (
             {"path": os.path.expanduser(deno_path)} if deno_path else {}
         )
-        return {"js_runtimes": runtimes}
+        # A configured runtime still can't solve YouTube's n/sig challenge
+        # without this: the solver's deno/node lib script is fetched from npm
+        # at runtime, and yt-dlp refuses to fetch remote code unless this is
+        # explicitly allowed. Without it, the runtime silently reports as
+        # unavailable even when the binary itself works.
+        return {"js_runtimes": runtimes, "remote_components": ["ejs:npm"]}
 
     @staticmethod
     def _is_youtube_bot_or_signin_error(message: str) -> bool:
@@ -384,11 +389,14 @@ class VideoDownloader:
             "no_warnings": True,
             "socket_timeout": timeout,
             "retries": 3,
-            # Prefer mobile/web clients first; many videos work without cookies; bot-checked
-            # IDs still need YTDLP_COOKIES or YTDLP_COOKIES_BROWSER.
+            # "tv" is the only client here confirmed to both accept cookies
+            # and avoid YouTube's SABR-only stream forcing (the "web" client
+            # hits SABR and returns zero usable formats once cookies force
+            # android/ios/android_vr to be skipped as cookie-incompatible).
+            # Keep the others as fallback for cookie-less/local testing.
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web", "ios"],
+                    "player_client": ["tv", "android", "web", "ios"],
                 },
             },
             **js_opts,

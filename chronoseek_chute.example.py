@@ -209,7 +209,12 @@ chute = Chute(
     concurrency=5,
     max_instances=3,
     scaling_threshold=0.5,
-    shutdown_after_seconds=300,
+    # Raised from the SDK default (300s) to reduce how often a scheduled
+    # instance shuts down from idling between validator health checks. This
+    # only helps keep an already-scheduled instance alive longer; it has no
+    # effect on how often the Chutes marketplace grants an instance in the
+    # first place, and idle GPU time is billed against the deploying account.
+    shutdown_after_seconds=86400,
     revision=RUNTIME_REVISION,
     # The runtime must fetch arbitrary validator task videos.
     allow_external_egress=True,
