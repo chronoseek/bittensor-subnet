@@ -141,7 +141,14 @@ def test_resolve_axon_endpoint_returns_none_when_unserved():
 
 
 def test_resolve_axon_endpoint_returns_ip_port_when_served():
-    assert resolve_axon_endpoint(SimpleNamespace(axon="1.2.3.4:9000")) == "1.2.3.4:9000"
+    assert resolve_axon_endpoint(SimpleNamespace(axon="1.2.3.4:9000")) == "http://1.2.3.4:9000"
+
+
+def test_resolve_axon_endpoint_does_not_double_prefix_existing_scheme():
+    assert (
+        resolve_axon_endpoint(SimpleNamespace(axon="https://1.2.3.4:9000"))
+        == "https://1.2.3.4:9000"
+    )
 
 
 def test_endpoint_map_with_axon_fallback_prefers_chutes_when_both_exist():
@@ -166,7 +173,7 @@ def test_endpoint_map_with_axon_fallback_uses_axon_when_no_commitment():
         chutes_base_domain="chutes.ai",
     )
 
-    assert endpoint_map == {1: "9.9.9.9:9000"}
+    assert endpoint_map == {1: "http://9.9.9.9:9000"}
     assert sources == {1: "axon"}
 
 
@@ -182,7 +189,7 @@ def test_endpoint_map_with_axon_fallback_treats_chute_id_only_as_no_endpoint():
         chutes_base_domain="chutes.ai",
     )
 
-    assert endpoint_map == {1: "9.9.9.9:9000"}
+    assert endpoint_map == {1: "http://9.9.9.9:9000"}
     assert sources == {1: "axon"}
 
 

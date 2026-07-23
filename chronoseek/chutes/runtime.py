@@ -143,17 +143,25 @@ def build_submission_endpoint_map(
 
 
 def resolve_axon_endpoint(neuron: Any) -> str | None:
-    """Return `ip:port` for a neuron's served axon, or None if unserved.
+    """Return a fully-qualified base URL for a neuron's served axon, or None.
 
     Bittensor 11's `MetagraphNeuron.axon` is already the served `ip:port`
     string, or None when nothing is served (no separate AxonInfo object).
+    A scheme is required here: unlike forward.py's query path (which
+    normalizes bare `ip:port` via `_normalize_endpoint`), this module's own
+    `check_runtime_health()` builds the health-check URL directly and does
+    not normalize it, so an unqualified `ip:port` fails outright with
+    httpx.UnsupportedProtocol.
     """
     if neuron is None:
         return None
     axon = getattr(neuron, "axon", None)
     if not axon:
         return None
-    return str(axon).strip() or None
+    axon = str(axon).strip()
+    if not axon:
+        return None
+    return axon if axon.startswith(("http://", "https://")) else f"http://{axon}"
 
 
 def build_endpoint_map_with_axon_fallback(

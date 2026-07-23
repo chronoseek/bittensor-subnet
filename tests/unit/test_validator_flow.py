@@ -486,11 +486,11 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(responsive_uids, {1})
-        self.assertEqual(runtime.miner_endpoints, {1: "9.9.9.9:9000"})
+        self.assertEqual(runtime.miner_endpoints, {1: "http://9.9.9.9:9000"})
         self.assertEqual(runtime.miner_endpoint_sources, {1: "axon"})
         self.assertEqual(
             client.get.call_args.args[0],
-            "9.9.9.9:9000/health",
+            "http://9.9.9.9:9000/health",
         )
 
     @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
