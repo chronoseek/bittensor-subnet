@@ -125,7 +125,8 @@ image = (
         "chmod -R a+rwx /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data"
     )
     .run_command("pip install --upgrade pip")
-    .run_command(f"pip install '{CHRONOSEEK_PACKAGE}'")
+    .run_command("pip install 'torch==2.11.0' --torch-backend=cu128")
+    .run_command(f"pip install '{CHRONOSEEK_PACKAGE}' --torch-backend=cu128")
     # Chutes later adds the `chutes` user to group root, then runs another
     # package install as that user. Make root-installed packages group-writable
     # so that finalization can update shared dependencies such as uvicorn.

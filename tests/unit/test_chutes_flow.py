@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import chronoseek.chutes.deployment as chutes_deployment
@@ -67,6 +68,18 @@ class DummyChutesImage:
 
 class DummyChutesChute:
     image = DummyChutesImage()
+
+
+def test_production_chute_pins_cuda_12_8_torch_build():
+    template = (
+        Path(__file__).resolve().parents[2] / "chronoseek_chute.example.py"
+    ).read_text(encoding="utf-8")
+
+    assert "pip install 'torch==2.11.0' --torch-backend=cu128" in template
+    assert (
+        "pip install '{CHRONOSEEK_PACKAGE}' --torch-backend=cu128"
+        in template
+    )
 
 
 def test_metadata_from_chutes_api_response():
