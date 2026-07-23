@@ -14,11 +14,8 @@ local copy must live in the subnet root and is referenced as
 """
 
 import os
-import shutil
 import subprocess
-import sys
 import threading
-from pathlib import Path
 
 from dotenv import load_dotenv
 from chutes.chute import Chute, NodeSelector
@@ -59,41 +56,6 @@ def resolve_image_name(base_name: str, runtime_revision: str) -> str:
     return f"{base_name}-{short_rev}"
 
 
-def repair_cyscale_namespace() -> None:
-    """Prefer vendored cyscale and hide py-scale-codec metadata."""
-
-    if os.getenv("CHUTES_EXECUTION_CONTEXT") != "REMOTE":
-        return
-
-    vendor_dir = Path(CYSCALE_VENDOR_DIR)
-    vendor_resolved = vendor_dir.resolve()
-    if not vendor_dir.exists():
-        return
-    if str(vendor_dir) not in sys.path:
-        sys.path.insert(0, str(vendor_dir))
-
-    candidates = []
-    for raw_path in sys.path:
-        if not raw_path:
-            continue
-        parent = Path(raw_path)
-        candidates.extend(parent.glob("scalecodec*.dist-info"))
-        candidates.extend(parent.glob("scalecodec*.egg-info"))
-        candidates.extend(parent.glob("scalecodec"))
-
-    for path in candidates:
-        try:
-            resolved = path.resolve()
-            if resolved == vendor_resolved or vendor_resolved in resolved.parents:
-                continue
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-            elif path.exists():
-                path.unlink()
-        except Exception:
-            pass
-
-
 # Placeholder required by Chutes SDK object construction. The deploy helper
 # replaces it with the username resolved from CHUTES_API_KEY before build/deploy.
 CHUTES_USERNAME = "<change-me>"
@@ -112,7 +74,6 @@ PREBUILT_IMAGE_ID = os.getenv("CHUTES_PREBUILT_IMAGE_ID", "").strip()
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 IMAGE_YTDLP_DENO_PATH = DEFAULT_CHUTES_YTDLP_DENO_PATH
-CYSCALE_VENDOR_DIR = "/opt/chronoseek/vendor"
 YTDLP_COOKIES_BROWSER = (
     os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
     or "chrome:Default"
@@ -140,7 +101,6 @@ image = (
     .with_env("HF_HOME", DEFAULT_CHUTES_HF_HOME)
     .with_env("DENO_INSTALL", "/opt/deno")
     .with_env("PATH", "/opt/deno/bin:$PATH")
-    .with_env("PYTHONPATH", f"{CYSCALE_VENDOR_DIR}:$PYTHONPATH")
     .with_env("YTDLP_COOKIES_BROWSER", YTDLP_COOKIES_BROWSER)
     .with_env("YTDLP_DENO_PATH", YTDLP_DENO_PATH)
     .run_command(
@@ -164,17 +124,7 @@ image = (
         f"{DEFAULT_CHUTES_HF_HOME} && "
         "chmod -R a+rwx /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data"
     )
-    .run_command(
-        f"mkdir -p {CYSCALE_VENDOR_DIR} && "
-        f"chmod -R a+rx {CYSCALE_VENDOR_DIR}"
-    )
     .run_command("pip install --upgrade pip")
-    .run_command("pip install --only-binary=:all: 'cyscale>=0.3.3,<1.0.0'")
-    .run_command(
-        "pip install --only-binary=:all: "
-        f"--target {CYSCALE_VENDOR_DIR} 'cyscale>=0.3.3,<1.0.0' && "
-        f"chmod -R a+rX {CYSCALE_VENDOR_DIR}"
-    )
     .run_command(f"pip install '{CHRONOSEEK_PACKAGE}'")
     # Chutes later adds the `chutes` user to group root, then runs another
     # package install as that user. Make root-installed packages group-writable
@@ -240,12 +190,6 @@ async def initialize_chronoseek(self):
     node_path = os.path.expanduser(os.getenv("YTDLP_NODE_PATH", "").strip())
     if node_path and not os.path.exists(node_path):
         os.environ.pop("YTDLP_NODE_PATH", None)
-
-    # Chutes finalization can install substrate-interface, which brings
-    # scalecodec. async-substrate-interface refuses to import while that
-    # distribution is present, so repair the namespace before importing
-    # bittensor through the runtime module.
-    repair_cyscale_namespace()
 
     from chronoseek.miner import runtime as chronoseek_runtime
 

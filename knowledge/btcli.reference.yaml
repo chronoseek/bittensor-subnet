@@ -1,6 +1,6 @@
 # BTCLI Command Reference
 
-installation: "pip install bittensor-cli"
+installation: "pip install bittensor"
 
 global_options:
   network: "--network <finney|test|local|ws://url>"

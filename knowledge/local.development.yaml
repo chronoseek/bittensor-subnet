@@ -17,7 +17,7 @@ prerequisites:
   software: |
     python -m venv .venv
     source .venv/bin/activate
-    pip install bittensor bittensor-wallet bittensor-cli
+    pip install bittensor
 
 starting_subtensor:
   option_1_docker_compose:

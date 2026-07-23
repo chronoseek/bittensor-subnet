@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import bittensor as bt
-from bittensor_drand import get_encrypted_commitment
+from bittensor_core import get_encrypted_commitment
 from pydantic import (
     BaseModel,
     ConfigDict,

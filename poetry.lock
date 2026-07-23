@@ -203,22 +203,6 @@ frozenlist = ">=1.1.0"
 typing-extensions = {version = ">=4.2", markers = "python_version < \"3.13\""}
 
 [[package]]
-name = "aiosqlite"
-version = "0.22.1"
-description = "asyncio bridge to the standard sqlite3 module"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb"},
-    {file = "aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650"},
-]
-
-[package.extras]
-dev = ["attribution (==1.8.0)", "black (==25.11.0)", "build (>=1.2)", "coverage[toml] (==7.10.7)", "flake8 (==7.3.0)", "flake8-bugbear (==24.12.12)", "flit (==3.12.0)", "mypy (==1.19.0)", "ufmt (==2.8.0)", "usort (==1.0.8.post1)"]
-docs = ["sphinx (==8.1.3)", "sphinx-mdinclude (==0.6.2)"]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 description = "Document parameters, class attributes, return types, and variables inline, with Annotated."
@@ -314,27 +298,6 @@ files = [
 
 [package.dependencies]
 cffi = {version = ">=1.0.1", markers = "python_version < \"3.14\""}
-
-[[package]]
-name = "async-substrate-interface"
-version = "2.2.1"
-description = "Asyncio library for interacting with substrate. Mostly API-compatible with py-substrate-interface"
-optional = false
-python-versions = "<3.15,>=3.10"
-groups = ["main"]
-files = [
-    {file = "async_substrate_interface-2.2.1-py3-none-any.whl", hash = "sha256:448a5a9843d2498bb57b28fd91b131cec01d3e8a710886fcec550283a00180cf"},
-    {file = "async_substrate_interface-2.2.1.tar.gz", hash = "sha256:bd5ca091dfbbbb27d0bba6fc0e24aea3ca5a00c7439e23d0bacd0c8270c85ffd"},
-]
-
-[package.dependencies]
-aiosqlite = ">=0.21.0,<1.0.0"
-cyscale = ">=0.3.3,<1.0.0"
-websockets = ">=14.1"
-xxhash = "*"
-
-[package.extras]
-dev = ["bittensor-wallet (>=4.0.0)", "mypy (>=1.20.1)", "pytest (==9.0.3)", "pytest-asyncio (==1.3.0)", "pytest-forked", "pytest-mock (==3.15.1)", "pytest-rerunfailures (==16.1)", "pytest-split (==0.11.0)", "pytest-xdist (==3.8.0)", "ruff (==0.15.12)"]
 
 [[package]]
 name = "attrs"
@@ -637,33 +600,6 @@ typer = ">=0.12.0"
 websockets = ">=14.1,<17"
 
 [[package]]
-name = "bittensor-cli"
-version = "9.23.2"
-description = "Bittensor CLI"
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "bittensor_cli-9.23.2-py3-none-any.whl", hash = "sha256:186421ed3cede38aa9a4498ebf1d961fa19e4db219e957a5bf47146c5ceb64da"},
-    {file = "bittensor_cli-9.23.2.tar.gz", hash = "sha256:0770e70cd756328093f32556561faa548a8ea357ddc5726918b9422068d2a25d"},
-]
-
-[package.dependencies]
-aiohttp = ">=3.13,<4.0"
-async-substrate-interface = ">=2.0.4,<3.0.0"
-bittensor-drand = ">=2.0.0,<3.0.0"
-bittensor-wallet = "4.1.0"
-cyscale = "0.5.0"
-GitPython = ">=3.0.0"
-Jinja2 = "*"
-netaddr = ">=1.3.0,<1.4.0"
-plotille = ">=5.0.0"
-plotly = ">=6.0.0"
-PyYAML = ">=6.0,<7.0"
-rich = ">=15.0,<16.0"
-typer = ">=0.26.0,<0.27.0"
-
-[[package]]
 name = "bittensor-core"
 version = "0.1.0"
 description = "The chain-defined compute core for Bittensor clients: sp-core keys, keyfiles, drand timelock, ML-KEM, SCALE codec, and RFC-0078 metadata digest, built from the bittensor monorepo"
@@ -677,82 +613,6 @@ files = [
     {file = "bittensor_core-0.1.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:714ca56864f4a5038d7e380a86d090a53c320b3bb4a6df530d6f1ea09c278eeb"},
     {file = "bittensor_core-0.1.0.tar.gz", hash = "sha256:dd7cd31b0ca7cb3d236bb6bb66827f81be054d502e223ff8a440cffd3f03db29"},
 ]
-
-[[package]]
-name = "bittensor-drand"
-version = "2.0.0"
-description = "Rust-backed Python library for generating timelock-encrypted weight commitments for Bittensor's commit-reveal mechanism using drand randomness."
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "bittensor_drand-2.0.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:0c7fda87f64acf8e9fa0381c510b384b8fdd1aae2abde3ceb445cd61591623e3"},
-    {file = "bittensor_drand-2.0.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:78491ebc4e2c4b3624b3e5e0490bd71559641138bb37a789cb6d3c1cf826c6ec"},
-    {file = "bittensor_drand-2.0.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:04510b38f7e7db2cc52ec3ac3861315a2b2df8a67231b6082f85252083eea1c3"},
-    {file = "bittensor_drand-2.0.0-cp310-cp310-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:e2efdd10cd53e883424d262a9df2149adacbd69eb16886bb930f4800447529ff"},
-    {file = "bittensor_drand-2.0.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dfa69a38a9dd7b66304062929193e32825439c17bb518aec4e04562209c116f4"},
-    {file = "bittensor_drand-2.0.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:c640fe4bc0244be6d5a515574eab6cc9b1f9b4139790b4562bf66aaff43d7b42"},
-    {file = "bittensor_drand-2.0.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2ae23da52d290e37869bc2558bb6850fc659641078bbaf192619373007a50579"},
-    {file = "bittensor_drand-2.0.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:32c2f091c22a654158696318df151aa305368002c339eff0b6f3e572f4abb135"},
-    {file = "bittensor_drand-2.0.0-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:5d9ef322362482e17c2077cfbc1c220cc37c8765b1a90f6d80f7fc85048aa05e"},
-    {file = "bittensor_drand-2.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f7cbb1319723267aca8d3f301553c8d3bf9dc16eda78993f8058b46e3ef47031"},
-    {file = "bittensor_drand-2.0.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:f492650fe5fb9c70eb612f886d687c010faddde10f1557d1a598b486bd6dcaf6"},
-    {file = "bittensor_drand-2.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:77e4b605b513db5a02056358f1697ea5bda5debf35530d97f6dd35b063ee8d2d"},
-    {file = "bittensor_drand-2.0.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:579f6209c902f012b2bdaa6a55aebc95d8937fb47183482233ea75d0cbae90ca"},
-    {file = "bittensor_drand-2.0.0-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:0e000eea5b2908357e70992fbed081fbc7ce55349a7dc2a6d22bc30f5a57b257"},
-    {file = "bittensor_drand-2.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:867fa67a2971f925119215c6c75b8c707984d01516edec4c5e1f3cb224acd665"},
-    {file = "bittensor_drand-2.0.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:e76222d927c18eaa7bf28fa3130bbe55d9d88d8146233182b1d8e5209dce2d86"},
-    {file = "bittensor_drand-2.0.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:6811e7a272e88a5a2f864efdac5a00f50f692d77c9e1124a477af4f33b1fca08"},
-    {file = "bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1809d01fedffc40484df10c57f7713984ba80fb436e2aaed734a39684dc54e74"},
-    {file = "bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:fdb890fd763d826d5e521c5f48106e45220e2d4ae99e237ba605ca5dd7b6f185"},
-    {file = "bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3d1c96a56bfedd7ce534414761b6067a3ee41c317b7034f3ee24c753170bed10"},
-    {file = "bittensor_drand-2.0.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:41f948f6f44ce93040d43f1fd2a1c50398a9631e0577225b3966e4eb789ea9e4"},
-    {file = "bittensor_drand-2.0.0-cp314-cp314-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:de155b230d8b054d6b2f806b9bc4bfe1e07b20bcde5a9634bb03e2c4ada98240"},
-    {file = "bittensor_drand-2.0.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a7c529fbcf8671bb4135bf8873d71f40dd6fdc70ba063daaf68311a1a923d6b3"},
-    {file = "bittensor_drand-2.0.0.tar.gz", hash = "sha256:517cd8cabb4634a980e26aaf85ac0a8481f62fefadc0499ddbadb6467ae030c7"},
-]
-
-[package.extras]
-dev = ["maturin (==1.7.0)", "pytest-asyncio (==0.23.7)"]
-
-[[package]]
-name = "bittensor-wallet"
-version = "4.1.0"
-description = ""
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "bittensor_wallet-4.1.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:92fbd6dd5361614bbb71512c7854e1d27ff53ec094225aceb6449205d61f8867"},
-    {file = "bittensor_wallet-4.1.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:060ad7ae6fb6972ee3e31600510d4393b5184325226fca32c1b064b9388de6ce"},
-    {file = "bittensor_wallet-4.1.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e46350369af89f9c156fff8fc75908582648bbe71be05e4ac4b2366e174b07cc"},
-    {file = "bittensor_wallet-4.1.0-cp310-cp310-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:28ea313f651f065963b875f77644f6d71e34cd0d8b284040abd6e11fde2de470"},
-    {file = "bittensor_wallet-4.1.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0be6c6ebb592fe966c9d256cd3ed80a7ebd7ae9f9a8eaf24f53a3bee28fdda2c"},
-    {file = "bittensor_wallet-4.1.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:0915cfc9327b15279e8d8d9e2a11b2ed9a559339545cc55fe0bce13fd39564e0"},
-    {file = "bittensor_wallet-4.1.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:591c51f60bb8536750c3ce6092efe83f1a1f55778a5bf5db69dc8bedfd71872a"},
-    {file = "bittensor_wallet-4.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:db5f506839402d680b7a0aadde893faa162ba746a75708f455f4f11a691fbdfb"},
-    {file = "bittensor_wallet-4.1.0-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:d96e5202f898c3d1035d7844a946d4fb42fa522d65055e2f9d05224bf6ad6d2c"},
-    {file = "bittensor_wallet-4.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b25d5cb6bdbc6d20d4c347ec82938420a367c75b03e5d957857ca4df973afc2e"},
-    {file = "bittensor_wallet-4.1.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:89c21a657f8f40b495b098d16aa77a58eb7e62f68879ea58febd8ca7536a4463"},
-    {file = "bittensor_wallet-4.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:8eccee4cdef228ec4ef351ee5334fe2bd83a2db5ffc112b4e8c626056dff4d45"},
-    {file = "bittensor_wallet-4.1.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:856dd7e5f4bac933da3304cd5d29101d424b97ebd39996405b46882b0085079c"},
-    {file = "bittensor_wallet-4.1.0-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:22b91e4c8b336ec5739c3c6262ea21cbff5e005d4e38963097f0ed0fed2bf80b"},
-    {file = "bittensor_wallet-4.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:796b924712e5306bd93bcf17483012a01fae8ba526d55d2424933ffb70a462a7"},
-    {file = "bittensor_wallet-4.1.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:e79ee6b95ee197902b38e0a768503bfd574412bfa982988ca4aa1011a5998434"},
-    {file = "bittensor_wallet-4.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:96d8110410e110e7f1ebdaae892ccea2a4cda79b1664c6b2513cc3f4f30f3dfd"},
-    {file = "bittensor_wallet-4.1.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2c8a5d366a2010663103306a9b508d2efe0b5bf6b90b542a01fcb61f6215de13"},
-    {file = "bittensor_wallet-4.1.0-cp313-cp313-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:2ec09575fb03cbd1ee39b8a74b9cf1726f3f37ebe523a990214c9cb167c5d2c6"},
-    {file = "bittensor_wallet-4.1.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6758e23c38bcfb2184a3a9f79a667d16f90004c642cbbb0735fbaebefce01c8a"},
-    {file = "bittensor_wallet-4.1.0-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:c9fe4143534ac288d5d451aed926d4933874a62172e23448b4a6b4ddf3a44cb3"},
-    {file = "bittensor_wallet-4.1.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:9ffe957b65a9352914f860465719808a79b9a3f4d6638458a35896f7812c6f96"},
-    {file = "bittensor_wallet-4.1.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:485dd54b7f48b254f8ba4ffa6d7607dc19479947e35c21e2da927f39cc19d669"},
-    {file = "bittensor_wallet-4.1.0-cp314-cp314-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:7db14417b84fd943667bd5eb2a307c20068eb63a22d2cdcba3aa556481d5b2dc"},
-    {file = "bittensor_wallet-4.1.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dcbac49f52f2d3c3cab0e98373a936443f4083c189bce72d72d25bb5b3dad264"},
-    {file = "bittensor_wallet-4.1.0.tar.gz", hash = "sha256:f0f34641a4b9110def9e35fe22498195fcb31d143dc4f76dd9022db374ccd484"},
-]
-
-[package.extras]
-dev = ["aioresponses (==0.7.6)", "ansible-vault (>=2.1,<3.0)", "bittensor (>=10.3.0)", "coveralls (==4.1.0)", "ddt (==1.6.0)", "factory-boy (==3.3.3)", "freezegun (==1.5.0)", "httpx (==0.27.0)", "hypothesis (==6.81.1)", "maturin (==1.8.3)", "mypy (==1.20.2)", "pytest (==9.0.3)", "pytest-asyncio (==1.3.0)", "pytest-cov (==7.1.0)", "pytest-mock (==3.15.1)", "pytest-rerunfailures (==16.1)", "pytest-split (==0.11.0)", "pytest-xdist (==3.8.0)", "ruff (==0.15.12)", "types-requests", "types-retry (==0.9.9.4)", "typing-extensions (>=4.0.0) ; python_full_version < \"3.11.0\""]
 
 [[package]]
 name = "brotli"
@@ -1446,67 +1306,6 @@ profiler = ["nvidia-cuda-profiler-api (==13.0.85.*) ; sys_platform == \"linux\" 
 sanitizer = ["nvidia-cuda-sanitizer-api (==13.0.85.*) ; sys_platform == \"linux\" and (platform_machine == \"aarch64\" or platform_machine == \"x86_64\") or (sys_platform == \"linux\" or sys_platform == \"win32\") and platform_machine == \"x86_64\""]
 
 [[package]]
-name = "cyscale"
-version = "0.5.0"
-description = "Cython SCALE Codec Library"
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "cyscale-0.5.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:c3fa7f4f58ea7737f0f0635ad3ea58c5b85c1e63758e374c29388d892c4c2359"},
-    {file = "cyscale-0.5.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:6bd3b5bda645b5d6ce62e80f542b4606c9e8feef11f5f0ca4f2688f738ea6102"},
-    {file = "cyscale-0.5.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:28f8ad5bfa36551a75042ed6d51aa168e8d93b84ce679343b1d598cbe21aa8d6"},
-    {file = "cyscale-0.5.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:aa0de7b7f194b78c5d7895a458476a49db02cd98ab465d0958d84550b0dd1b15"},
-    {file = "cyscale-0.5.0-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:730e3c009fcc256339a2f71c0a0faff5bbbb4d85fcff6d3c9411413f13ac54dc"},
-    {file = "cyscale-0.5.0-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:28e33530fd47570a331f611df2bd70981131be7286085ea0097968172c665f8e"},
-    {file = "cyscale-0.5.0-cp310-cp310-win32.whl", hash = "sha256:e2b2042d4ef32d84df68de64ad2f5d45817a4cfce1a01b56a65b3c764d536580"},
-    {file = "cyscale-0.5.0-cp310-cp310-win_amd64.whl", hash = "sha256:cdd20a1ffe9064ab09de5ffd2b1ff9bfde8817eb4d73660210d6e776dd858a8c"},
-    {file = "cyscale-0.5.0-cp310-cp310-win_arm64.whl", hash = "sha256:03de5ca2de36c56eb7a7a5229b2f97b7d7eba8130ff451db762859235f65e392"},
-    {file = "cyscale-0.5.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:51248280c8c680ea1f0e80a28134dabf1b4c9ce8ff3955cfa0b1389fbc3b5044"},
-    {file = "cyscale-0.5.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:56caff7b7b1732ee5999343d19aa943ab7969835b18601786daeffc3ac7f1e01"},
-    {file = "cyscale-0.5.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5daa1699ddd2f1d064d74e4b14fd038cdd8cd2d64e6e28f62d1294b1384850e4"},
-    {file = "cyscale-0.5.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:43123dc24c445757e76d2bf3479391adde4151b121274e05844817f34b194b9b"},
-    {file = "cyscale-0.5.0-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:49eddaef49d152a3b4e709037922364243c261013c74a7c53a5d904e44124269"},
-    {file = "cyscale-0.5.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:9e4e891d57e4ea55cec765517d90ce9fd1eb79b12fd586d2fe4eb3b428c0c21b"},
-    {file = "cyscale-0.5.0-cp311-cp311-win32.whl", hash = "sha256:037647f7215feaed933acd43da5fd462f35b6a5ffd154e73c73414f0e2af32b2"},
-    {file = "cyscale-0.5.0-cp311-cp311-win_amd64.whl", hash = "sha256:359d165fc5039c15ac3196d3b762159e0293eda4d71cfaa24dfb4ae6711bf3ab"},
-    {file = "cyscale-0.5.0-cp311-cp311-win_arm64.whl", hash = "sha256:38a0e86344903fb41929ec7c52e461d095a0d123e5de5e3cc6d6bcf21ee83d4c"},
-    {file = "cyscale-0.5.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:e8048386723df3020a437a1392b00860fe91216a50fb0c6237c353d47b7a80a5"},
-    {file = "cyscale-0.5.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c5eee3e478852195eeed054dfbd068ac9d15efd1d5e5e6dcb80bf9318cbe49b5"},
-    {file = "cyscale-0.5.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d918b1d8535d7f62861b9592043a87a8b3179afe67b48aad3639599dd687f172"},
-    {file = "cyscale-0.5.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6c540daa377d3749f25d7d8d92ca9048bcd274aa497f0eb3c1161c7bcad18312"},
-    {file = "cyscale-0.5.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:e8a7bf307f6543c342513b46bbdcef8519cb879516327f8555cdb06ed974b1d9"},
-    {file = "cyscale-0.5.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:8d342b50b57cc421b40dbf2f1fc0e837f14562ed99afa7aebec46424b34ecb96"},
-    {file = "cyscale-0.5.0-cp312-cp312-win32.whl", hash = "sha256:23ec3f58b66b4aacda14b6ff23716215b9904246c3f85a24d5704a76453930b9"},
-    {file = "cyscale-0.5.0-cp312-cp312-win_amd64.whl", hash = "sha256:250ac9bbe764a6a931a3d4740e7fe711ba209ed8824760eac29eceac620849fd"},
-    {file = "cyscale-0.5.0-cp312-cp312-win_arm64.whl", hash = "sha256:808045f9cb7fe12f59940d8be72abb16344d5dee3f98d41d935f36229eff2be7"},
-    {file = "cyscale-0.5.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:0bd0ce72785767309aa21a197aabb71f9d90215dd096a048681e18bdb92af32d"},
-    {file = "cyscale-0.5.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:e14e3c7cdee4d913fccfd19316d8d7eccf208283ebedd936f1e4a958a2a25963"},
-    {file = "cyscale-0.5.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c6b9c99831c1e16b3baae09680d384728900a3b775081a9fff0d51b3a4a33db8"},
-    {file = "cyscale-0.5.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:36e9cc5ca5072a1a3a70215a4850e2d7c05c70ae87703beccce0451ceb971271"},
-    {file = "cyscale-0.5.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:a32692f6c62173ca1a3c00b6a0deafec02afffecd21f2ad05d4d71ce7967035d"},
-    {file = "cyscale-0.5.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:277bcc2fb0d040c2901b6d3090429a3e9a89b89ee4e13565f443233c431ba0a6"},
-    {file = "cyscale-0.5.0-cp313-cp313-win32.whl", hash = "sha256:5f067d045b4cbeea785d2acac99f26328224363e67dfb8bd403159b23305ef52"},
-    {file = "cyscale-0.5.0-cp313-cp313-win_amd64.whl", hash = "sha256:ba5288d7d4d6648e46e3bffc032e21763d0fed07a3313fe68eb7b47ef049ec62"},
-    {file = "cyscale-0.5.0-cp313-cp313-win_arm64.whl", hash = "sha256:689b0b1ddf912083350e0c1f57fe6020ac4c53e2f001fd8dc858dcae00efbb62"},
-    {file = "cyscale-0.5.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:0f8829b181e52a11c646de3d8f45d09dfb60b2165c57d9acb01c01caeb2563c5"},
-    {file = "cyscale-0.5.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:0447493b01b8357858a09538928c4be807c437cebf23d3e027c5011bbefe61ab"},
-    {file = "cyscale-0.5.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8b244ac859a3218358586e7b58610a4a7300e4d539b4c4d7d1f75513292aac5e"},
-    {file = "cyscale-0.5.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5572f287b01969c9e6ee463bd2985a7d6557197afbbe982b221ec9a4378bbb2c"},
-    {file = "cyscale-0.5.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:54e7a191015bd5e5c38897bef1f2e6d85f9f43bd266ca9bd0991def0dfdc10f2"},
-    {file = "cyscale-0.5.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:a7375ec0b1010737352e9b60c43cf2bd639e8cf770a5885c2048e1a16c9a0091"},
-    {file = "cyscale-0.5.0-cp314-cp314-win32.whl", hash = "sha256:c052942407a0209531c22dcb9f257bcb27c3d34a24dac7d55b37fdf4ad8cb9aa"},
-    {file = "cyscale-0.5.0-cp314-cp314-win_amd64.whl", hash = "sha256:4d19152e3093f9315aa3b705ad99017ff2288b4638b487016ad9fe8b871d89fc"},
-    {file = "cyscale-0.5.0-cp314-cp314-win_arm64.whl", hash = "sha256:49cfcf55f80cbebad888d33d383664920ba618d47d4b95340ef1821927972a9a"},
-    {file = "cyscale-0.5.0.tar.gz", hash = "sha256:57bf8fb401c71d5d8c7dbadd948c1fbb239b014ad58eb2f43722beb39ebc50e9"},
-]
-
-[package.extras]
-cython = ["Cython (>=3.0)"]
-requests = ["requests (>=2.24.0)"]
-test = ["base58 (>=2.0.1)", "coverage", "pytest"]
-
-[[package]]
 name = "cytoolz"
 version = "1.1.0"
 description = "Cython implementation of Toolz: High performance functional utilities"
@@ -2127,40 +1926,6 @@ files = [
 
 [package.dependencies]
 wcwidth = "*"
-
-[[package]]
-name = "gitdb"
-version = "4.0.12"
-description = "Git Object Database"
-optional = false
-python-versions = ">=3.7"
-groups = ["main"]
-files = [
-    {file = "gitdb-4.0.12-py3-none-any.whl", hash = "sha256:67073e15955400952c6565cc3e707c554a4eea2e428946f7a4c162fab9bd9bcf"},
-    {file = "gitdb-4.0.12.tar.gz", hash = "sha256:5ef71f855d191a3326fcfbc0d5da835f26b13fbcba60c32c21091c349ffdb571"},
-]
-
-[package.dependencies]
-smmap = ">=3.0.1,<6"
-
-[[package]]
-name = "gitpython"
-version = "3.1.52"
-description = "GitPython is a Python library used to interact with Git repositories"
-optional = false
-python-versions = ">=3.7"
-groups = ["main"]
-files = [
-    {file = "gitpython-3.1.52-py3-none-any.whl", hash = "sha256:79a36ee1f83523214a3f72d56cf1c4e490d577dc61af77e43dfe5862bd9da01a"},
-    {file = "gitpython-3.1.52.tar.gz", hash = "sha256:de0a8ad86274c6e75ae8b37dd055ba68f19818c813108642263227b20775b48e"},
-]
-
-[package.dependencies]
-gitdb = ">=4.0.1,<5"
-
-[package.extras]
-doc = ["sphinx (>=7.4.7,<8)", "sphinx-autodoc-typehints", "sphinx_rtd_theme"]
-test = ["coverage[toml]", "ddt (>=1.1.1,!=1.4.3)", "mock ; python_version < \"3.8\"", "mypy (==1.18.2) ; python_version >= \"3.9\"", "pre-commit", "pytest (>=7.3.1)", "pytest-cov", "pytest-instafail", "pytest-mock", "pytest-sugar", "typing-extensions ; python_version < \"3.11\""]
 
 [[package]]
 name = "graval"
@@ -2905,47 +2670,6 @@ files = [
 ]
 
 [[package]]
-name = "narwhals"
-version = "2.24.0"
-description = "Extremely lightweight compatibility layer between dataframe libraries"
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "narwhals-2.24.0-py3-none-any.whl", hash = "sha256:42fdedf44e5b2ca7505630d45b4ac3058f38d8485cba9fe1652ca23152df7489"},
-    {file = "narwhals-2.24.0.tar.gz", hash = "sha256:b5c0f684ccd9d7475b564111e319a4964abcf2baf79d3cf6b1003d06ac9b828d"},
-]
-
-[package.extras]
-cudf = ["cudf-cu12 (>=24.10.0) ; sys_platform == \"linux\""]
-dask = ["dask[dataframe] (>=2024.8)"]
-duckdb = ["duckdb (>=1.1)"]
-ibis = ["ibis-framework (>=6.0.0)", "packaging (>=21.3)", "pyarrow-hotfix (>=0.7)"]
-modin = ["modin (>=0.22.0)"]
-pandas = ["pandas (>=1.3.4)"]
-polars = ["polars (>=0.20.4)"]
-pyarrow = ["pyarrow (>=13.0.0)"]
-pyspark = ["pyspark (>=3.5.0)"]
-pyspark-connect = ["pyspark[connect] (>=3.5.0)"]
-sql = ["narwhals[duckdb]", "sqlparse (>=0.5.5)"]
-sqlframe = ["sqlframe (>=3.22.0,!=3.39.3)"]
-
-[[package]]
-name = "netaddr"
-version = "1.3.0"
-description = "A network address manipulation library for Python"
-optional = false
-python-versions = ">=3.7"
-groups = ["main"]
-files = [
-    {file = "netaddr-1.3.0-py3-none-any.whl", hash = "sha256:c2c6a8ebe5554ce33b7d5b3a306b71bbb373e000bbbf2350dd5213cc56e3dbbe"},
-    {file = "netaddr-1.3.0.tar.gz", hash = "sha256:5c3c3d9895b551b763779ba7db7a03487dc1f8e3b385af819af341ae9ef6e48a"},
-]
-
-[package.extras]
-nicer-shell = ["ipython"]
-
-[[package]]
 name = "netifaces"
 version = "0.11.0"
 description = "Portable network interface information."
@@ -3582,45 +3306,6 @@ files = [
     {file = "platformdirs-4.10.1-py3-none-any.whl", hash = "sha256:0e4eff26be2d75293977f7cddc153fd9b8eaa7fb0c7b64ffe4076cb443117443"},
     {file = "platformdirs-4.10.1.tar.gz", hash = "sha256:ceab4084426fe6319ce18e86deada8ab1b7487c7aee7040c55e277c9ae793695"},
 ]
-
-[[package]]
-name = "plotille"
-version = "6.0.5"
-description = "Plot in the terminal using braille dots."
-optional = false
-python-versions = "<4,>=3.10"
-groups = ["main"]
-files = [
-    {file = "plotille-6.0.5-py3-none-any.whl", hash = "sha256:c35be42f8aa080853904d123894194a5ea7e095bdeb76d7b61fd41c89cdeaeee"},
-    {file = "plotille-6.0.5.tar.gz", hash = "sha256:26d2cef5d4feb8632c9710442ad49fc57f9d5b20881c21ac7954c76208b5600b"},
-]
-
-[[package]]
-name = "plotly"
-version = "6.9.0"
-description = "An open-source interactive data visualization library for Python"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "plotly-6.9.0-py3-none-any.whl", hash = "sha256:36bebe2f1bb13884774fe61689c329071446f6ce4a8927fb1f0d6fb24f581236"},
-    {file = "plotly-6.9.0.tar.gz", hash = "sha256:967ad33e8c704fed051800d11d985eb206a9c795c14206b30a6f463ed9c67d0d"},
-]
-
-[package.dependencies]
-narwhals = ">=1.15.1"
-packaging = "*"
-
-[package.extras]
-dev = ["anywidget", "build", "colorcet", "fiona (<=1.9.6) ; python_version <= \"3.8\"", "geopandas", "inflect", "jupyterlab", "kaleido (>=1.3.0)", "numpy (>=1.22)", "orjson", "pandas", "pdfrw", "pillow", "plotly-geo", "polars[timezone]", "pyarrow", "pyshp", "pytest", "pytz", "requests", "ruff (==0.11.12)", "scikit-image", "scipy", "shapely", "statsmodels", "vaex ; python_version <= \"3.9\"", "xarray"]
-dev-build = ["build", "jupyterlab", "pytest", "requests", "ruff (==0.11.12)"]
-dev-core = ["pytest", "requests", "ruff (==0.11.12)"]
-dev-optional = ["anywidget", "build", "colorcet", "fiona (<=1.9.6) ; python_version <= \"3.8\"", "geopandas", "inflect", "jupyterlab", "kaleido (>=1.3.0)", "numpy (>=1.22)", "orjson", "pandas", "pdfrw", "pillow", "plotly-geo", "polars[timezone]", "pyarrow", "pyshp", "pytest", "pytz", "requests", "ruff (==0.11.12)", "scikit-image", "scipy", "shapely", "statsmodels", "vaex ; python_version <= \"3.9\"", "xarray"]
-dev-pandas1 = ["numpy (>=1,<2)", "pandas (>=1,<2)", "setuptools (<82)"]
-dev-pandas2 = ["pandas (>=2,<3)"]
-dev-pandas3 = ["pandas (>=3) ; python_version >= \"3.11\""]
-express = ["numpy (>=1.22)"]
-kaleido = ["kaleido (>=1.3.0)"]
 
 [[package]]
 name = "pluggy"
@@ -5643,18 +5328,6 @@ files = [
 ]
 
 [[package]]
-name = "smmap"
-version = "5.0.3"
-description = "A pure Python implementation of a sliding window memory map manager"
-optional = false
-python-versions = ">=3.7"
-groups = ["main"]
-files = [
-    {file = "smmap-5.0.3-py3-none-any.whl", hash = "sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f"},
-    {file = "smmap-5.0.3.tar.gz", hash = "sha256:4d9debb8b99007ae47165abc08670bd74cb74b5227dda7f643eccc4e9eb5642c"},
-]
-
-[[package]]
 name = "smoldot-light"
 version = "0.1.0"
 description = "Python bindings for the smoldot_light Rust crate."
@@ -6698,4 +6371,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12, <3.14"
-content-hash = "3b724ae43ab0e5e4ffdd3c177fc5a87897341c7c1c409c7156c06ffeda76bd0e"
+content-hash = "b2f09901c3b7e99b4c7856717d807a09c2e86ed6ac14862f112b1d5d94407f0a"
