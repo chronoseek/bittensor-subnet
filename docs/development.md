@@ -83,6 +83,10 @@ Run the local Chutes container in a separate terminal:
 poetry run python scripts/test_chutes_runtime_local.py --run
 ```
 
+Press `Ctrl+C` to stop the container. The helper converts the terminal interrupt
+into a quiet Docker stop so Chutes does not report normal cancellation as an
+unexpected error.
+
 Smoke-test the running local runtime:
 
 ```bash

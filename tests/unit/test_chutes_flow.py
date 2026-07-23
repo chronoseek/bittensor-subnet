@@ -216,7 +216,13 @@ def test_local_chutes_helper_uses_local_build_and_dev_run(tmp_path):
     )
 
     assert build_cmd[-3:] == ["build", "chronoseek_chute:chute", "--local"]
-    assert run_cmd[:4] == ["docker", "run", "--rm", "-it"]
+    assert run_cmd[:3] == ["docker", "run", "--rm"]
+    assert "--name" in run_cmd
+    assert test_chutes_runtime_local.local_container_name(8123) in run_cmd
+    assert "--init" in run_cmd
+    assert "--sig-proxy=false" in run_cmd
+    assert run_cmd[run_cmd.index("--stop-signal") + 1] == "SIGTERM"
+    assert "-it" not in run_cmd
     assert "--env-file" in run_cmd
     assert "CHUTES_EXECUTION_CONTEXT=REMOTE" in run_cmd
     assert "-p" in run_cmd
@@ -230,6 +236,62 @@ def test_local_chutes_helper_uses_local_build_and_dev_run(tmp_path):
         "--dev",
     ]
     assert "https://api.chutes.ai" not in " ".join(run_cmd + build_cmd)
+
+
+def test_local_chutes_helper_stops_container_cleanly_on_interrupt(
+    monkeypatch,
+    capsys,
+):
+    class FakeProcess:
+        def __init__(self):
+            self.wait_calls = []
+            self.terminated = False
+
+        def wait(self, timeout=None):
+            self.wait_calls.append(timeout)
+            if timeout is None and len(self.wait_calls) == 1:
+                raise KeyboardInterrupt
+            return 143
+
+        def terminate(self):
+            self.terminated = True
+
+    process = FakeProcess()
+    popen_calls = []
+    stop_calls = []
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return process
+
+    def fake_run(command, **kwargs):
+        stop_calls.append((command, kwargs))
+
+    monkeypatch.setattr(test_chutes_runtime_local.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(test_chutes_runtime_local.subprocess, "run", fake_run)
+
+    test_chutes_runtime_local.run_local_container(
+        ["docker", "run", "runtime:test"],
+        "chronoseek-chutes-local-8000",
+    )
+
+    assert popen_calls == [
+        (
+            ["docker", "run", "runtime:test"],
+            {"start_new_session": True},
+        )
+    ]
+    assert stop_calls[0][0] == [
+        "docker",
+        "stop",
+        "--time",
+        "10",
+        "chronoseek-chutes-local-8000",
+    ]
+    assert stop_calls[0][1]["check"] is False
+    assert process.wait_calls == [None, 15]
+    assert process.terminated is False
+    assert "Local Chutes container stopped." in capsys.readouterr().out
 
 
 def test_metadata_with_chute_slug_prefers_generated_slug():
