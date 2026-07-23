@@ -15,12 +15,14 @@ from chronoseek.chain.submissions import (
 )
 from chronoseek.chutes.runtime import (
     ChutesRuntimeEndpoint,
-    build_endpoint_map_with_axon_fallback,
     build_evaluation_endpoints,
     build_submission_endpoint_map,
     chutes_auth_headers_from_env,
-    resolve_axon_endpoint,
     resolve_submission_endpoint,
+)
+from chronoseek.utils import (
+    build_endpoint_map_with_axon_fallback,
+    resolve_axon_endpoint,
 )
 
 

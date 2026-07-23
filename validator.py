@@ -138,11 +138,11 @@ from chronoseek.chain.submissions import (
     MinerSubmissionResolver,
 )
 from chronoseek.chutes.runtime import (
-    build_endpoint_map_with_axon_fallback,
     build_runtime_endpoints_from_map,
     chutes_auth_headers_from_env,
     filter_healthy_runtime_endpoints,
 )
+from chronoseek.utils import build_endpoint_map_with_axon_fallback
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 
