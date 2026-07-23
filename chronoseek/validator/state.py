@@ -16,6 +16,7 @@ class ValidatorRuntimeState:
     score_lock: Lock
     metagraph_lock: Lock = field(default_factory=Lock)
     miner_endpoints: dict[int, str] = field(default_factory=dict)
+    miner_endpoint_sources: dict[int, str] = field(default_factory=dict)
     provider_headers: dict[str, str] = field(default_factory=dict)
     responsive_lock: Lock = field(default_factory=Lock)
     responsive_uids: set[int] = field(default_factory=set)

@@ -15,9 +15,11 @@ from chronoseek.chain.submissions import (
 )
 from chronoseek.chutes.runtime import (
     ChutesRuntimeEndpoint,
+    build_endpoint_map_with_axon_fallback,
     build_evaluation_endpoints,
     build_submission_endpoint_map,
     chutes_auth_headers_from_env,
+    resolve_axon_endpoint,
     resolve_submission_endpoint,
 )
 
@@ -26,6 +28,19 @@ class DummyMetagraph:
     def __init__(self):
         self.uids = [0, 1]
         self.hotkeys = ["hk-0", "hk-1"]
+
+
+class DummyMetagraphWithAxons(DummyMetagraph):
+    """Adds Bittensor 11's per-neuron `axon` field (`ip:port` str or None)."""
+
+    def __init__(self, *, uid_axons: dict[int, str | None], hotkeys=None):
+        super().__init__()
+        if hotkeys is not None:
+            self.hotkeys = hotkeys
+        self.neurons = [
+            SimpleNamespace(axon=uid_axons.get(uid))
+            for uid in range(len(self.hotkeys))
+        ]
 
 
 def revealed_commitment(*entries):
@@ -117,6 +132,83 @@ def test_submission_endpoint_map_uses_registered_hotkeys_only():
     )
 
     assert endpoint_map == {1: "https://runtime.example.com"}
+
+
+def test_resolve_axon_endpoint_returns_none_when_unserved():
+    assert resolve_axon_endpoint(None) is None
+    assert resolve_axon_endpoint(SimpleNamespace(axon=None)) is None
+    assert resolve_axon_endpoint(SimpleNamespace(axon="")) is None
+
+
+def test_resolve_axon_endpoint_returns_ip_port_when_served():
+    assert resolve_axon_endpoint(SimpleNamespace(axon="1.2.3.4:9000")) == "1.2.3.4:9000"
+
+
+def test_endpoint_map_with_axon_fallback_prefers_chutes_when_both_exist():
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={
+            "hk-1": MinerSubmission(hotkey="hk-1", endpoint="https://runtime.example.com"),
+        },
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {1: "https://runtime.example.com"}
+    assert sources == {1: "chutes"}
+
+
+def test_endpoint_map_with_axon_fallback_uses_axon_when_no_commitment():
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={},
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {1: "9.9.9.9:9000"}
+    assert sources == {1: "axon"}
+
+
+def test_endpoint_map_with_axon_fallback_treats_chute_id_only_as_no_endpoint():
+    """A chute_id-only submission doesn't resolve to a URL, so it must still
+    fall back to axon exactly as if there were no submission at all."""
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={
+            "hk-1": MinerSubmission(hotkey="hk-1", chute_id="unroutable-id-only"),
+        },
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {1: "9.9.9.9:9000"}
+    assert sources == {1: "axon"}
+
+
+def test_endpoint_map_with_axon_fallback_skips_disqualified_uids():
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={},
+        chutes_base_domain="chutes.ai",
+        disqualified_uids={1},
+    )
+
+    assert endpoint_map == {}
+    assert sources == {}
+
+
+def test_endpoint_map_with_axon_fallback_no_endpoint_when_neither_exists():
+    metagraph = DummyMetagraphWithAxons(uid_axons={})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={},
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {}
+    assert sources == {}
 
 
 class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
