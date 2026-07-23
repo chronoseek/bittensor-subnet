@@ -184,6 +184,26 @@ poetry run python miner.py \
 
 Current validators require either `--endpoint` or `--chute-slug` to route requests. `--chute-id` is useful metadata, but it is not routable by itself yet.
 
+## Axon Serving Track (Fallback)
+
+An alternative to Chutes deployment: serve the miner runtime directly over your own Bittensor axon instead of deploying an image to Chutes.
+
+Validators pick a base URL per hotkey per refresh cycle: a committed Chutes endpoint always wins when one resolves; the axon address is only used when there is no Chutes commitment resolvable at all (missing commitment, or a `--chute-id`-only commitment with no routable `--endpoint`/`--chute-slug`). Whichever path is selected, a failed/timed-out request scores 0 for that round with no fallback to the other path.
+
+```bash
+poetry run python miner_axon.py \
+  --wallet.name <miner-coldkey> \
+  --wallet.hotkey <miner-hotkey> \
+  --network <finney-or-test> \
+  --netuid <netuid> \
+  --axon-external-ip <your-public-ip> \
+  --axon-port 8091
+```
+
+This serves `chronoseek.miner.runtime:app` (the same `/health`/`/search` contract, Epistula-signed, used by the Chutes path) directly with uvicorn, and separately publishes `<external-ip>:<port>` on-chain via the `ServeAxon` intent so validators can resolve it. Bittensor 11 removed the old `bt.axon` networking stack, so `--axon-external-ip` must be supplied explicitly — there is no external-IP auto-detection.
+
+This process does not commit any metadata on-chain; that only happens via `miner.py`. A validator only tries this hotkey's axon when it finds no Chutes commitment for it at all.
+
 ## Video Download Behavior
 
 Miner Chutes must handle synthetic requests from validators. Owner-run Chutes runtimes are forked from miner runtimes and may also receive non-Hippius videos.
