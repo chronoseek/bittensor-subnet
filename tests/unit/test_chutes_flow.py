@@ -723,13 +723,29 @@ def test_chutes_ytdlp_cookie_file_context_adds_cookie_file(
 
     with chutes_ytdlp_cookie_file_context(image) as applied:
         data, files = image_build_form_payload(image)
+        dockerfile = data["dockerfile"]
 
         assert applied.env_names == ("YTDLP_COOKIES",)
         assert (
-            "ENV YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/local-cookies.txt"
-            in data["dockerfile"]
+            "ENV YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/cookies.txt"
+            in dockerfile
         )
-        assert "--chmod=644" in data["dockerfile"]
+        create_directory = (
+            "RUN install -d -m 755 /opt/chronoseek/miner-files/ytdlp"
+        )
+        add_cookie = (
+            "ADD --chown=root:root --chmod=644 "
+        )
+        enforce_permissions = (
+            "RUN chown root:root "
+            "/opt/chronoseek/miner-files/ytdlp/cookies.txt && "
+            "chmod 644 /opt/chronoseek/miner-files/ytdlp/cookies.txt"
+        )
+        assert create_directory in dockerfile
+        assert add_cookie in dockerfile
+        assert enforce_permissions in dockerfile
+        assert dockerfile.index(create_directory) < dockerfile.index(add_cookie)
+        assert dockerfile.index(add_cookie) < dockerfile.index(enforce_permissions)
         with ZipFile(BytesIO(files["build_context"][1])) as archive:
             names = set(archive.namelist())
         assert any(name.endswith("ytdlp/local_cookies_txt") for name in names)

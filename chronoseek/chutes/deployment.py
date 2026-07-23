@@ -587,8 +587,18 @@ def _apply_ytdlp_cookies_file(
     shutil.copy2(source, staged_path)
 
     source_rel = staged_path.relative_to(cwd).as_posix()
-    image_path = f"{image_root.rstrip('/')}/ytdlp/{source_name}"
-    image.add(source_rel, image_path, chmod="644")
+    image_directory = f"{image_root.rstrip('/')}/ytdlp"
+    image_path = f"{image_directory}/cookies.txt"
+    image.run_command(f"install -d -m 755 {image_directory}")
+    image.add(
+        source_rel,
+        image_path,
+        chown="root:root",
+        chmod="644",
+    )
+    image.run_command(
+        f"chown root:root {image_path} && chmod 644 {image_path}"
+    )
     image.with_env(YTDLP_COOKIES_ENV, image_path)
     logger.info(
         f"Added yt-dlp cookies file to Chutes image at {image_path}."
