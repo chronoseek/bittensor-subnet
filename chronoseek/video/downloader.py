@@ -330,6 +330,26 @@ class VideoDownloader:
         return opts
 
     @staticmethod
+    def _writable_ytdlp_cookie_options(
+        cookie_options: dict,
+        *,
+        runtime_directory: str,
+    ) -> dict:
+        """Copy a configured cookie file where yt-dlp can safely update it."""
+
+        source_path = cookie_options.get("cookiefile")
+        if not source_path:
+            return cookie_options
+
+        runtime_path = os.path.join(runtime_directory, "cookies.txt")
+        shutil.copyfile(source_path, runtime_path)
+        os.chmod(runtime_path, 0o600)
+        return {
+            **cookie_options,
+            "cookiefile": runtime_path,
+        }
+
+    @staticmethod
     @contextmanager
     def _yt_dlp_clean_parent_env():
         keys = VideoDownloader._YTDLP_STRIP_ENV_KEYS
@@ -378,7 +398,10 @@ class VideoDownloader:
 
         tmp_dir = tempfile.mkdtemp(prefix="chronoseek-ytdlp-")
         output_template = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-        cookie_opts = cls._ytdlp_cookie_options()
+        cookie_opts = cls._writable_ytdlp_cookie_options(
+            cls._ytdlp_cookie_options(),
+            runtime_directory=tmp_dir,
+        )
         js_opts = cls._ytdlp_js_runtime_options()
         options = {
             "format": "mp4/bestvideo+bestaudio/best",
@@ -428,6 +451,7 @@ class VideoDownloader:
                         "from a browser session that can play this video, ensure the runtime "
                         "process inherits that env var, and confirm the file path is readable."
                     )
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
 
         base, ext = os.path.splitext(downloaded_path)

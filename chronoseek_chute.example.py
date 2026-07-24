@@ -14,7 +14,9 @@ local copy must live in the subnet root and is referenced as
 """
 
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 
 from dotenv import load_dotenv
@@ -54,6 +56,20 @@ def resolve_image_name(base_name: str, runtime_revision: str) -> str:
     if not short_rev:
         return base_name
     return f"{base_name}-{short_rev}"
+
+
+def prepare_runtime_ytdlp_cookies() -> None:
+    """Copy baked yt-dlp cookies to a private, writable runtime file."""
+
+    source_path = os.path.expanduser(os.getenv("YTDLP_COOKIES", "").strip())
+    if not source_path or not os.path.isfile(source_path):
+        return
+
+    runtime_directory = tempfile.mkdtemp(prefix="chronoseek-ytdlp-cookies-")
+    runtime_path = os.path.join(runtime_directory, "cookies.txt")
+    shutil.copyfile(source_path, runtime_path)
+    os.chmod(runtime_path, 0o600)
+    os.environ["YTDLP_COOKIES"] = runtime_path
 
 
 # Placeholder required by Chutes SDK object construction. The deploy helper
@@ -183,6 +199,7 @@ async def initialize_chronoseek(self):
     if hf_token:
         os.environ["HF_TOKEN"] = os.path.expanduser(hf_token.strip())
     os.environ["HF_HOME"] = os.path.expanduser(DEFAULT_CHUTES_HF_HOME)
+    prepare_runtime_ytdlp_cookies()
 
     deno_path = os.path.expanduser(os.getenv("YTDLP_DENO_PATH", "").strip())
     if not deno_path or not os.path.exists(deno_path):

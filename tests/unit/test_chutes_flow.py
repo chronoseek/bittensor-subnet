@@ -82,6 +82,16 @@ def test_production_chute_pins_cuda_12_8_torch_build():
     )
 
 
+def test_production_chute_prepares_writable_runtime_cookies():
+    template = (
+        Path(__file__).resolve().parents[2] / "chronoseek_chute.example.py"
+    ).read_text(encoding="utf-8")
+
+    assert "shutil.copyfile(source_path, runtime_path)" in template
+    assert "os.chmod(runtime_path, 0o600)" in template
+    assert "prepare_runtime_ytdlp_cookies()" in template
+
+
 def test_metadata_from_chutes_api_response():
     metadata = metadata_from_chutes_response(
         {
