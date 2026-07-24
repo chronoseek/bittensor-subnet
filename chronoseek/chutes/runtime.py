@@ -142,6 +142,19 @@ def build_submission_endpoint_map(
     return endpoints
 
 
+def normalize_endpoint_scheme(endpoint: str) -> str:
+    """Prefix a bare `ip:port` (or host) endpoint with `http://` if it has no
+    scheme already. Shared by every caller that turns a resolved endpoint
+    into a request URL (this module's own health check, forward.py's query
+    path, and chronoseek/utils.py's axon-endpoint resolution), so there is
+    exactly one place this normalization can drift.
+    """
+    endpoint = str(endpoint or "").strip()
+    if endpoint.startswith(("http://", "https://")):
+        return endpoint
+    return f"http://{endpoint}"
+
+
 async def check_runtime_health(
     *,
     client: httpx.AsyncClient,
@@ -152,6 +165,7 @@ async def check_runtime_health(
 ) -> bool:
     subject = f"Miner UID {uid}" if int(uid) >= 0 else "Runtime"
     try:
+        endpoint = normalize_endpoint_scheme(endpoint)
         response = await client.get(
             f"{endpoint.rstrip('/')}/health",
             headers=headers or {},

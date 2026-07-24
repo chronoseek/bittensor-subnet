@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner, run_step
 from chronoseek.chain.submissions import (
@@ -17,7 +19,9 @@ from chronoseek.chutes.runtime import (
     ChutesRuntimeEndpoint,
     build_evaluation_endpoints,
     build_submission_endpoint_map,
+    check_runtime_health,
     chutes_auth_headers_from_env,
+    normalize_endpoint_scheme,
     resolve_submission_endpoint,
 )
 from chronoseek.utils import (
@@ -526,3 +530,56 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
             client.post.call_args.kwargs["headers"]["Authorization"]
             == "Bearer secret"
         )
+
+
+def test_normalize_endpoint_scheme_prefixes_bare_host():
+    assert normalize_endpoint_scheme("9.9.9.9:9000") == "http://9.9.9.9:9000"
+
+
+def test_normalize_endpoint_scheme_leaves_existing_scheme_alone():
+    assert (
+        normalize_endpoint_scheme("https://runtime.example.com")
+        == "https://runtime.example.com"
+    )
+
+
+class TestCheckRuntimeHealthRealTransport(unittest.IsolatedAsyncioTestCase):
+    """Regression coverage for PR #33 review feedback: the previous test
+    suite mocked httpx.AsyncClient entirely, so a bare ip:port endpoint
+    never actually went through httpx's own URL parsing/validation and the
+    missing-scheme bug (httpx.UnsupportedProtocol) went uncaught. These use
+    a real httpx.AsyncClient with only its transport swapped out, so the
+    real URL-parsing code path runs.
+    """
+
+    async def test_check_runtime_health_normalizes_bare_axon_endpoint(self):
+        requested_urls = []
+
+        def handler(request):
+            requested_urls.append(str(request.url))
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            is_healthy = await check_runtime_health(
+                client=client,
+                uid=7,
+                endpoint="9.9.9.9:9000",  # bare, as published via the ServeAxon intent
+                timeout_seconds=5,
+            )
+
+        self.assertTrue(is_healthy)
+        self.assertEqual(requested_urls, ["http://9.9.9.9:9000/health"])
+
+    async def test_check_runtime_health_still_works_for_full_chutes_url(self):
+        def handler(request):
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            is_healthy = await check_runtime_health(
+                client=client,
+                uid=1,
+                endpoint="https://runtime.example.com",
+                timeout_seconds=5,
+            )
+
+        self.assertTrue(is_healthy)

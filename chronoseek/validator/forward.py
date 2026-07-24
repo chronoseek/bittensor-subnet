@@ -17,7 +17,7 @@ from chronoseek.protocol_models import (
 from chronoseek.logging import logger
 from chronoseek.scoring import LatencyScoringConfig, score_response
 from chronoseek.epistula import generate_header
-from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
+from chronoseek.chutes.runtime import ChutesRuntimeEndpoint, normalize_endpoint_scheme
 from chronoseek.validator.task_models import normalize_generated_task
 from chronoseek.validator.telemetry import MinerTelemetryEvent
 
@@ -39,12 +39,6 @@ class MinerQueryResult:
     failure: MinerQueryFailure | None = None
 
 
-def _normalize_endpoint(endpoint: str) -> str:
-    if endpoint.startswith("http"):
-        return endpoint
-    return f"http://{endpoint}"
-
-
 async def query_miner(
     client: httpx.AsyncClient,
     uid: int,
@@ -61,7 +55,7 @@ async def query_miner(
     start_time = time.time()
     try:
         request_payload = request.model_dump(mode="json")
-        endpoint = _normalize_endpoint(endpoint)
+        endpoint = normalize_endpoint_scheme(endpoint)
 
         # Generate Epistula headers. Provider auth stays additive.
         headers = {

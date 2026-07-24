@@ -3,7 +3,7 @@
 from typing import Any
 
 from chronoseek.chain.submissions import MinerSubmission
-from chronoseek.chutes.runtime import resolve_submission_endpoint
+from chronoseek.chutes.runtime import normalize_endpoint_scheme, resolve_submission_endpoint
 from chronoseek.constants import DEFAULT_CHUTES_BASE_DOMAIN
 
 
@@ -12,11 +12,10 @@ def resolve_axon_endpoint(neuron: Any) -> str | None:
 
     Bittensor 11's `MetagraphNeuron.axon` is already the served `ip:port`
     string, or None when nothing is served (no separate AxonInfo object).
-    A scheme is required here: unlike forward.py's query path (which
-    normalizes bare `ip:port` via `_normalize_endpoint`), this module's own
-    caller (`check_runtime_health` in chronoseek/chutes/runtime.py) builds
-    the health-check URL directly and does not normalize it, so an
-    unqualified `ip:port` fails outright with httpx.UnsupportedProtocol.
+    Normalized here via `normalize_endpoint_scheme` as defense in depth, but
+    `check_runtime_health` (chronoseek/chutes/runtime.py) also normalizes
+    whatever endpoint it's given directly, so this doesn't depend on every
+    caller resolving endpoints through this specific function.
     """
     if neuron is None:
         return None
@@ -26,7 +25,7 @@ def resolve_axon_endpoint(neuron: Any) -> str | None:
     axon = str(axon).strip()
     if not axon:
         return None
-    return axon if axon.startswith(("http://", "https://")) else f"http://{axon}"
+    return normalize_endpoint_scheme(axon)
 
 
 def build_endpoint_map_with_axon_fallback(
