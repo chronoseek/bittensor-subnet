@@ -1,4 +1,5 @@
 import asyncio
+import os
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -7,6 +8,26 @@ import chronoseek.miner.runtime as runtime
 from chronoseek.epistula import verify_signature
 from chronoseek.miner.logic import SearchPipelineError
 from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResult
+
+
+def test_runtime_config_defaults_to_finney_netuid_20():
+    with patch.dict(os.environ, {}, clear=True):
+        config = runtime.load_runtime_config()
+
+    assert config.network == "finney"
+    assert config.netuid == 20
+
+
+def test_runtime_config_accepts_explicit_chain_overrides():
+    with patch.dict(
+        os.environ,
+        {"NETWORK": "test", "NETUID": "298"},
+        clear=True,
+    ):
+        config = runtime.load_runtime_config()
+
+    assert config.network == "test"
+    assert config.netuid == 298
 
 
 def test_execute_search_returns_json_serializable_dict():

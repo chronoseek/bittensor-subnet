@@ -31,8 +31,8 @@ Required for normal validator operation:
 | --- | --- | --- |
 | `WALLET_NAME` | Yes | Coldkey wallet name. |
 | `HOTKEY_NAME` | Yes | Registered validator hotkey name. |
-| `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
-| `NETUID` | Yes | ChronoSeek subnet netuid. |
+| `NETWORK` | No | Defaults to `finney`; set it explicitly for `test`, `local`, or another network. |
+| `NETUID` | No | Defaults to the ChronoSeek mainnet subnet, `20`. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 | `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION` | No | Defaults to `1`. Set to `0` only for tests that require replaceable miner submissions; validators then use the newest revealed submission and do not apply the duplicate-submission penalty. |
 | `CHUTES_API_KEY` | Yes | Used to query private Chutes runtimes. |
@@ -71,7 +71,7 @@ Minimal `.env` shape:
 
 ```env
 NETWORK=finney
-NETUID=<netuid>
+NETUID=20
 WALLET_NAME=<validator-coldkey>
 HOTKEY_NAME=<validator-hotkey>
 WALLET_PATH=~/.bittensor/wallets
@@ -93,6 +93,85 @@ Start the validator:
 ```bash
 poetry run python validator.py
 ```
+
+### Docker deployment with automatic updates
+
+The GitHub Actions workflow publishes the validator image to
+`creativeessence/chronoseek-subnet` by default. Configure the repository under
+**Settings → Secrets and variables → Actions**:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| Secret | `DOCKERHUB_USERNAME` | Docker Hub user allowed to push the image. |
+| Secret | `DOCKERHUB_TOKEN` | Docker Hub access token with read/write permission. Do not use the account password. |
+| Variable (optional) | `DOCKERHUB_IMAGE` | Alternate `namespace/repository`, if not using `creativeessence/chronoseek-subnet`. |
+
+Create the matching Docker Hub repository before running the workflow. A public
+repository is the simplest deployment because validator hosts and Watchtower
+can pull without registry credentials.
+
+The two GitHub secrets above are only for publishing images. Do not put
+validator runtime credentials in GitHub Actions. Each validator operator keeps
+their own runtime credentials on their validator host.
+
+On each validator host, create and protect the runtime environment file:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+Edit `.env` with that validator's settings:
+
+```env
+DOCKER_IMAGE=creativeessence/chronoseek-subnet:latest
+NETWORK=finney
+NETUID=20
+
+WALLET_NAME=<validator-coldkey>
+HOTKEY_NAME=<validator-hotkey>
+WALLET_PATH=~/.bittensor/wallets
+
+CHUTES_API_KEY=<validator-chutes-api-key>
+HF_TOKEN=<validator-hugging-face-token>
+VALIDATOR_TASK_SECRET=<long-random-validator-secret>
+
+HIPPIUS_S3_BUCKET=<validator-owned-bucket>
+HIPPIUS_S3_ACCESS_KEY_ID=<hippius-access-key>
+HIPPIUS_S3_SECRET_ACCESS_KEY=<hippius-secret-key>
+
+VIDAIO_COMPRESSION_ENABLED=1
+VIDAIO_API_KEY=<vidaio-api-key-if-required>
+LOG_LEVEL=INFO
+```
+
+Compose injects every entry from `.env` into the validator container. The
+wallet keys themselves are not environment variables: Compose mounts
+`~/.bittensor/wallets` read-only, and `WALLET_NAME`/`HOTKEY_NAME` select the
+wallet files to use. The `.env` file is ignored by both Git and Docker builds,
+so it is neither committed nor baked into the published image.
+
+Then start the deployment:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs -f chronoseek-validator
+```
+
+After changing an environment value, recreate the validator container:
+
+```bash
+docker compose up -d --force-recreate validator
+```
+
+Avoid posting the output of `docker compose config` in logs or support chats;
+depending on the Compose version, it may include resolved secret values.
+
+Compose pulls the published image at startup. Watchtower checks Docker Hub every
+five minutes and restarts the validator when a new `latest` image is available.
+The workflow publishes on pushes to `main` or `master`, on `v*` release tags,
+and through manual workflow dispatch.
 
 CLI flags can replace environment variables and override code defaults. For example:
 

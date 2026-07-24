@@ -5,6 +5,38 @@ from unittest.mock import patch
 from validator import get_config
 
 
+def test_validator_config_defaults_to_finney_netuid_20():
+    with patch.dict(os.environ, {}, clear=True):
+        with patch.object(sys, "argv", ["validator.py"]):
+            config = get_config()
+
+    assert config.subtensor.network == "finney"
+    assert config.netuid == 20
+
+
+def test_validator_config_accepts_explicit_chain_overrides():
+    with patch.dict(
+        os.environ,
+        {"NETWORK": "test", "NETUID": "298"},
+        clear=True,
+    ):
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "validator.py",
+                "--subtensor.network",
+                "local",
+                "--netuid",
+                "123",
+            ],
+        ):
+            config = get_config()
+
+    assert config.subtensor.network == "local"
+    assert config.netuid == 123
+
+
 def test_validator_submission_enforcement_defaults_to_enabled():
     with patch.dict(os.environ, {}, clear=True):
         with patch.object(sys, "argv", ["validator.py"]):

@@ -222,7 +222,7 @@ CHRONOSEEK_LIVE_CHAIN_COMMIT=1 \
 WALLET_NAME="<coldkey>" \
 HOTKEY_NAME="<hotkey>" \
 NETWORK="finney" \
-NETUID="<netuid>" \
+NETUID="20" \
 LIVE_CHAIN_CHUTE_SLUG="alice-chronoseek-runtime-live" \
 poetry run pytest tests/live/test_chain.py::test_live_chain_commit_submission -s
 ```
@@ -238,7 +238,7 @@ CHRONOSEEK_LIVE_CHAIN_DUPLICATE_COMMIT=1 \
 WALLET_NAME="<coldkey>" \
 HOTKEY_NAME="<already-submitted-hotkey>" \
 NETWORK="finney" \
-NETUID="<netuid>" \
+NETUID="20" \
 poetry run pytest tests/live/test_chain.py::test_live_chain_rejects_duplicate_submission_for_hotkey -s
 ```
 
@@ -248,7 +248,7 @@ poetry run pytest tests/live/test_chain.py::test_live_chain_rejects_duplicate_su
 CHRONOSEEK_LIVE_TESTS=1 \
 CHRONOSEEK_LIVE_CHAIN=1 \
 NETWORK="finney" \
-NETUID="<netuid>" \
+NETUID="20" \
 LIVE_CHAIN_EXPECTED_HOTKEY="<ss58-hotkey>" \
 LIVE_CHAIN_EXPECTED_DUPLICATE_HOTKEY="<optional-duplicate-ss58-hotkey>" \
 poetry run pytest tests/live/test_chain.py::test_live_chain_fetch_submissions -s
