@@ -212,7 +212,8 @@ def test_ytdlp_js_runtime_options_uses_configured_paths(monkeypatch, tmp_path):
         "js_runtimes": {
             "node": {"path": str(node)},
             "deno": {"path": str(deno)},
-        }
+        },
+        "remote_components": ["ejs:npm"],
     }
 
 
