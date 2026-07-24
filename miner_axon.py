@@ -30,6 +30,7 @@ from chronoseek.bittensor_sdk import (
     add_bittensor_arguments,
     create_subtensor,
     create_wallet,
+    fetch_metagraph,
     parse_config,
 )
 from chronoseek.constants import (
@@ -120,7 +121,22 @@ def configure_logging(config) -> None:
     )
 
 
-def publish_axon(config, wallet: bt.Wallet, subtensor: bt.Subtensor) -> None:
+def _find_own_neuron(metagraph, hotkey: str):
+    hotkeys = list(getattr(metagraph, "hotkeys", None) or [])
+    if hotkey not in hotkeys:
+        return None
+    uid = hotkeys.index(hotkey)
+    neurons = getattr(metagraph, "neurons", None) or []
+    return neurons[uid] if uid < len(neurons) else None
+
+
+def _is_already_published(metagraph, hotkey: str, ip: str, port: int) -> bool:
+    neuron = _find_own_neuron(metagraph, hotkey)
+    published = getattr(neuron, "axon", None) if neuron is not None else None
+    return bool(published) and str(published).strip() == f"{ip}:{port}"
+
+
+def publish_axon(config, wallet: bt.Wallet, subtensor: bt.Subtensor, metagraph) -> None:
     if not config.axon_external_ip:
         raise ValueError(
             "--axon-external-ip (or AXON_EXTERNAL_IP) is required: Bittensor 11 "
@@ -128,10 +144,22 @@ def publish_axon(config, wallet: bt.Wallet, subtensor: bt.Subtensor) -> None:
             "explicitly for validators to resolve this axon."
         )
 
+    ip = str(config.axon_external_ip)
     external_port = int(config.axon_external_port or config.axon_port)
+
+    # A restart re-runs this on every process start; re-submitting the same
+    # ip:port that's already on chain just burns the serving rate limit for
+    # no effect, and can make a restart fail if that limit is exhausted.
+    if _is_already_published(metagraph, wallet.hotkey.ss58_address, ip, external_port):
+        logger.info(
+            f"Axon already published on-chain at {ip}:{external_port} "
+            f"netuid={config.netuid}; skipping republish."
+        )
+        return
+
     intent = ServeAxon(
         netuid=int(config.netuid),
-        ip=str(config.axon_external_ip),
+        ip=ip,
         port=external_port,
     )
     result = subtensor.execute(intent, wallet)
@@ -139,8 +167,7 @@ def publish_axon(config, wallet: bt.Wallet, subtensor: bt.Subtensor) -> None:
         raise RuntimeError(f"Failed to publish axon on-chain: {result.message}")
 
     logger.success(
-        f"Published axon on-chain: {config.axon_external_ip}:{external_port} "
-        f"netuid={config.netuid}"
+        f"Published axon on-chain: {ip}:{external_port} netuid={config.netuid}"
     )
 
 
@@ -155,7 +182,8 @@ def main() -> None:
         f"netuid={config.netuid}, hotkey={wallet.hotkey.ss58_address}"
     )
 
-    publish_axon(config, wallet, subtensor)
+    metagraph = fetch_metagraph(subtensor, config.netuid)
+    publish_axon(config, wallet, subtensor, metagraph)
 
     logger.info(f"Serving miner runtime on {config.host}:{config.axon_port}")
     uvicorn.run(miner_app, host=config.host, port=int(config.axon_port))

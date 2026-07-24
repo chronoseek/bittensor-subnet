@@ -204,6 +204,8 @@ This serves `chronoseek.miner.runtime:app` (the same `/health`/`/search` contrac
 
 This process does not commit any metadata on-chain; that only happens via `miner.py`. A validator only tries this hotkey's axon when it finds no Chutes commitment for it at all.
 
+On every start (including restarts), it first checks the metagraph for this hotkey's currently published axon; if it already matches `<external-ip>:<port>`, the on-chain publish is skipped so a restart doesn't needlessly re-submit the same address and burn the serving rate limit.
+
 ## Video Download Behavior
 
 Miner Chutes must handle synthetic requests from validators. Owner-run Chutes runtimes are forked from miner runtimes and may also receive non-Hippius videos.
