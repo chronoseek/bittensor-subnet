@@ -223,7 +223,7 @@ async def health(self):
     input_schema=VideoSearchRequest,
     output_schema=VideoSearchResponse,
 )
-async def search(self, payload: VideoSearchRequest) -> VideoSearchResponse:
+async def search(self, payload: VideoSearchRequest) -> dict:
     """Run ChronoSeek search as a native Chutes SDK cord.
 
     Chutes native cords do not pass arbitrary public HTTP headers to user code,
