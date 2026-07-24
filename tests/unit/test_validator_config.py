@@ -81,3 +81,48 @@ def test_validator_vidaio_disable_flag_overrides_default():
             config = get_config()
 
     assert config.vidaio_compression_enabled is False
+
+
+def test_validator_hippius_s3_defaults_when_env_unset():
+    with patch.dict(os.environ, {}, clear=True):
+        with patch.object(sys, "argv", ["validator.py"]):
+            config = get_config()
+
+    assert config.hippius_s3_bucket == "chronoseek"
+
+
+def test_validator_hippius_s3_reads_environment_defaults():
+    """Regression test (PR #33 review): none of the --hippius-s3-* args read
+    their corresponding env vars, so .env's HIPPIUS_S3_BUCKET was silently
+    ignored and the validator authenticated against the wrong bucket."""
+    with patch.dict(
+        os.environ,
+        {
+            "HIPPIUS_S3_ENDPOINT_URL": "https://s3.example.com",
+            "HIPPIUS_S3_PUBLIC_BASE_URL": "https://public.example.com",
+            "HIPPIUS_S3_BUCKET": "chronoseek85",
+            "HIPPIUS_S3_REGION": "example-region",
+            "HIPPIUS_S3_TIMEOUT_SECONDS": "42.5",
+        },
+        clear=True,
+    ):
+        with patch.object(sys, "argv", ["validator.py"]):
+            config = get_config()
+
+    assert config.hippius_s3_endpoint_url == "https://s3.example.com"
+    assert config.hippius_s3_public_base_url == "https://public.example.com"
+    assert config.hippius_s3_bucket == "chronoseek85"
+    assert config.hippius_s3_region == "example-region"
+    assert config.hippius_s3_timeout_seconds == 42.5
+
+
+def test_validator_hippius_s3_bucket_accepts_cli_override():
+    with patch.dict(os.environ, {"HIPPIUS_S3_BUCKET": "env-bucket"}, clear=True):
+        with patch.object(
+            sys,
+            "argv",
+            ["validator.py", "--hippius-s3-bucket", "cli-bucket"],
+        ):
+            config = get_config()
+
+    assert config.hippius_s3_bucket == "cli-bucket"

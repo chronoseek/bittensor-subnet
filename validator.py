@@ -989,31 +989,35 @@ def get_config():
     parser.add_argument(
         "--hippius-s3-endpoint-url",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+        default=os.getenv("HIPPIUS_S3_ENDPOINT_URL", DEFAULT_HIPPIUS_S3_ENDPOINT_URL),
         help="Hippius S3-compatible endpoint URL used for validator task uploads.",
     )
     parser.add_argument(
         "--hippius-s3-public-base-url",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
+        default=os.getenv(
+            "HIPPIUS_S3_PUBLIC_BASE_URL", DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL
+        ),
         help="Public base URL for uploaded Hippius validator task clips.",
     )
     parser.add_argument(
         "--hippius-s3-bucket",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_BUCKET,
+        default=os.getenv("HIPPIUS_S3_BUCKET", DEFAULT_HIPPIUS_S3_BUCKET),
         help="Hippius S3 bucket for validator task clips.",
     )
     parser.add_argument(
         "--hippius-s3-region",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_REGION,
+        default=os.getenv("HIPPIUS_S3_REGION", DEFAULT_HIPPIUS_S3_REGION),
         help="S3 signing region for Hippius uploads.",
     )
     parser.add_argument(
         "--hippius-s3-timeout-seconds",
         type=float,
-        default=DEFAULT_HIPPIUS_S3_TIMEOUT_SECONDS,
+        default=env_float(
+            "HIPPIUS_S3_TIMEOUT_SECONDS", DEFAULT_HIPPIUS_S3_TIMEOUT_SECONDS
+        ),
         help="Hippius S3 upload/delete timeout in seconds.",
     )
     parser.add_argument(
