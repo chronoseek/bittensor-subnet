@@ -381,7 +381,17 @@ class VideoDownloader:
         cookie_opts = cls._ytdlp_cookie_options()
         js_opts = cls._ytdlp_js_runtime_options()
         options = {
-            "format": "mp4/bestvideo+bestaudio/best",
+            # Exclude AV1: OpenCV's bundled FFmpeg (used for frame extraction)
+            # picks its native "av1" decoder, which on some builds/platforms
+            # only offers hardware pixel formats and fails outright ("Failed
+            # to get pixel format") instead of falling back to software - even
+            # though the system ffmpeg CLI decodes the same file fine via
+            # libdav1d. Prefer any other codec; only fall back to AV1 if
+            # nothing else is available for this video.
+            "format": (
+                "mp4[vcodec!*=av01]/bestvideo[vcodec!*=av01]+bestaudio"
+                "/best[vcodec!*=av01]/bestvideo+bestaudio/best"
+            ),
             "merge_output_format": "mp4",
             "outtmpl": output_template,
             "noplaylist": True,

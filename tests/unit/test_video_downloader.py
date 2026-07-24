@@ -1,7 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from chronoseek.hippius.s3 import DEFAULT_HIPPIUS_S3_ENDPOINT_URL
 from chronoseek.validator.video_availability import (
@@ -374,6 +374,29 @@ def test_looks_like_video_container_accepts_mp4_and_rejects_html(tmp_path):
     bad = tmp_path / "fake.mp4"
     bad.write_text("<!DOCTYPE html><html>", encoding="utf-8")
     assert not VideoDownloader._looks_like_video_container(str(bad))
+
+
+@patch("yt_dlp.YoutubeDL")
+def test_download_with_ytdlp_excludes_av01_format(mock_youtube_dl_cls, tmp_path):
+    """Regression test: OpenCV's bundled FFmpeg fails to decode AV1 on some
+    platforms/builds ("Failed to get pixel format") even though the system
+    ffmpeg CLI decodes the same file fine via libdav1d, so the format
+    selector must not let yt-dlp pick an AV1-coded stream unless nothing
+    else is available."""
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.return_value = {"id": "abc123", "ext": "mp4"}
+    mock_ydl.prepare_filename.return_value = str(tmp_path / "abc123.mp4")
+    mock_youtube_dl_cls.return_value.__enter__.return_value = mock_ydl
+
+    VideoDownloader._download_with_ytdlp(
+        "https://www.youtube.com/watch?v=abc123", timeout=30
+    )
+
+    options = mock_youtube_dl_cls.call_args.args[0]
+    assert options["format"] == (
+        "mp4[vcodec!*=av01]/bestvideo[vcodec!*=av01]+bestaudio"
+        "/best[vcodec!*=av01]/bestvideo+bestaudio/best"
+    )
 
 
 def test_ytdlp_clean_parent_env_strips_node_ipc_vars(monkeypatch):
