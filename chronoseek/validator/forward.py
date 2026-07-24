@@ -17,7 +17,8 @@ from chronoseek.protocol_models import (
 from chronoseek.logging import logger
 from chronoseek.scoring import LatencyScoringConfig, score_response
 from chronoseek.epistula import generate_header
-from chronoseek.chutes.runtime import ChutesRuntimeEndpoint, normalize_endpoint_scheme
+from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
+from chronoseek.utils import normalize_endpoint_scheme
 from chronoseek.validator.task_models import normalize_generated_task
 from chronoseek.validator.telemetry import MinerTelemetryEvent
 

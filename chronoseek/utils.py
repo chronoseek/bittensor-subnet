@@ -3,8 +3,23 @@
 from typing import Any
 
 from chronoseek.chain.submissions import MinerSubmission
-from chronoseek.chutes.runtime import normalize_endpoint_scheme, resolve_submission_endpoint
+from chronoseek.chutes.runtime import resolve_submission_endpoint
 from chronoseek.constants import DEFAULT_CHUTES_BASE_DOMAIN
+
+
+def normalize_endpoint_scheme(endpoint: str) -> str:
+    """Prefix a bare `ip:port` (or host) endpoint with `http://` if it has no
+    scheme already. Every endpoint that ends up in the validator's
+    endpoint_map is normalized once, at the point it's resolved
+    (`resolve_axon_endpoint` below; `resolve_submission_endpoint` in
+    chronoseek/chutes/runtime.py already always returns a full URL for the
+    Chutes path) - forward.py's query path reuses this same function so the
+    two can't drift apart.
+    """
+    endpoint = str(endpoint or "").strip()
+    if endpoint.startswith(("http://", "https://")):
+        return endpoint
+    return f"http://{endpoint}"
 
 
 def resolve_axon_endpoint(neuron: Any) -> str | None:
@@ -12,10 +27,6 @@ def resolve_axon_endpoint(neuron: Any) -> str | None:
 
     Bittensor 11's `MetagraphNeuron.axon` is already the served `ip:port`
     string, or None when nothing is served (no separate AxonInfo object).
-    Normalized here via `normalize_endpoint_scheme` as defense in depth, but
-    `check_runtime_health` (chronoseek/chutes/runtime.py) also normalizes
-    whatever endpoint it's given directly, so this doesn't depend on every
-    caller resolving endpoints through this specific function.
     """
     if neuron is None:
         return None

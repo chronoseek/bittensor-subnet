@@ -21,11 +21,11 @@ from chronoseek.chutes.runtime import (
     build_submission_endpoint_map,
     check_runtime_health,
     chutes_auth_headers_from_env,
-    normalize_endpoint_scheme,
     resolve_submission_endpoint,
 )
 from chronoseek.utils import (
     build_endpoint_map_with_axon_fallback,
+    normalize_endpoint_scheme,
     resolve_axon_endpoint,
 )
 
@@ -550,9 +550,24 @@ class TestCheckRuntimeHealthRealTransport(unittest.IsolatedAsyncioTestCase):
     missing-scheme bug (httpx.UnsupportedProtocol) went uncaught. These use
     a real httpx.AsyncClient with only its transport swapped out, so the
     real URL-parsing code path runs.
+
+    check_runtime_health itself does not normalize its endpoint argument -
+    that contract hasn't changed for the Chutes path (resolve_submission_
+    endpoint has always returned a full URL) and isn't changing for the
+    axon path either: normalization happens once, upstream, in
+    chronoseek/utils.py's resolve_axon_endpoint/normalize_endpoint_scheme,
+    before an endpoint ever reaches endpoint_map. These tests cover both
+    ends of that contract with a real transport.
     """
 
-    async def test_check_runtime_health_normalizes_bare_axon_endpoint(self):
+    async def test_axon_endpoint_is_pre_normalized_before_reaching_health_check(self):
+        """End-to-end: an axon's bare ip:port, once resolved via
+        resolve_axon_endpoint, must already be a full URL that
+        check_runtime_health can use as-is against a real client."""
+        neuron = SimpleNamespace(axon="9.9.9.9:9000")
+        resolved_endpoint = resolve_axon_endpoint(neuron)
+        self.assertEqual(resolved_endpoint, "http://9.9.9.9:9000")
+
         requested_urls = []
 
         def handler(request):
@@ -563,7 +578,7 @@ class TestCheckRuntimeHealthRealTransport(unittest.IsolatedAsyncioTestCase):
             is_healthy = await check_runtime_health(
                 client=client,
                 uid=7,
-                endpoint="9.9.9.9:9000",  # bare, as published via the ServeAxon intent
+                endpoint=resolved_endpoint,
                 timeout_seconds=5,
             )
 
@@ -583,3 +598,20 @@ class TestCheckRuntimeHealthRealTransport(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(is_healthy)
+
+    async def test_check_runtime_health_does_not_normalize_a_bare_endpoint_itself(self):
+        """Documents the actual contract: check_runtime_health assumes a
+        pre-normalized endpoint. A bare ip:port passed directly (bypassing
+        resolve_axon_endpoint) fails - which is exactly why normalization
+        must happen upstream, not defensively here."""
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"ok": True})
+        )) as client:
+            is_healthy = await check_runtime_health(
+                client=client,
+                uid=7,
+                endpoint="9.9.9.9:9000",
+                timeout_seconds=5,
+            )
+
+        self.assertFalse(is_healthy)
