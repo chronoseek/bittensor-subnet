@@ -1,7 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from chronoseek.hippius.s3 import DEFAULT_HIPPIUS_S3_ENDPOINT_URL
 from chronoseek.validator.video_availability import (
@@ -174,6 +174,51 @@ def test_validator_availability_routes_vimeo_through_extractor(monkeypatch):
     assert result.accessible
     assert result.reason == "extractor_ok"
     assert calls == [("extractor", "https://vimeo.com/12345")]
+
+
+@patch("yt_dlp.YoutubeDL")
+def test_check_extractor_platform_reuses_downloader_cookie_and_player_client_config(
+    mock_youtube_dl_cls, monkeypatch, tmp_path
+):
+    """Regression test: the availability pre-check built its own bare yt-dlp
+    options with no cookies at all, so it hit YouTube's bot-check on almost
+    every candidate even when the real download (which does carry cookies)
+    would have succeeded - wasting sampling attempts on videos that were
+    actually accessible."""
+    cookies_file = tmp_path / "cookies.txt"
+    cookies_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookies_file))
+    monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
+
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.return_value = {"id": "abc123"}
+    mock_youtube_dl_cls.return_value.__enter__.return_value = mock_ydl
+
+    captured_cookie_contents = {}
+
+    def capture_options(options):
+        captured_cookie_contents["path"] = options["cookiefile"]
+        captured_cookie_contents["contents"] = Path(
+            options["cookiefile"]
+        ).read_text(encoding="utf-8")
+        captured_cookie_contents["player_client"] = options["extractor_args"][
+            "youtube"
+        ]["player_client"]
+        return mock_youtube_dl_cls.return_value
+
+    mock_youtube_dl_cls.side_effect = capture_options
+
+    checker = VideoAvailabilityChecker(cache_ttl_seconds=0)
+    result = checker._check_extractor_platform(
+        "https://www.youtube.com/watch?v=abc123"
+    )
+
+    assert result.accessible
+    assert captured_cookie_contents["player_client"] == (
+        VideoDownloader.YTDLP_PLAYER_CLIENTS
+    )
+    assert captured_cookie_contents["path"] != str(cookies_file)
+    assert captured_cookie_contents["contents"] == "# Netscape HTTP Cookie File\n"
 
 
 def test_ytdlp_cookie_options_uses_cookie_file_when_present(monkeypatch, tmp_path):

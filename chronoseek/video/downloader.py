@@ -79,6 +79,13 @@ class VideoDownloader:
     _ENV_HIPPIUS_S3_SECRET_ACCESS_KEY = "HIPPIUS_S3_SECRET_ACCESS_KEY"
     # Node-based parents (e.g. PM2) set these; yt-dlp's node/deno children then break IPC.
     _YTDLP_STRIP_ENV_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
+    # "tv" is the only client confirmed to both accept cookies and avoid
+    # YouTube's SABR-only stream forcing (the "web" client hits SABR and
+    # returns zero usable formats once cookies force android/ios/android_vr
+    # to be skipped as cookie-incompatible). Keep the others as fallback for
+    # cookie-less/local testing. Shared by the downloader and the validator's
+    # availability pre-check so the two can't drift apart.
+    YTDLP_PLAYER_CLIENTS = ["tv", "android", "web", "ios"]
 
     HIPPIUS_HOSTS = {
         "s3.hippius.com",
@@ -412,14 +419,9 @@ class VideoDownloader:
             "no_warnings": True,
             "socket_timeout": timeout,
             "retries": 3,
-            # "tv" is the only client here confirmed to both accept cookies
-            # and avoid YouTube's SABR-only stream forcing (the "web" client
-            # hits SABR and returns zero usable formats once cookies force
-            # android/ios/android_vr to be skipped as cookie-incompatible).
-            # Keep the others as fallback for cookie-less/local testing.
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["tv", "android", "web", "ios"],
+                    "player_client": cls.YTDLP_PLAYER_CLIENTS,
                 },
             },
             **js_opts,
