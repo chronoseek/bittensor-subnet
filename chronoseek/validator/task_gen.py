@@ -257,6 +257,52 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             )
         return tasks
 
+    def _row_caption_interval_pairs(
+        self, row: dict
+    ) -> List[Tuple[str, List[Tuple[float, float]]]]:
+        """
+        Each row's `sentences`/`timestamps` are parallel arrays: every
+        sentence describes its own distinct moment, paired 1:1 with its own
+        timestamp (matching the ActivityNet_Captions schema). They must be
+        zipped per-sentence rather than collapsed onto the row's combined
+        `caption` field (the concatenation of all sentences), which would
+        pair one caption describing several unrelated events with every
+        interval in the row - and collapse a video's several distinct
+        captions down to one, defeating per-caption sampling/shuffling.
+        """
+        sentences = row.get("sentences")
+        timestamps = row.get("timestamps")
+        if (
+            isinstance(sentences, list)
+            and isinstance(timestamps, list)
+            and len(sentences) == len(timestamps)
+        ):
+            pairs = []
+            for sentence, pair in zip(sentences, timestamps):
+                intervals = self._normalize_interval_list(pair)
+                if sentence and intervals:
+                    pairs.append((str(sentence), intervals))
+            return pairs
+
+        caption = row.get("caption") or row.get("query") or row.get("sentence")
+        intervals = self._normalize_interval_list(
+            row.get("ground_truths")
+            if "ground_truths" in row
+            else (
+                row.get("ground_truth")
+                if "ground_truth" in row
+                else (
+                    [row.get("start_time"), row.get("end_time")]
+                    if row.get("start_time") is not None
+                    and row.get("end_time") is not None
+                    else row.get("timestamps")
+                )
+            )
+        )
+        if caption and intervals:
+            return [(str(caption), intervals)]
+        return []
+
     def _normalize_activitynet_rows(self, rows: List[dict]) -> List[Dict]:
         grouped: Dict[str, Dict] = {}
 
@@ -273,23 +319,11 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             if not video_url and video_id:
                 video_url = f"https://www.youtube.com/watch?v={str(video_id)[2:]}"
 
-            caption = row.get("caption") or row.get("query") or row.get("sentence")
-            intervals = self._normalize_interval_list(
-                row.get("ground_truths")
-                if "ground_truths" in row
-                else (
-                    row.get("ground_truth")
-                    if "ground_truth" in row
-                    else (
-                        [row.get("start_time"), row.get("end_time")]
-                        if row.get("start_time") is not None
-                        and row.get("end_time") is not None
-                        else row.get("timestamps")
-                    )
-                )
-            )
+            if not video_url:
+                continue
 
-            if not video_url or not caption or not intervals:
+            caption_interval_pairs = self._row_caption_interval_pairs(row)
+            if not caption_interval_pairs:
                 continue
 
             task_key = str(video_id or video_url)
@@ -302,7 +336,8 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
                     "caption_intervals": defaultdict(list),
                 }
 
-            grouped[task_key]["caption_intervals"][caption].extend(intervals)
+            for caption, intervals in caption_interval_pairs:
+                grouped[task_key]["caption_intervals"][caption].extend(intervals)
 
         tasks = []
         for task in grouped.values():
