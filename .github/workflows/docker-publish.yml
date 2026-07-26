@@ -1,7 +1,7 @@
-# Chi Subnet - Docker Build and Push
+# ChronoSeek Subnet - Docker Build and Push
 #
 # This workflow builds and pushes the Docker image to Docker Hub
-# whenever code is pushed to the main branch.
+# whenever code is pushed to a mainline branch or a version tag is created.
 #
 # Validators using Watchtower will automatically pull the new image.
 #
@@ -11,6 +11,8 @@
 #   3. Add secrets to your GitHub repo (Settings > Secrets > Actions):
 #      - DOCKERHUB_USERNAME: Your Docker Hub username
 #      - DOCKERHUB_TOKEN: Your Docker Hub access token
+#   4. If needed, set the Actions variable DOCKERHUB_IMAGE to override
+#      creativeessence/chronoseek-subnet.
 
 name: Build and Push Docker Image
 
@@ -19,21 +21,19 @@ on:
     branches:
       - main
       - master
-    # Only rebuild when relevant files change
-    paths:
-      - 'validator.py'
-      - 'pyproject.toml'
-      - 'Dockerfile'
-      - '.github/workflows/docker-publish.yml'
-  
+    tags:
+      - 'v*'
+
   # Allow manual trigger for testing
   workflow_dispatch:
 
 env:
   REGISTRY: docker.io
-  # Change this to your Docker Hub username and repo name
-  # Format: username/repository
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE || 'creativeessence/chronoseek-subnet' }}
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
@@ -41,11 +41,24 @@ jobs:
     
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate Docker Hub configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "Missing GitHub Actions secret: DOCKERHUB_USERNAME" >&2
+            exit 1
+          fi
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: DOCKERHUB_TOKEN" >&2
+            exit 1
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

@@ -146,7 +146,7 @@ def execute_search(
     *,
     caller_hotkey: str | None = None,
     enforce_validator_auth: bool = True,
-):
+) -> dict | JSONResponse:
     request_id = payload.request_id or "unknown-request"
     caller = caller_hotkey or "chutes-sdk-authenticated-caller"
     logger.info(f"Received request {request_id} from {caller}: {payload.query}")
@@ -195,7 +195,11 @@ def execute_search(
         logger.info("Starting search processing...")
         results = miner_logic.search(payload.video_url, payload.query, top_k=payload.top_k)
         logger.success(f"Search completed. Found {len(results)} results.")
-        return VideoSearchResponse(request_id=payload.request_id, results=results)
+        response = VideoSearchResponse(
+            request_id=payload.request_id,
+            results=results,
+        )
+        return response.model_dump(mode="json")
     except miner_logic_module.SearchPipelineError as exc:
         logger.error(f"Request {request_id} failed with {exc.code}: {exc.message}")
         status_code = 500

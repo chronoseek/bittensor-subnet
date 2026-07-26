@@ -1,4 +1,5 @@
 import json
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,25 +88,43 @@ class VideoAvailabilityChecker:
                 "yt-dlp is required for validator-side extractor-platform availability checks."
             ) from exc
 
-        options = {
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-            "logger": _SilentYtDlpLogger(),
-            "socket_timeout": self.timeout,
-            "extract_flat": True,
-        }
+        # Must mirror the downloader's cookie/player-client/js-runtime setup
+        # (VideoDownloader._download_with_ytdlp): without it, this pre-check
+        # hits YouTube's bot-check on almost every candidate even when the
+        # real download (which does carry cookies) would succeed fine,
+        # wasting sampling attempts on videos that are actually accessible.
+        with tempfile.TemporaryDirectory(prefix="chronoseek-ytdlp-check-") as tmp_dir:
+            cookie_opts = VideoDownloader._writable_ytdlp_cookie_options(
+                VideoDownloader._ytdlp_cookie_options(),
+                runtime_directory=tmp_dir,
+            )
+            options = {
+                "skip_download": True,
+                "quiet": True,
+                "no_warnings": True,
+                "logger": _SilentYtDlpLogger(),
+                "socket_timeout": self.timeout,
+                "extract_flat": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": VideoDownloader.YTDLP_PLAYER_CLIENTS,
+                    },
+                },
+                **VideoDownloader._ytdlp_js_runtime_options(),
+                **cookie_opts,
+            }
 
-        try:
-            with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=False)
+            try:
+                with VideoDownloader._yt_dlp_clean_parent_env():
+                    with yt_dlp.YoutubeDL(options) as ydl:
+                        info = ydl.extract_info(url, download=False)
 
-            if not info:
-                return VideoAvailabilityResult(False, "extractor_unavailable")
+                if not info:
+                    return VideoAvailabilityResult(False, "extractor_unavailable")
 
-            return VideoAvailabilityResult(True, "extractor_ok")
-        except Exception as exc:
-            return VideoAvailabilityResult(False, self._normalize_extractor_error(exc))
+                return VideoAvailabilityResult(True, "extractor_ok")
+            except Exception as exc:
+                return VideoAvailabilityResult(False, self._normalize_extractor_error(exc))
 
     def _check_direct_url(self, url: str) -> VideoAvailabilityResult:
         try:

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -6,7 +7,62 @@ import httpx
 import chronoseek.miner.runtime as runtime
 from chronoseek.epistula import verify_signature
 from chronoseek.miner.logic import SearchPipelineError
-from chronoseek.protocol_models import VideoSearchResult
+from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResult
+
+
+def test_runtime_config_defaults_to_finney_netuid_20():
+    with patch.dict(os.environ, {}, clear=True):
+        config = runtime.load_runtime_config()
+
+    assert config.network == "finney"
+    assert config.netuid == 20
+
+
+def test_runtime_config_accepts_explicit_chain_overrides():
+    with patch.dict(
+        os.environ,
+        {"NETWORK": "test", "NETUID": "298"},
+        clear=True,
+    ):
+        config = runtime.load_runtime_config()
+
+    assert config.network == "test"
+    assert config.netuid == 298
+
+
+def test_execute_search_returns_json_serializable_dict():
+    previous_miner_logic = runtime.miner_logic
+    previous_validator_auth = runtime.validator_auth
+    runtime.miner_logic = MagicMock()
+    runtime.miner_logic.search.return_value = [
+        VideoSearchResult(start=1.0, end=2.0, confidence=0.9)
+    ]
+    runtime.validator_auth = MagicMock()
+
+    try:
+        response = runtime.execute_search(
+            VideoSearchRequest(
+                request_id="req-direct",
+                video={"url": "https://example.com/video.mp4"},
+                query="a person waves",
+                top_k=1,
+            ),
+            enforce_validator_auth=False,
+        )
+
+        assert isinstance(response, dict)
+        assert response == {
+            "protocol_version": "2026-04-10",
+            "request_id": "req-direct",
+            "status": "completed",
+            "results": [
+                {"start": 1.0, "end": 2.0, "confidence": 0.9},
+            ],
+            "miner_metadata": None,
+        }
+    finally:
+        runtime.miner_logic = previous_miner_logic
+        runtime.validator_auth = previous_validator_auth
 
 
 def test_chutes_runtime_exposes_health_and_search_contract():

@@ -22,6 +22,7 @@ load_dotenv()
 
 from chronoseek.constants import DEFAULT_VIDAIO_API_BASE_URL
 from chronoseek.logging import configure_logging
+from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 
 DEFAULT_CACHE_DIR = str(Path.home() / ".cache" / "chronoseek" / "hardened-task-verifier")
@@ -359,7 +360,6 @@ def resolve_dataset_path(args: argparse.Namespace) -> str:
 
 
 def build_availability_checker(args: argparse.Namespace) -> VideoAvailabilityChecker | None:
-    from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
     if not args.require_accessible_videos:
         return None

@@ -1,6 +1,6 @@
-# Chi Subnet Validator Docker Image
-# Build: docker build -t chi-validator .
-# Run: docker-compose up -d
+# ChronoSeek Subnet Validator Docker Image
+# Build: docker build -t chronoseek-validator .
+# Run: docker compose up -d
 
 FROM python:3.12-slim
 
@@ -8,6 +8,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -30,7 +31,7 @@ RUN useradd -m -u 1000 validator && \
 
 # Environment configuration
 ENV NETWORK=finney
-ENV NETUID=1
+ENV NETUID=20
 ENV WALLET_NAME=validator
 ENV HOTKEY_NAME=default
 ENV LOG_LEVEL=INFO

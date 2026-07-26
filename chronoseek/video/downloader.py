@@ -79,6 +79,13 @@ class VideoDownloader:
     _ENV_HIPPIUS_S3_SECRET_ACCESS_KEY = "HIPPIUS_S3_SECRET_ACCESS_KEY"
     # Node-based parents (e.g. PM2) set these; yt-dlp's node/deno children then break IPC.
     _YTDLP_STRIP_ENV_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
+    # "tv" is the only client confirmed to both accept cookies and avoid
+    # YouTube's SABR-only stream forcing (the "web" client hits SABR and
+    # returns zero usable formats once cookies force android/ios/android_vr
+    # to be skipped as cookie-incompatible). Keep the others as fallback for
+    # cookie-less/local testing. Shared by the downloader and the validator's
+    # availability pre-check so the two can't drift apart.
+    YTDLP_PLAYER_CLIENTS = ["tv", "android", "web", "ios"]
 
     HIPPIUS_HOSTS = {
         "s3.hippius.com",
@@ -330,6 +337,26 @@ class VideoDownloader:
         return opts
 
     @staticmethod
+    def _writable_ytdlp_cookie_options(
+        cookie_options: dict,
+        *,
+        runtime_directory: str,
+    ) -> dict:
+        """Copy a configured cookie file where yt-dlp can safely update it."""
+
+        source_path = cookie_options.get("cookiefile")
+        if not source_path:
+            return cookie_options
+
+        runtime_path = os.path.join(runtime_directory, "cookies.txt")
+        shutil.copyfile(source_path, runtime_path)
+        os.chmod(runtime_path, 0o600)
+        return {
+            **cookie_options,
+            "cookiefile": runtime_path,
+        }
+
+    @staticmethod
     @contextmanager
     def _yt_dlp_clean_parent_env():
         keys = VideoDownloader._YTDLP_STRIP_ENV_KEYS
@@ -351,7 +378,12 @@ class VideoDownloader:
         runtimes["deno"] = (
             {"path": os.path.expanduser(deno_path)} if deno_path else {}
         )
-        return {"js_runtimes": runtimes}
+        # A configured runtime still can't solve YouTube's n/sig challenge
+        # without this: the solver's deno/node lib script is fetched from npm
+        # at runtime, and yt-dlp refuses to fetch remote code unless this is
+        # explicitly allowed. Without it, the runtime silently reports as
+        # unavailable even when the binary itself works.
+        return {"js_runtimes": runtimes, "remote_components": ["ejs:npm"]}
 
     @staticmethod
     def _is_youtube_bot_or_signin_error(message: str) -> bool:
@@ -373,7 +405,10 @@ class VideoDownloader:
 
         tmp_dir = tempfile.mkdtemp(prefix="chronoseek-ytdlp-")
         output_template = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-        cookie_opts = cls._ytdlp_cookie_options()
+        cookie_opts = cls._writable_ytdlp_cookie_options(
+            cls._ytdlp_cookie_options(),
+            runtime_directory=tmp_dir,
+        )
         js_opts = cls._ytdlp_js_runtime_options()
         options = {
             "format": "mp4/bestvideo+bestaudio/best",
@@ -384,11 +419,9 @@ class VideoDownloader:
             "no_warnings": True,
             "socket_timeout": timeout,
             "retries": 3,
-            # Prefer mobile/web clients first; many videos work without cookies; bot-checked
-            # IDs still need YTDLP_COOKIES or YTDLP_COOKIES_BROWSER.
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web", "ios"],
+                    "player_client": cls.YTDLP_PLAYER_CLIENTS,
                 },
             },
             **js_opts,
@@ -420,6 +453,7 @@ class VideoDownloader:
                         "from a browser session that can play this video, ensure the runtime "
                         "process inherits that env var, and confirm the file path is readable."
                     )
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             raise
 
         base, ext = os.path.splitext(downloaded_path)

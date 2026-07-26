@@ -29,8 +29,8 @@ For on-chain miner metadata commits:
 | --- | --- | --- |
 | `WALLET_NAME` | Yes | Coldkey wallet name. |
 | `HOTKEY_NAME` | Yes | Registered miner hotkey name. |
-| `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
-| `NETUID` | Yes | ChronoSeek subnet netuid. |
+| `NETWORK` | No | Defaults to `finney`; set it explicitly for `test`, `local`, or another network. |
+| `NETUID` | No | Defaults to the ChronoSeek mainnet subnet, `20`. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 
 For Chutes runtime build/deploy:
@@ -48,7 +48,7 @@ Minimal `.env` shape:
 
 ```env
 NETWORK=finney
-NETUID=<netuid>
+NETUID=20
 WALLET_NAME=<miner-coldkey>
 HOTKEY_NAME=<miner-hotkey>
 WALLET_PATH=~/.bittensor/wallets

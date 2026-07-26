@@ -382,13 +382,19 @@ async def run(config) -> tuple[RuntimeMetadata, dict[str, object]]:
         api_metadata = metadata_from_chutes_response(raw_responses["lookup"])
     else:
         if config.build or config.deploy:
-            logo_id = await upload_logo_via_api(
-                api_base_url=config.chutes_api_base_url,
-                logo_url=logo_url,
-                timeout_seconds=min(float(config.chutes_timeout_seconds), 120.0),
-            )
-            raw_responses["logo"] = {"logo_id": logo_id, "url": logo_url}
-            logger.info(f"Resolved Chutes logo ID: {logo_id}")
+            try:
+                logo_id = await upload_logo_via_api(
+                    api_base_url=config.chutes_api_base_url,
+                    logo_url=logo_url,
+                    timeout_seconds=min(float(config.chutes_timeout_seconds), 120.0),
+                )
+                raw_responses["logo"] = {"logo_id": logo_id, "url": logo_url}
+                logger.info(f"Resolved Chutes logo ID: {logo_id}")
+            except Exception as exc:
+                logger.warning(
+                    f"Logo upload failed ({exc}); continuing deploy without a logo."
+                )
+                logo_id = None
 
         if config.build:
             raw_responses["image"] = await build_image_via_api(

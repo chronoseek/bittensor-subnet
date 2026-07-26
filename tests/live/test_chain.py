@@ -17,6 +17,7 @@ from chronoseek.chain.submissions import (
     load_chain_submission_snapshot,
 )
 from chronoseek.bittensor_sdk import fetch_metagraph
+from chronoseek.constants import DEFAULT_NETUID, DEFAULT_NETWORK
 from live_helpers import env_value, require_extra_confirmation, require_live
 
 
@@ -26,8 +27,11 @@ pytestmark = pytest.mark.live
 def live_subtensor_metagraph():
     import bittensor as bt
 
-    subtensor = bt.Subtensor(network=env_value("NETWORK", "finney"))
-    metagraph = fetch_metagraph(subtensor, int(env_value("NETUID", "1")))
+    subtensor = bt.Subtensor(network=env_value("NETWORK", DEFAULT_NETWORK))
+    metagraph = fetch_metagraph(
+        subtensor,
+        int(env_value("NETUID", str(DEFAULT_NETUID))),
+    )
     return subtensor, metagraph
 
 
@@ -55,7 +59,7 @@ def test_live_chain_commit_submission() -> None:
     existing_commitments = asyncio.run(
         get_hotkey_revealed_commitments(
             subtensor=subtensor,
-            netuid=int(env_value("NETUID", "1")),
+            netuid=int(env_value("NETUID", str(DEFAULT_NETUID))),
             hotkey=hotkey,
         )
     )
@@ -77,7 +81,7 @@ def test_live_chain_commit_submission() -> None:
         commit_miner_submission(
             subtensor=subtensor,
             wallet=wallet,
-            netuid=int(env_value("NETUID", "1")),
+            netuid=int(env_value("NETUID", str(DEFAULT_NETUID))),
             submission=submission,
             blocks_until_reveal=int(env_value("LIVE_CHAIN_BLOCKS_UNTIL_REVEAL", "1")),
         )
@@ -96,7 +100,7 @@ def test_live_chain_rejects_duplicate_submission_for_hotkey() -> None:
 
     wallet, subtensor, metagraph = live_bittensor_objects()
     hotkey = wallet.hotkey.ss58_address
-    netuid = int(env_value("NETUID", "1"))
+    netuid = int(env_value("NETUID", str(DEFAULT_NETUID)))
     assert hotkey in metagraph.hotkeys
 
     existing_commitments = asyncio.run(
@@ -158,7 +162,7 @@ def test_live_chain_fetch_submissions() -> None:
     snapshot = asyncio.run(
         load_chain_submission_snapshot(
             subtensor=subtensor,
-            netuid=int(env_value("NETUID", "1")),
+            netuid=int(env_value("NETUID", str(DEFAULT_NETUID))),
             metagraph=metagraph,
         )
     )
