@@ -7,7 +7,10 @@ import httpx
 
 from chronoseek.chain.submissions import MinerSubmission
 from chronoseek.constants import DEFAULT_CHUTES_BASE_DOMAIN
+from chronoseek.epistula import generate_header
 from chronoseek.logging import logger
+from chronoseek.protocol_models import ProofOfAccessRequest
+from chronoseek.video.proof_of_access import proof_of_access_hashes_match
 
 
 @dataclass(frozen=True)
@@ -198,3 +201,76 @@ async def filter_healthy_runtime_endpoints(
                 healthy_endpoint_map[int(uid)] = endpoint_map[int(uid)]
 
     return healthy_endpoint_map
+
+
+async def check_proof_of_access(
+    *,
+    client: httpx.AsyncClient,
+    uid: int,
+    endpoint: str,
+    wallet: Any,
+    video_url: str,
+    expected_hash: str,
+    timeout_seconds: float,
+    headers: dict[str, str] | None = None,
+) -> bool:
+    subject = f"Miner UID {uid}" if int(uid) >= 0 else "Runtime"
+    try:
+        request = ProofOfAccessRequest(video={"url": video_url})
+        request_payload = request.model_dump(mode="json")
+        signed_headers = {
+            **(headers or {}),
+            **generate_header(wallet.hotkey, request_payload),
+        }
+        response = await client.post(
+            f"{endpoint.rstrip('/')}/proof-of-access",
+            json=request_payload,
+            headers=signed_headers,
+            timeout=max(0.5, float(timeout_seconds)),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content_hash = payload.get("content_hash") if isinstance(payload, dict) else None
+        if not content_hash:
+            logger.debug(
+                f"{subject} proof-of-access response missing content_hash: {payload}"
+            )
+            return False
+        return proof_of_access_hashes_match(expected_hash, content_hash)
+    except Exception as exc:
+        logger.debug(f"{subject} failed /proof-of-access at {endpoint}: {exc}")
+        return False
+
+
+async def filter_proof_of_access_passed(
+    *,
+    endpoint_map: dict[int, str],
+    wallet: Any,
+    video_url: str,
+    expected_hash: str,
+    timeout_seconds: float,
+    provider_headers: dict[str, str] | None = None,
+) -> set[int]:
+    passed_uids: set[int] = set()
+    if not endpoint_map:
+        return passed_uids
+
+    async with httpx.AsyncClient(timeout=max(0.5, float(timeout_seconds))) as client:
+        checks = {
+            uid: check_proof_of_access(
+                client=client,
+                uid=int(uid),
+                endpoint=endpoint,
+                wallet=wallet,
+                video_url=video_url,
+                expected_hash=expected_hash,
+                timeout_seconds=timeout_seconds,
+                headers=provider_headers,
+            )
+            for uid, endpoint in endpoint_map.items()
+        }
+        for uid, passed in zip(checks, await asyncio.gather(*checks.values())):
+            if passed:
+                passed_uids.add(int(uid))
+
+    return passed_uids

@@ -29,7 +29,12 @@ from chronoseek.constants import (
     DEFAULT_CHUTES_HF_HOME,
     DEFAULT_CHUTES_YTDLP_DENO_PATH,
 )
-from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
+from chronoseek.protocol_models import (
+    ProofOfAccessRequest,
+    ProofOfAccessResponse,
+    VideoSearchRequest,
+    VideoSearchResponse,
+)
 
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -251,6 +256,29 @@ async def search(self, payload: VideoSearchRequest) -> dict:
     from chronoseek.miner import runtime as chronoseek_runtime
 
     return chronoseek_runtime.execute_search(
+        payload,
+        caller_hotkey=None,
+        enforce_validator_auth=False,
+    )
+
+
+@chute.cord(
+    public_api_path="/proof-of-access",
+    method="POST",
+    input_schema=ProofOfAccessRequest,
+    output_schema=ProofOfAccessResponse,
+)
+async def proof_of_access(self, payload: ProofOfAccessRequest) -> dict:
+    """Run ChronoSeek proof-of-access as a native Chutes SDK cord.
+
+    Chutes native cords do not pass arbitrary public HTTP headers to user code,
+    so validator identity is enforced by Chutes API access for this deployment
+    path.
+    """
+
+    from chronoseek.miner import runtime as chronoseek_runtime
+
+    return chronoseek_runtime.execute_proof_of_access(
         payload,
         caller_hotkey=None,
         enforce_validator_auth=False,

@@ -244,6 +244,7 @@ poetry run python validator.py \
 
 ## Operational Notes
 
+- Proof-of-access: alongside `/health`, the validator periodically confirms a miner can actually download and decode a real YouTube video (reused from the same dataset used for hardened task generation, not a separate canary list) by comparing a perceptual hash of decoded frames. A passing result is cached per miner for `--proof-of-access-cache-ttl-hours` (`PROOF_OF_ACCESS_CACHE_TTL_HOURS`, default 6h) before it's rechecked; new miners are always checked immediately. A mismatch, timeout, or expired/missing pass excludes the miner from queries until it passes again, same as failing `/health`. Disable with `--disable-proof-of-access` (`ENABLE_PROOF_OF_ACCESS=0`).
 - Do not send original ActivityNet source URLs, source video IDs, raw captions, or ground-truth timestamps to miners.
 - Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
 - Hardened task generation increases validator-side CPU, disk, network, and storage usage.
