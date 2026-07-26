@@ -321,10 +321,57 @@ async def load_chain_submission_snapshot(
         if submission:
             submissions[hotkey] = submission
 
+    submissions, cloned_hotkeys = _disqualify_cloned_chute_slug_submissions(
+        submissions
+    )
+    duplicate_hotkeys |= cloned_hotkeys
+
     return ChainSubmissionSnapshot(
         submissions=submissions,
         duplicate_hotkeys=duplicate_hotkeys,
     )
+
+
+def _disqualify_cloned_chute_slug_submissions(
+    submissions: dict[str, MinerSubmission],
+) -> tuple[dict[str, MinerSubmission], set[str]]:
+    """
+    Among hotkeys sharing the same chute_slug, only the one whose commitment
+    was revealed first (lowest created_at_block, not registration time) keeps
+    it - every other hotkey sharing that slug is permanently disqualified,
+    same treatment as the one-submission-per-hotkey rule above.
+    """
+    by_slug: dict[str, list[str]] = {}
+    for hotkey, submission in submissions.items():
+        slug = submission.chute_slug
+        if not slug:
+            continue
+        by_slug.setdefault(slug, []).append(hotkey)
+
+    def reveal_order(hotkey: str) -> tuple[int, str]:
+        block = submissions[hotkey].created_at_block
+        return (block if block is not None else 0, hotkey)
+
+    cloned_hotkeys: set[str] = set()
+    for slug, hotkeys_sharing_slug in by_slug.items():
+        if len(hotkeys_sharing_slug) < 2:
+            continue
+
+        ranked = sorted(hotkeys_sharing_slug, key=reveal_order)
+        first_revealed, losers = ranked[0], ranked[1:]
+        cloned_hotkeys.update(losers)
+        logger.warning(
+            f"Disqualifying hotkeys {losers} for sharing chute_slug {slug!r} "
+            f"already claimed by {first_revealed} (revealed first); cloned "
+            "submissions are permanently disqualified."
+        )
+
+    filtered_submissions = {
+        hotkey: submission
+        for hotkey, submission in submissions.items()
+        if hotkey not in cloned_hotkeys
+    }
+    return filtered_submissions, cloned_hotkeys
 
 
 class MinerSubmissionResolver:

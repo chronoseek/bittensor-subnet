@@ -238,6 +238,159 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
         assert "hk-1" not in snapshot.submissions
         assert snapshot.duplicate_hotkeys == {"hk-1"}
 
+    async def test_load_chain_submissions_disqualifies_later_revealed_cloned_slug(
+        self,
+    ):
+        class FakeSubtensor:
+            def __init__(self):
+                self.subnets = SimpleNamespace(commitments=self.commitments)
+
+            def commitments(self, netuid):
+                assert netuid == 1
+                return {
+                    "hk-0": revealed_commitment(
+                        (
+                            10,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "shared-slug",
+                                }
+                            ),
+                        )
+                    ),
+                    "hk-1": revealed_commitment(
+                        (
+                            20,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "shared-slug",
+                                }
+                            ),
+                        )
+                    ),
+                }
+
+        snapshot = await load_chain_submission_snapshot(
+            FakeSubtensor(),
+            netuid=1,
+            metagraph=DummyMetagraph(),
+        )
+
+        assert "hk-0" in snapshot.submissions
+        assert "hk-1" not in snapshot.submissions
+        assert snapshot.duplicate_hotkeys == {"hk-1"}
+
+    async def test_load_chain_submissions_disqualifies_all_but_first_in_three_way_clone(
+        self,
+    ):
+        class ThreeHotkeyMetagraph:
+            def __init__(self):
+                self.uids = [0, 1, 2]
+                self.hotkeys = ["hk-0", "hk-1", "hk-2"]
+
+        class FakeSubtensor:
+            def __init__(self):
+                self.subnets = SimpleNamespace(commitments=self.commitments)
+
+            def commitments(self, netuid):
+                assert netuid == 1
+                return {
+                    "hk-0": revealed_commitment(
+                        (
+                            30,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "shared-slug",
+                                }
+                            ),
+                        )
+                    ),
+                    "hk-1": revealed_commitment(
+                        (
+                            10,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "shared-slug",
+                                }
+                            ),
+                        )
+                    ),
+                    "hk-2": revealed_commitment(
+                        (
+                            20,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "shared-slug",
+                                }
+                            ),
+                        )
+                    ),
+                }
+
+        snapshot = await load_chain_submission_snapshot(
+            FakeSubtensor(),
+            netuid=1,
+            metagraph=ThreeHotkeyMetagraph(),
+        )
+
+        # hk-1 revealed first (block 10) - it keeps the slug. hk-2 (block 20)
+        # and hk-0 (block 30) both lose it, regardless of registration order.
+        assert set(snapshot.submissions) == {"hk-1"}
+        assert snapshot.duplicate_hotkeys == {"hk-0", "hk-2"}
+
+    async def test_load_chain_submissions_keeps_hotkey_with_unique_slug(self):
+        class FakeSubtensor:
+            def __init__(self):
+                self.subnets = SimpleNamespace(commitments=self.commitments)
+
+            def commitments(self, netuid):
+                assert netuid == 1
+                return {
+                    "hk-0": revealed_commitment(
+                        (
+                            10,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "shared-slug",
+                                }
+                            ),
+                        )
+                    ),
+                    "hk-1": revealed_commitment(
+                        (
+                            20,
+                            json.dumps(
+                                {
+                                    "runtime": "chutes",
+                                    "protocol": "chronoseek-runtime-v2",
+                                    "chute_slug": "unique-slug",
+                                }
+                            ),
+                        )
+                    ),
+                }
+
+        snapshot = await load_chain_submission_snapshot(
+            FakeSubtensor(),
+            netuid=1,
+            metagraph=DummyMetagraph(),
+        )
+
+        assert set(snapshot.submissions) == {"hk-0", "hk-1"}
+        assert snapshot.duplicate_hotkeys == set()
+
     async def test_load_chain_submissions_keeps_single_valid_commit(self):
         class FakeSubtensor:
             def __init__(self):
