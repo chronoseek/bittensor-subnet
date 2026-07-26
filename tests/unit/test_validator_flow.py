@@ -235,6 +235,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
+                    evaluation_round_blocks=0,
                 ),
             )
 
@@ -248,6 +249,86 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIs(call_args.args[1], mock_wallet)
         self.assertTrue(call_args.kwargs["wait_for_inclusion"])
         self.assertFalse(call_args.kwargs["wait_for_finalization"])
+
+    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
+    @patch("chronoseek.validator.forward.run_step")
+    async def test_validator_loop_paces_rounds_by_block_not_wall_clock(
+        self, mock_run_step, mock_task_gen
+    ):
+        """A round starts every evaluation_round_blocks since the previous
+        round's start, or immediately if a slow round already blew past that
+        boundary - not on a wall-clock timer."""
+        mock_subtensor = MagicMock()
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        stop_event = MagicMock()
+
+        mock_metagraph.n = 1
+        mock_metagraph.hotkeys = ["h1"]
+        mock_metagraph.I = [1.0]
+
+        mock_subtensor.subnets.info.return_value.tempo = 1000
+        mock_subtensor.execute.return_value = True
+        # Round due at block 100, not due at 105, due again at 111 (one block
+        # past the 110 boundary - starts immediately rather than waiting for
+        # a later "clean" boundary), not due at 115, due again at 121.
+        mock_subtensor.block.side_effect = [100, 105, 111, 115, 121]
+        stop_event.is_set.side_effect = [False] * 5 + [True]
+
+        mock_run_step.return_value = []
+
+        with patch("asyncio.sleep", new_callable=AsyncMock), patch(
+            "validator.MinerSubmissionResolver"
+        ) as mock_resolver_cls, patch(
+            "validator.refresh_responsive_miners_from_submissions", new_callable=AsyncMock
+        ) as mock_refresh_responsive:
+            mock_resolver_cls.return_value = MagicMock()
+
+            async def refresh_side_effect(*args, **kwargs):
+                refresh_runtime = kwargs["runtime"]
+                with refresh_runtime.responsive_lock:
+                    refresh_runtime.responsive_uids = {0}
+                    refresh_runtime.miner_endpoints = {
+                        0: "https://runtime-0.example.com"
+                    }
+                    refresh_runtime.responsive_initialized = True
+                    refresh_runtime.responsive_last_refresh_at = 1.0
+                return {0}
+
+            mock_refresh_responsive.side_effect = refresh_side_effect
+            runtime = ValidatorRuntimeState(
+                wallet=mock_wallet,
+                metagraph=mock_metagraph,
+                scores=seed_scores_from_metagraph(mock_metagraph),
+                score_lock=threading.Lock(),
+            )
+            await run_validator_loop(
+                mock_subtensor,
+                runtime,
+                netuid=1,
+                stop_event=stop_event,
+                last_heartbeat=[0],
+                config=MagicMock(
+                    task_dataset_path="",
+                    task_split="validation",
+                    require_accessible_videos=False,
+                    task_max_sampling_attempts=10,
+                    miner_request_timeout_seconds=60.0,
+                    miner_emission_burn_percent=0.0,
+                    video_availability_cache_path="",
+                    accessible_video_cache_path="",
+                    inaccessible_video_cache_path="",
+                    video_availability_cache_ttl_hours=24,
+                    video_availability_timeout=5,
+                    miner_submission_refresh_interval_seconds=15.0,
+                    miner_submission_health_timeout_seconds=10.0,
+                    hf_cache_dir="",
+                    hf_activitynet_filename="",
+                    evaluation_round_blocks=10,
+                ),
+            )
+
+        self.assertEqual(mock_run_step.call_count, 3)
 
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
@@ -321,6 +402,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
+                    evaluation_round_blocks=0,
                 ),
             )
 
@@ -390,6 +472,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
+                    evaluation_round_blocks=0,
                 ),
             )
 
