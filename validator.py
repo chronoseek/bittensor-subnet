@@ -57,6 +57,7 @@ from chronoseek.constants import (
     DEFAULT_ENABLE_LATENCY_MULTIPLIER,
     DEFAULT_ENABLE_TASK_ENCODING_PROFILE_VARIANTS,
     DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+    DEFAULT_EVALUATION_ROUND_BLOCKS,
     DEFAULT_HF_ACTIVITYNET_FILENAME,
     DEFAULT_HF_CACHE_DIR,
     DEFAULT_HARDENED_TASK_MAX_GENERATION_ATTEMPTS,
@@ -455,6 +456,8 @@ async def run_validator_loop(
     tempo = subnet_tempo(subtensor, netuid)
     logger.info(f"Subnet tempo: {tempo} blocks")
     last_weight_block = 0
+    last_round_start_block = 0
+    evaluation_round_blocks = int(config.evaluation_round_blocks)
 
     try:
         while not stop_event.is_set():
@@ -516,6 +519,15 @@ async def run_validator_loop(
                 )
                 await asyncio.sleep(12)
                 continue
+
+            # Round pacing is block-based: a round starts every
+            # evaluation_round_blocks since the previous round's start, or
+            # immediately if a slow round already blew past that boundary.
+            if current_block_number - last_round_start_block < evaluation_round_blocks:
+                await asyncio.sleep(12)
+                continue
+            last_round_start_block = current_block_number
+
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
                 task_gen,
@@ -931,6 +943,14 @@ def get_config():
         type=int,
         default=DEFAULT_VALIDATOR_EVAL_TOP_K,
         help="Number of miner results requested and scored for synthetic evaluation.",
+    )
+    parser.add_argument(
+        "--evaluation-round-blocks",
+        type=int,
+        default=int(
+            os.getenv("EVALUATION_ROUND_BLOCKS", str(DEFAULT_EVALUATION_ROUND_BLOCKS))
+        ),
+        help="Minimum blocks between the start of consecutive evaluation rounds.",
     )
     parser.add_argument(
         "--score-ema-alpha",

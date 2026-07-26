@@ -244,6 +244,7 @@ poetry run python validator.py \
 
 ## Operational Notes
 
+- Evaluation rounds are paced by block height, not wall-clock time: a round starts every `--evaluation-round-blocks` (`EVALUATION_ROUND_BLOCKS`, default 60) blocks since the previous round's start, or immediately if a slow round already blew past that boundary.
 - Do not send original ActivityNet source URLs, source video IDs, raw captions, or ground-truth timestamps to miners.
 - Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
 - Hardened task generation increases validator-side CPU, disk, network, and storage usage.
