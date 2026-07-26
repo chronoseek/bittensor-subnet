@@ -57,6 +57,7 @@ from chronoseek.constants import (
     DEFAULT_ENABLE_LATENCY_MULTIPLIER,
     DEFAULT_ENABLE_TASK_ENCODING_PROFILE_VARIANTS,
     DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+    DEFAULT_EVALUATION_ROUND_BLOCKS,
     DEFAULT_HF_ACTIVITYNET_FILENAME,
     DEFAULT_HF_CACHE_DIR,
     DEFAULT_HARDENED_TASK_MAX_GENERATION_ATTEMPTS,
@@ -461,14 +462,53 @@ def apply_disqualified_miner_penalty(
     return penalized_scores
 
 
+TOP3_SLOT_SHARES = (0.75, 0.20, 0.05)
+
+
+def top3_weight_shares(scores: np.ndarray) -> np.ndarray:
+    """
+    Rank-based 75/20/5 weight shares for the top 3 positive scores.
+
+    A miner with score <= 0 never receives weight, even if it would
+    otherwise rank in the top 3. When several miners tie on score for a
+    paid slot, the weight of every slot their tie spans is pooled and
+    split evenly across all of them - including ties larger than 3 (e.g.
+    a 5-way tie for 1st splits the full 75+20+5 pool five ways).
+    """
+    shares = np.zeros(len(scores), dtype=float)
+
+    ranked = sorted((i for i in range(len(scores)) if scores[i] > 0), key=lambda i: scores[i], reverse=True)
+
+    position = 0
+    i = 0
+    while i < len(ranked) and position < len(TOP3_SLOT_SHARES):
+        group_score = scores[ranked[i]]
+        group = [ranked[i]]
+        j = i + 1
+        while j < len(ranked) and scores[ranked[j]] == group_score:
+            group.append(ranked[j])
+            j += 1
+
+        overlap_end = min(position + len(group), len(TOP3_SLOT_SHARES))
+        pooled = sum(TOP3_SLOT_SHARES[position:overlap_end])
+        share_each = pooled / len(group)
+        for idx in group:
+            shares[idx] = share_each
+
+        position += len(group)
+        i = j
+
+    return shares
+
+
 def build_emission_weights(
     scores: np.ndarray,
     miner_emission_burn_percent: float,
     burn_uid: int = 0,
 ) -> np.ndarray:
     """
-    Reserve a fixed emission share for `burn_uid` and distribute the remaining
-    share across all other miners by score.
+    Reserve a fixed emission share for `burn_uid`, then pay the remaining
+    share to the top 3 miners by score (75/20/5) - everyone else gets 0.
     """
     weights = np.zeros_like(np.asarray(scores, dtype=float))
     if len(weights) == 0:
@@ -484,12 +524,11 @@ def build_emission_weights(
     distributable_scores = np.array(scores, dtype=float, copy=True)
     if 0 <= burn_uid < len(distributable_scores):
         distributable_scores[burn_uid] = 0.0
-    distributable_scores = np.where(distributable_scores > 0, distributable_scores, 0.0)
-    distributable_total = float(np.sum(distributable_scores))
     remaining_fraction = max(0.0, 1.0 - burn_fraction)
 
-    if distributable_total > 0 and remaining_fraction > 0:
-        weights += (distributable_scores / distributable_total) * remaining_fraction
+    top3_shares = top3_weight_shares(distributable_scores)
+    if remaining_fraction > 0 and np.any(top3_shares > 0):
+        weights += top3_shares * remaining_fraction
     elif remaining_fraction > 0 and 0 <= burn_uid < len(weights):
         weights[burn_uid] = 1.0
 
@@ -573,6 +612,8 @@ async def run_validator_loop(
     tempo = subnet_tempo(subtensor, netuid)
     logger.info(f"Subnet tempo: {tempo} blocks")
     last_weight_block = 0
+    last_round_start_block = 0
+    evaluation_round_blocks = int(config.evaluation_round_blocks)
 
     try:
         while not stop_event.is_set():
@@ -651,6 +692,15 @@ async def run_validator_loop(
                 )
                 await asyncio.sleep(12)
                 continue
+
+            # Round pacing is block-based: a round starts every
+            # evaluation_round_blocks since the previous round's start, or
+            # immediately if a slow round already blew past that boundary.
+            if current_block_number - last_round_start_block < evaluation_round_blocks:
+                await asyncio.sleep(12)
+                continue
+            last_round_start_block = current_block_number
+
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
                 task_gen,
@@ -1066,6 +1116,14 @@ def get_config():
         type=int,
         default=DEFAULT_VALIDATOR_EVAL_TOP_K,
         help="Number of miner results requested and scored for synthetic evaluation.",
+    )
+    parser.add_argument(
+        "--evaluation-round-blocks",
+        type=int,
+        default=int(
+            os.getenv("EVALUATION_ROUND_BLOCKS", str(DEFAULT_EVALUATION_ROUND_BLOCKS))
+        ),
+        help="Minimum blocks between the start of consecutive evaluation rounds.",
     )
     parser.add_argument(
         "--score-ema-alpha",

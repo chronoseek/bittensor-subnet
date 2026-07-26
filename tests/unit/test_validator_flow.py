@@ -17,6 +17,7 @@ from validator import (
     refresh_responsive_miners_from_submissions,
     run_validator_loop,
     seed_scores_from_metagraph,
+    top3_weight_shares,
 )
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
@@ -26,20 +27,28 @@ from chronoseek.chain.submissions import MinerSubmission
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
-    def test_build_emission_weights_reserves_burn_uid_and_distributes_rest(self):
+    def test_build_emission_weights_reserves_burn_uid_and_pays_top3(self):
+        # burn_uid (0) is excluded from ranking, leaving only 2 candidates -
+        # rank3's 5% slot goes unpaid rather than falling back to anyone.
         scores = np.array([100.0, 2.0, 6.0])
 
         weights = build_emission_weights(scores, miner_emission_burn_percent=25.0)
 
-        np.testing.assert_allclose(weights, np.array([0.25, 0.1875, 0.5625]))
-        self.assertAlmostEqual(float(np.sum(weights)), 1.0)
+        np.testing.assert_allclose(weights, np.array([0.25, 0.15, 0.5625]))
 
-    def test_build_emission_weights_excludes_uid_zero_when_burn_is_zero(self):
+    def test_build_emission_weights_pays_top3_when_burn_is_zero(self):
         scores = np.array([100.0, 2.0, 6.0])
 
         weights = build_emission_weights(scores, miner_emission_burn_percent=0.0)
 
-        np.testing.assert_allclose(weights, np.array([0.0, 0.25, 0.75]))
+        np.testing.assert_allclose(weights, np.array([0.0, 0.20, 0.75]))
+
+    def test_build_emission_weights_pays_full_top3_with_enough_candidates(self):
+        scores = np.array([0.0, 6.0, 2.0, 9.0])
+
+        weights = build_emission_weights(scores, miner_emission_burn_percent=0.0)
+
+        np.testing.assert_allclose(weights, np.array([0.0, 0.20, 0.05, 0.75]))
         self.assertAlmostEqual(float(np.sum(weights)), 1.0)
 
     def test_build_emission_weights_burns_all_when_no_rest_scores_exist(self):
@@ -49,6 +58,52 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         np.testing.assert_allclose(weights, np.array([1.0, 0.0, 0.0]))
         self.assertAlmostEqual(float(np.sum(weights)), 1.0)
+
+    def test_top3_weight_shares_clean_ranking(self):
+        scores = np.array([9.0, 2.0, 6.0, 1.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.75, 0.05, 0.20, 0.0]))
+
+    def test_top3_weight_shares_two_way_tie_for_first(self):
+        scores = np.array([9.0, 9.0, 6.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.475, 0.475, 0.05]))
+
+    def test_top3_weight_shares_two_way_tie_for_second_and_third(self):
+        scores = np.array([9.0, 6.0, 6.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.75, 0.125, 0.125]))
+
+    def test_top3_weight_shares_three_way_tie_for_first(self):
+        scores = np.array([9.0, 9.0, 9.0, 1.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(
+            shares, np.array([1.0 / 3, 1.0 / 3, 1.0 / 3, 0.0])
+        )
+
+    def test_top3_weight_shares_five_way_tie_for_first(self):
+        scores = np.array([9.0, 9.0, 9.0, 9.0, 9.0, 1.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(
+            shares, np.array([0.20, 0.20, 0.20, 0.20, 0.20, 0.0])
+        )
+
+    def test_top3_weight_shares_never_pays_zero_or_negative_score(self):
+        scores = np.array([0.0, -1.0, 5.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.0, 0.0, 0.75]))
 
     def test_seed_scores_from_metagraph_uses_incentives(self):
         metagraph = MagicMock()
@@ -182,6 +237,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
+                    evaluation_round_blocks=0,
                 ),
             )
 
@@ -195,6 +251,86 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIs(call_args.args[1], mock_wallet)
         self.assertTrue(call_args.kwargs["wait_for_inclusion"])
         self.assertFalse(call_args.kwargs["wait_for_finalization"])
+
+    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
+    @patch("chronoseek.validator.forward.run_step")
+    async def test_validator_loop_paces_rounds_by_block_not_wall_clock(
+        self, mock_run_step, mock_task_gen
+    ):
+        """A round starts every evaluation_round_blocks since the previous
+        round's start, or immediately if a slow round already blew past that
+        boundary - not on a wall-clock timer."""
+        mock_subtensor = MagicMock()
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        stop_event = MagicMock()
+
+        mock_metagraph.n = 1
+        mock_metagraph.hotkeys = ["h1"]
+        mock_metagraph.I = [1.0]
+
+        mock_subtensor.subnets.info.return_value.tempo = 1000
+        mock_subtensor.execute.return_value = True
+        # Round due at block 100, not due at 105, due again at 111 (one block
+        # past the 110 boundary - starts immediately rather than waiting for
+        # a later "clean" boundary), not due at 115, due again at 121.
+        mock_subtensor.block.side_effect = [100, 105, 111, 115, 121]
+        stop_event.is_set.side_effect = [False] * 5 + [True]
+
+        mock_run_step.return_value = []
+
+        with patch("asyncio.sleep", new_callable=AsyncMock), patch(
+            "validator.MinerSubmissionResolver"
+        ) as mock_resolver_cls, patch(
+            "validator.refresh_responsive_miners_from_submissions", new_callable=AsyncMock
+        ) as mock_refresh_responsive:
+            mock_resolver_cls.return_value = MagicMock()
+
+            async def refresh_side_effect(*args, **kwargs):
+                refresh_runtime = kwargs["runtime"]
+                with refresh_runtime.responsive_lock:
+                    refresh_runtime.responsive_uids = {0}
+                    refresh_runtime.miner_endpoints = {
+                        0: "https://runtime-0.example.com"
+                    }
+                    refresh_runtime.responsive_initialized = True
+                    refresh_runtime.responsive_last_refresh_at = 1.0
+                return {0}
+
+            mock_refresh_responsive.side_effect = refresh_side_effect
+            runtime = ValidatorRuntimeState(
+                wallet=mock_wallet,
+                metagraph=mock_metagraph,
+                scores=seed_scores_from_metagraph(mock_metagraph),
+                score_lock=threading.Lock(),
+            )
+            await run_validator_loop(
+                mock_subtensor,
+                runtime,
+                netuid=1,
+                stop_event=stop_event,
+                last_heartbeat=[0],
+                config=MagicMock(
+                    task_dataset_path="",
+                    task_split="validation",
+                    require_accessible_videos=False,
+                    task_max_sampling_attempts=10,
+                    miner_request_timeout_seconds=60.0,
+                    miner_emission_burn_percent=0.0,
+                    video_availability_cache_path="",
+                    accessible_video_cache_path="",
+                    inaccessible_video_cache_path="",
+                    video_availability_cache_ttl_hours=24,
+                    video_availability_timeout=5,
+                    miner_submission_refresh_interval_seconds=15.0,
+                    miner_submission_health_timeout_seconds=10.0,
+                    hf_cache_dir="",
+                    hf_activitynet_filename="",
+                    evaluation_round_blocks=10,
+                ),
+            )
+
+        self.assertEqual(mock_run_step.call_count, 3)
 
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
@@ -268,6 +404,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
+                    evaluation_round_blocks=0,
                 ),
             )
 
@@ -337,6 +474,7 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
+                    evaluation_round_blocks=0,
                 ),
             )
 
