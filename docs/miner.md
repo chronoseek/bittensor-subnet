@@ -86,8 +86,11 @@ The example runtime exposes:
 
 - `/health`
 - `/search`
+- `/proof-of-access`
 
-Both are native Chutes cords. The runtime does not start a separate FastAPI server inside Chutes.
+All three are native Chutes cords. The runtime does not start a separate FastAPI server inside Chutes.
+
+If you maintain your own `chronoseek_chute.py` (copied earlier from `chronoseek_chute.example.py`), copy the `/proof-of-access` cord over too — it's not auto-generated.
 
 ## Local-First Checklist
 
@@ -214,6 +217,12 @@ During Chutes image build, a readable `YTDLP_COOKIES` file is copied into the im
 
 If validator task clips come from a non-default Hippius-compatible host, update
 the Hippius defaults in `chronoseek/constants.py`.
+
+## Proof-of-Access
+
+Validators periodically send `POST /proof-of-access` with a real YouTube URL to confirm the runtime can actually download and decode video content, separate from the normal `/search` load. The runtime downloads the URL with the same shared downloader used for `/search`, then returns a hash of decoded frames (first/middle/last) at fixed timestamps — never the raw file. A miner that fails this check (mismatch, timeout, or download/decode failure) is excluded from validator queries until it passes again, the same as failing `/health`.
+
+This check reuses the same validator-stake/Epistula authorization as `/search` on the axon-serving path; on Chutes, validator identity is enforced by Chutes API access instead, same as `/search`.
 
 ## Common Configuration
 

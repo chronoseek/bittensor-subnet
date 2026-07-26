@@ -1,6 +1,7 @@
 import unittest
 import asyncio
 import threading
+import time
 from unittest.mock import MagicMock, AsyncMock, patch
 import numpy as np
 
@@ -12,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from validator import (
     apply_disqualified_miner_penalty,
     build_emission_weights,
+    refresh_proof_of_access,
     refresh_responsive_miners_from_submissions,
     run_validator_loop,
     seed_scores_from_metagraph,
@@ -614,6 +616,196 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(responsive_uids, set())
         self.assertEqual(runtime.disqualified_uids, {1})
+        self.assertEqual(runtime.responsive_uids, set())
+        self.assertEqual(runtime.miner_endpoints, {})
+
+    def _proof_of_access_runtime(self):
+        return ValidatorRuntimeState(
+            wallet=MagicMock(),
+            metagraph=MagicMock(),
+            scores=np.array([0.0]),
+            score_lock=threading.Lock(),
+        )
+
+    @patch("validator.filter_proof_of_access_passed", new_callable=AsyncMock)
+    @patch("validator.compute_proof_of_access_hash", return_value="expected-hash")
+    @patch("validator.VideoDownloader")
+    async def test_refresh_proof_of_access_checks_new_miner_immediately(
+        self, mock_downloader_cls, mock_compute_hash, mock_filter_passed
+    ):
+        mock_downloader_cls.download_video.return_value = MagicMock(path="/tmp/ref.mp4")
+        mock_filter_passed.return_value = {0}
+        task_gen = MagicMock()
+        task_gen.dataset = [{"video_url": "https://youtube.com/watch?v=ref"}]
+        runtime = self._proof_of_access_runtime()
+
+        passed_uids = await refresh_proof_of_access(
+            runtime,
+            healthy_endpoint_map={0: "https://runtime-0.example.com"},
+            task_gen=task_gen,
+            cache_ttl_seconds=3600,
+            timeout_seconds=60,
+        )
+
+        self.assertEqual(passed_uids, {0})
+        mock_filter_passed.assert_called_once()
+        self.assertEqual(
+            mock_filter_passed.call_args.kwargs["endpoint_map"],
+            {0: "https://runtime-0.example.com"},
+        )
+        self.assertTrue(runtime.proof_of_access_cache[0]["passed"])
+
+    @patch("validator.filter_proof_of_access_passed", new_callable=AsyncMock)
+    @patch("validator.compute_proof_of_access_hash", return_value="expected-hash")
+    @patch("validator.VideoDownloader")
+    async def test_refresh_proof_of_access_excludes_failing_miner(
+        self, mock_downloader_cls, mock_compute_hash, mock_filter_passed
+    ):
+        mock_downloader_cls.download_video.return_value = MagicMock(path="/tmp/ref.mp4")
+        mock_filter_passed.return_value = set()
+        task_gen = MagicMock()
+        task_gen.dataset = [{"video_url": "https://youtube.com/watch?v=ref"}]
+        runtime = self._proof_of_access_runtime()
+
+        passed_uids = await refresh_proof_of_access(
+            runtime,
+            healthy_endpoint_map={0: "https://runtime-0.example.com"},
+            task_gen=task_gen,
+            cache_ttl_seconds=3600,
+            timeout_seconds=60,
+        )
+
+        self.assertEqual(passed_uids, set())
+        self.assertFalse(runtime.proof_of_access_cache[0]["passed"])
+
+    @patch("validator.filter_proof_of_access_passed", new_callable=AsyncMock)
+    @patch("validator.compute_proof_of_access_hash", return_value="expected-hash")
+    @patch("validator.VideoDownloader")
+    async def test_refresh_proof_of_access_skips_recheck_within_ttl(
+        self, mock_downloader_cls, mock_compute_hash, mock_filter_passed
+    ):
+        task_gen = MagicMock()
+        task_gen.dataset = [{"video_url": "https://youtube.com/watch?v=ref"}]
+        runtime = self._proof_of_access_runtime()
+        runtime.proof_of_access_cache[0] = {"passed": True, "checked_at": time.time()}
+
+        passed_uids = await refresh_proof_of_access(
+            runtime,
+            healthy_endpoint_map={0: "https://runtime-0.example.com"},
+            task_gen=task_gen,
+            cache_ttl_seconds=3600,
+            timeout_seconds=60,
+        )
+
+        self.assertEqual(passed_uids, {0})
+        mock_filter_passed.assert_not_called()
+        mock_downloader_cls.download_video.assert_not_called()
+
+    @patch("validator.filter_proof_of_access_passed", new_callable=AsyncMock)
+    @patch("validator.compute_proof_of_access_hash", return_value="expected-hash")
+    @patch("validator.VideoDownloader")
+    async def test_refresh_proof_of_access_rechecks_after_ttl_expires(
+        self, mock_downloader_cls, mock_compute_hash, mock_filter_passed
+    ):
+        mock_downloader_cls.download_video.return_value = MagicMock(path="/tmp/ref.mp4")
+        mock_filter_passed.return_value = {0}
+        task_gen = MagicMock()
+        task_gen.dataset = [{"video_url": "https://youtube.com/watch?v=ref"}]
+        runtime = self._proof_of_access_runtime()
+        runtime.proof_of_access_cache[0] = {
+            "passed": True,
+            "checked_at": time.time() - 7200,
+        }
+
+        passed_uids = await refresh_proof_of_access(
+            runtime,
+            healthy_endpoint_map={0: "https://runtime-0.example.com"},
+            task_gen=task_gen,
+            cache_ttl_seconds=3600,
+            timeout_seconds=60,
+        )
+
+        self.assertEqual(passed_uids, {0})
+        mock_filter_passed.assert_called_once()
+
+    @patch("validator.filter_proof_of_access_passed", new_callable=AsyncMock)
+    @patch("validator.VideoDownloader")
+    async def test_refresh_proof_of_access_skips_check_when_reference_video_unavailable(
+        self, mock_downloader_cls, mock_filter_passed
+    ):
+        mock_downloader_cls.download_video.return_value = None
+        task_gen = MagicMock()
+        task_gen.dataset = [{"video_url": "https://youtube.com/watch?v=ref"}]
+        runtime = self._proof_of_access_runtime()
+
+        passed_uids = await refresh_proof_of_access(
+            runtime,
+            healthy_endpoint_map={0: "https://runtime-0.example.com"},
+            task_gen=task_gen,
+            cache_ttl_seconds=3600,
+            timeout_seconds=60,
+        )
+
+        self.assertEqual(passed_uids, set())
+        mock_filter_passed.assert_not_called()
+        self.assertNotIn(0, runtime.proof_of_access_cache)
+
+    @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
+    @patch("validator.filter_proof_of_access_passed", new_callable=AsyncMock)
+    @patch("validator.compute_proof_of_access_hash", return_value="expected-hash")
+    @patch("validator.VideoDownloader")
+    async def test_submission_refresh_excludes_miner_failing_proof_of_access(
+        self,
+        mock_downloader_cls,
+        mock_compute_hash,
+        mock_filter_passed,
+        mock_async_client_cls,
+    ):
+        mock_downloader_cls.download_video.return_value = MagicMock(path="/tmp/ref.mp4")
+        mock_filter_passed.return_value = set()
+
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["hk-0", "hk-1"]
+        mock_metagraph.uids = [0, 1]
+        mock_metagraph.n = 2
+
+        submission = MagicMock()
+        submission.endpoint = "https://runtime.example.com"
+        submission.chute_slug = None
+
+        resolver = MagicMock()
+        resolver.get_submissions = AsyncMock(return_value={"hk-1": submission})
+        resolver.get_duplicate_hotkeys.return_value = set()
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True}
+        client = AsyncMock()
+        client.get.return_value = response
+        mock_async_client_cls.return_value.__aenter__.return_value = client
+
+        task_gen = MagicMock()
+        task_gen.dataset = [{"video_url": "https://youtube.com/watch?v=ref"}]
+
+        runtime = ValidatorRuntimeState(
+            wallet=mock_wallet,
+            metagraph=mock_metagraph,
+            scores=np.array([0.0, 1.0]),
+            score_lock=threading.Lock(),
+        )
+
+        responsive_uids = await refresh_responsive_miners_from_submissions(
+            runtime=runtime,
+            subtensor=MagicMock(),
+            netuid=1,
+            submission_resolver=resolver,
+            chutes_base_domain="chutes.ai",
+            health_timeout_seconds=10,
+            task_gen=task_gen,
+            enable_proof_of_access=True,
+        )
+
+        self.assertEqual(responsive_uids, set())
         self.assertEqual(runtime.responsive_uids, set())
         self.assertEqual(runtime.miner_endpoints, {})
 

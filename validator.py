@@ -80,6 +80,9 @@ from chronoseek.constants import (
     DEFAULT_MINER_SUBMISSION_CACHE_TTL_SECONDS,
     DEFAULT_MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS,
     DEFAULT_MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_ENABLE_PROOF_OF_ACCESS,
+    DEFAULT_PROOF_OF_ACCESS_CACHE_TTL_HOURS,
+    DEFAULT_PROOF_OF_ACCESS_TIMEOUT_SECONDS,
     DEFAULT_NETUID,
     DEFAULT_NETWORK,
     DEFAULT_REQUIRE_ACCESSIBLE_VIDEOS,
@@ -143,8 +146,11 @@ from chronoseek.chutes.runtime import (
     build_submission_endpoint_map,
     chutes_auth_headers_from_env,
     filter_healthy_runtime_endpoints,
+    filter_proof_of_access_passed,
 )
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
+from chronoseek.video.downloader import VideoDownloader
+from chronoseek.video.proof_of_access import compute_proof_of_access_hash
 
 
 def seed_scores_from_metagraph(metagraph: Any) -> np.ndarray:
@@ -253,6 +259,95 @@ def responsive_refresh_due(
     return (time.time() - last_refresh_at) >= max(1.0, float(interval_seconds))
 
 
+def pick_proof_of_access_reference_video(task_gen: Any) -> str | None:
+    """
+    Reuse a video the validator already vets for hardened task generation as
+    the proof-of-access reference, instead of maintaining a separate canary
+    list.
+    """
+    dataset = getattr(task_gen, "dataset", None) or []
+    for entry in dataset:
+        video_url = entry.get("video_url") if isinstance(entry, dict) else None
+        if video_url:
+            return str(video_url)
+    return None
+
+
+async def refresh_proof_of_access(
+    runtime: ValidatorRuntimeState,
+    *,
+    healthy_endpoint_map: dict[int, str],
+    task_gen: Any,
+    cache_ttl_seconds: float,
+    timeout_seconds: float,
+    provider_headers: dict[str, str] | None = None,
+) -> set[int]:
+    """
+    Returns the subset of `healthy_endpoint_map`'s uids that currently have a
+    valid (non-expired) passing proof-of-access cache entry - checking any
+    uid whose cache entry is missing or expired first. New miners (nothing
+    cached yet) are always checked immediately, not given a free pass.
+    """
+    now = time.time()
+    cache_ttl_seconds = max(1.0, float(cache_ttl_seconds))
+
+    with runtime.proof_of_access_lock:
+        cache = dict(runtime.proof_of_access_cache)
+
+    def is_expired(uid: int) -> bool:
+        entry = cache.get(uid)
+        if not entry:
+            return True
+        return (now - float(entry.get("checked_at", 0))) > cache_ttl_seconds
+
+    uids_needing_check = [uid for uid in healthy_endpoint_map if is_expired(uid)]
+
+    if uids_needing_check:
+        reference_video_url = pick_proof_of_access_reference_video(task_gen)
+        expected_hash = None
+        if reference_video_url:
+            downloaded_video = VideoDownloader.download_video(
+                reference_video_url,
+                raise_on_failure=False,
+            )
+            if downloaded_video is not None:
+                try:
+                    expected_hash = compute_proof_of_access_hash(downloaded_video.path)
+                finally:
+                    VideoDownloader.cleanup(downloaded_video)
+
+        if expected_hash:
+            check_endpoint_map = {
+                uid: healthy_endpoint_map[uid] for uid in uids_needing_check
+            }
+            passed_uids = await filter_proof_of_access_passed(
+                endpoint_map=check_endpoint_map,
+                wallet=runtime.wallet,
+                video_url=reference_video_url,
+                expected_hash=expected_hash,
+                timeout_seconds=timeout_seconds,
+                provider_headers=provider_headers,
+            )
+            for uid in uids_needing_check:
+                cache[int(uid)] = {"passed": uid in passed_uids, "checked_at": now}
+        else:
+            logger.warning(
+                "Proof-of-access reference video could not be prepared this cycle; "
+                "skipping newly-due checks (existing cached passes are unaffected)."
+            )
+
+    with runtime.proof_of_access_lock:
+        runtime.proof_of_access_cache.update(cache)
+        final_cache = dict(runtime.proof_of_access_cache)
+
+    return {
+        int(uid)
+        for uid in healthy_endpoint_map
+        if final_cache.get(int(uid), {}).get("passed")
+        and (now - float(final_cache[int(uid)].get("checked_at", 0))) <= cache_ttl_seconds
+    }
+
+
 async def refresh_responsive_miners_from_submissions(
     runtime: ValidatorRuntimeState,
     subtensor: Any,
@@ -261,11 +356,19 @@ async def refresh_responsive_miners_from_submissions(
     chutes_base_domain: str,
     health_timeout_seconds: float,
     provider_headers: dict[str, str] | None = None,
+    task_gen: Any = None,
+    enable_proof_of_access: bool = True,
+    proof_of_access_cache_ttl_seconds: float = 21600.0,
+    proof_of_access_timeout_seconds: float = 120.0,
 ) -> set[int]:
     """
     "Responsive" means:
     1. the registered metagraph hotkey has valid committed runtime metadata
     2. the resolved runtime endpoint currently passes /health
+    3. the resolved runtime endpoint has a valid (non-expired) passing
+       proof-of-access check, when `task_gen` is supplied and proof-of-access
+       is enabled - skipped entirely otherwise (e.g. the initial pre-loop
+       snapshot, which has no task generator yet)
     """
     health_timeout_seconds = max(0.5, float(health_timeout_seconds))
     metagraph = get_metagraph_snapshot(runtime)
@@ -300,6 +403,21 @@ async def refresh_responsive_miners_from_submissions(
         health_timeout_seconds=health_timeout_seconds,
         provider_headers=provider_headers,
     )
+
+    if enable_proof_of_access and task_gen is not None and healthy_endpoint_map:
+        passed_uids = await refresh_proof_of_access(
+            runtime,
+            healthy_endpoint_map=healthy_endpoint_map,
+            task_gen=task_gen,
+            cache_ttl_seconds=proof_of_access_cache_ttl_seconds,
+            timeout_seconds=proof_of_access_timeout_seconds,
+            provider_headers=provider_headers,
+        )
+        healthy_endpoint_map = {
+            uid: endpoint
+            for uid, endpoint in healthy_endpoint_map.items()
+            if uid in passed_uids
+        }
 
     responsive_uids = set(healthy_endpoint_map)
     refreshed_at = time.time()
@@ -528,6 +646,23 @@ async def run_validator_loop(
                         10.0,
                     ),
                     provider_headers=provider_headers,
+                    task_gen=task_gen,
+                    enable_proof_of_access=get_config_bool(
+                        config,
+                        "enable_proof_of_access",
+                        DEFAULT_ENABLE_PROOF_OF_ACCESS,
+                    ),
+                    proof_of_access_cache_ttl_seconds=get_config_float(
+                        config,
+                        "proof_of_access_cache_ttl_hours",
+                        DEFAULT_PROOF_OF_ACCESS_CACHE_TTL_HOURS,
+                    )
+                    * 3600.0,
+                    proof_of_access_timeout_seconds=get_config_float(
+                        config,
+                        "proof_of_access_timeout_seconds",
+                        DEFAULT_PROOF_OF_ACCESS_TIMEOUT_SECONDS,
+                    ),
                 )
 
             metagraph = get_metagraph_snapshot(runtime)
@@ -1155,6 +1290,29 @@ def get_config():
         type=float,
         default=DEFAULT_MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS,
         help="Per-runtime timeout for /health checks during responsive miner refresh.",
+    )
+    parser.add_argument(
+        "--disable-proof-of-access",
+        dest="enable_proof_of_access",
+        action="store_false",
+        default=env_bool("ENABLE_PROOF_OF_ACCESS", DEFAULT_ENABLE_PROOF_OF_ACCESS),
+        help="Disable the periodic proof-of-access check (requires a miner to actually download/decode a real video).",
+    )
+    parser.add_argument(
+        "--proof-of-access-cache-ttl-hours",
+        type=float,
+        default=env_float(
+            "PROOF_OF_ACCESS_CACHE_TTL_HOURS", DEFAULT_PROOF_OF_ACCESS_CACHE_TTL_HOURS
+        ),
+        help="Hours a passing proof-of-access check remains valid before a miner is re-checked.",
+    )
+    parser.add_argument(
+        "--proof-of-access-timeout-seconds",
+        type=float,
+        default=env_float(
+            "PROOF_OF_ACCESS_TIMEOUT_SECONDS", DEFAULT_PROOF_OF_ACCESS_TIMEOUT_SECONDS
+        ),
+        help="Per-runtime timeout for /proof-of-access checks (the miner must download and decode a real video).",
     )
     parser.add_argument(
         "--validator-telemetry-path",
