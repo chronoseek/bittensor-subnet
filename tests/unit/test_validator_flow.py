@@ -15,6 +15,7 @@ from validator import (
     refresh_responsive_miners_from_submissions,
     run_validator_loop,
     seed_scores_from_metagraph,
+    top3_weight_shares,
 )
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner
@@ -24,20 +25,28 @@ from chronoseek.chain.submissions import MinerSubmission
 
 class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
-    def test_build_emission_weights_reserves_burn_uid_and_distributes_rest(self):
+    def test_build_emission_weights_reserves_burn_uid_and_pays_top3(self):
+        # burn_uid (0) is excluded from ranking, leaving only 2 candidates -
+        # rank3's 5% slot goes unpaid rather than falling back to anyone.
         scores = np.array([100.0, 2.0, 6.0])
 
         weights = build_emission_weights(scores, miner_emission_burn_percent=25.0)
 
-        np.testing.assert_allclose(weights, np.array([0.25, 0.1875, 0.5625]))
-        self.assertAlmostEqual(float(np.sum(weights)), 1.0)
+        np.testing.assert_allclose(weights, np.array([0.25, 0.15, 0.5625]))
 
-    def test_build_emission_weights_excludes_uid_zero_when_burn_is_zero(self):
+    def test_build_emission_weights_pays_top3_when_burn_is_zero(self):
         scores = np.array([100.0, 2.0, 6.0])
 
         weights = build_emission_weights(scores, miner_emission_burn_percent=0.0)
 
-        np.testing.assert_allclose(weights, np.array([0.0, 0.25, 0.75]))
+        np.testing.assert_allclose(weights, np.array([0.0, 0.20, 0.75]))
+
+    def test_build_emission_weights_pays_full_top3_with_enough_candidates(self):
+        scores = np.array([0.0, 6.0, 2.0, 9.0])
+
+        weights = build_emission_weights(scores, miner_emission_burn_percent=0.0)
+
+        np.testing.assert_allclose(weights, np.array([0.0, 0.20, 0.05, 0.75]))
         self.assertAlmostEqual(float(np.sum(weights)), 1.0)
 
     def test_build_emission_weights_burns_all_when_no_rest_scores_exist(self):
@@ -47,6 +56,52 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
 
         np.testing.assert_allclose(weights, np.array([1.0, 0.0, 0.0]))
         self.assertAlmostEqual(float(np.sum(weights)), 1.0)
+
+    def test_top3_weight_shares_clean_ranking(self):
+        scores = np.array([9.0, 2.0, 6.0, 1.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.75, 0.05, 0.20, 0.0]))
+
+    def test_top3_weight_shares_two_way_tie_for_first(self):
+        scores = np.array([9.0, 9.0, 6.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.475, 0.475, 0.05]))
+
+    def test_top3_weight_shares_two_way_tie_for_second_and_third(self):
+        scores = np.array([9.0, 6.0, 6.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.75, 0.125, 0.125]))
+
+    def test_top3_weight_shares_three_way_tie_for_first(self):
+        scores = np.array([9.0, 9.0, 9.0, 1.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(
+            shares, np.array([1.0 / 3, 1.0 / 3, 1.0 / 3, 0.0])
+        )
+
+    def test_top3_weight_shares_five_way_tie_for_first(self):
+        scores = np.array([9.0, 9.0, 9.0, 9.0, 9.0, 1.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(
+            shares, np.array([0.20, 0.20, 0.20, 0.20, 0.20, 0.0])
+        )
+
+    def test_top3_weight_shares_never_pays_zero_or_negative_score(self):
+        scores = np.array([0.0, -1.0, 5.0])
+
+        shares = top3_weight_shares(scores)
+
+        np.testing.assert_allclose(shares, np.array([0.0, 0.0, 0.75]))
 
     def test_seed_scores_from_metagraph_uses_incentives(self):
         metagraph = MagicMock()

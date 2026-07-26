@@ -244,6 +244,7 @@ poetry run python validator.py \
 
 ## Operational Notes
 
+- Emission weight is winner-take-most: after the burn reservation, only the top 3 miners by moving score get weight (75/20/5), everyone else gets 0. Miners tied on score for a paid slot split that slot's pooled weight evenly. A miner with a score of 0 never receives weight, even if it would otherwise rank in the top 3.
 - Evaluation rounds are paced by block height, not wall-clock time: a round starts every `--evaluation-round-blocks` (`EVALUATION_ROUND_BLOCKS`, default 60) blocks since the previous round's start, or immediately if a slow round already blew past that boundary.
 - Do not send original ActivityNet source URLs, source video IDs, raw captions, or ground-truth timestamps to miners.
 - Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
