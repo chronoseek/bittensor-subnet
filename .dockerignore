@@ -25,7 +25,10 @@ dist/
 validator-data/
 .chronoseek-chutes-build/
 chronoseek_chute.py
-chronoseek_chute_local.py
+# NOT chronoseek_chute_local.py: the Chutes SDK's --local build mode adds
+# this exact file into the image itself, so excluding it breaks local
+# testing entirely. No secrets live in this file - only references to env
+# vars that stay separately excluded above (.env, cookies.txt).
 
 # Not needed by the validator runtime image.
 docs/
