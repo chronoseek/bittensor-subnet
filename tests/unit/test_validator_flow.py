@@ -2,6 +2,7 @@ import unittest
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import numpy as np
 
@@ -13,6 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from validator import (
     apply_disqualified_miner_penalty,
     build_emission_weights,
+    pick_proof_of_access_reference_video,
     refresh_proof_of_access,
     refresh_responsive_miners_from_submissions,
     run_validator_loop,
@@ -233,7 +235,6 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
-                    miner_submission_refresh_interval_seconds=15.0,
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
@@ -322,7 +323,6 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
-                    miner_submission_refresh_interval_seconds=15.0,
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
@@ -331,6 +331,78 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(mock_run_step.call_count, 3)
+
+    @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
+    @patch("chronoseek.validator.forward.run_step")
+    async def test_validator_loop_refresh_still_paces_by_block_with_no_candidates(
+        self, mock_run_step, mock_task_gen
+    ):
+        """Regression test: if a refresh cycle never finds a responsive
+        candidate, last_round_start_block must still advance - otherwise the
+        round-due check stays vacuously true forever (real block numbers
+        vastly exceed evaluation_round_blocks), and refresh (plus /health)
+        fires on every ~12s loop tick instead of waiting for the next real
+        boundary."""
+        mock_subtensor = MagicMock()
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        stop_event = MagicMock()
+
+        mock_metagraph.n = 1
+        mock_metagraph.hotkeys = ["h1"]
+        mock_metagraph.I = [1.0]
+
+        mock_subtensor.subnets.info.return_value.tempo = 1000
+        # Due at 100, not due at 105/115, due again at 111/121, not due at
+        # 200's neighbors since none are probed here, due at 200/500/1000.
+        blocks = [100, 105, 111, 115, 121, 200, 500, 1000]
+        mock_subtensor.block.side_effect = blocks
+        stop_event.is_set.side_effect = [False] * len(blocks) + [True]
+
+        with patch("asyncio.sleep", new_callable=AsyncMock), patch(
+            "validator.MinerSubmissionResolver"
+        ) as mock_resolver_cls, patch(
+            "validator.refresh_responsive_miners_from_submissions", new_callable=AsyncMock
+        ) as mock_refresh_responsive:
+            mock_resolver_cls.return_value = MagicMock()
+            mock_refresh_responsive.return_value = set()
+
+            runtime = ValidatorRuntimeState(
+                wallet=mock_wallet,
+                metagraph=mock_metagraph,
+                scores=seed_scores_from_metagraph(mock_metagraph),
+                score_lock=threading.Lock(),
+            )
+            await run_validator_loop(
+                mock_subtensor,
+                runtime,
+                netuid=1,
+                stop_event=stop_event,
+                last_heartbeat=[0],
+                config=MagicMock(
+                    task_dataset_path="",
+                    task_split="validation",
+                    require_accessible_videos=False,
+                    task_max_sampling_attempts=10,
+                    miner_request_timeout_seconds=60.0,
+                    miner_emission_burn_percent=0.0,
+                    video_availability_cache_path="",
+                    accessible_video_cache_path="",
+                    inaccessible_video_cache_path="",
+                    video_availability_cache_ttl_hours=24,
+                    video_availability_timeout=5,
+                    miner_submission_health_timeout_seconds=10.0,
+                    hf_cache_dir="",
+                    hf_activitynet_filename="",
+                    evaluation_round_blocks=10,
+                ),
+            )
+
+        # Only the 6 blocks that actually cross a fresh 10-block boundary
+        # (100, 111, 121, 200, 500, 1000) should trigger a refresh - not
+        # every one of the 8 ticks.
+        self.assertEqual(mock_refresh_responsive.call_count, 6)
+        mock_run_step.assert_not_called()
 
     @patch("chronoseek.validator.task_gen.ActivityNetTaskGenerator")
     @patch("chronoseek.validator.forward.run_step")
@@ -400,7 +472,6 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
-                    miner_submission_refresh_interval_seconds=15.0,
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
@@ -470,7 +541,6 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
                     inaccessible_video_cache_path="",
                     video_availability_cache_ttl_hours=24,
                     video_availability_timeout=5,
-                    miner_submission_refresh_interval_seconds=15.0,
                     miner_submission_health_timeout_seconds=10.0,
                     hf_cache_dir="",
                     hf_activitynet_filename="",
@@ -618,6 +688,35 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.disqualified_uids, {1})
         self.assertEqual(runtime.responsive_uids, set())
         self.assertEqual(runtime.miner_endpoints, {})
+
+    def test_pick_proof_of_access_reference_video_from_legacy_generator(self):
+        task_gen = SimpleNamespace(
+            dataset=[{"video_url": "https://youtube.com/watch?v=legacy-ref"}]
+        )
+
+        video_url = pick_proof_of_access_reference_video(task_gen)
+
+        self.assertEqual(video_url, "https://youtube.com/watch?v=legacy-ref")
+
+    def test_pick_proof_of_access_reference_video_from_hardened_generator(self):
+        """Regression test: build_validator_task_generator returns a
+        HardenedActivityNetTaskGenerator when hardened tasks are enabled
+        (the default, and what actually runs in production) - it has no
+        `.dataset` of its own, the real dataset lives on `.sampler.dataset`.
+        Without this fallback, the reference video is never found and
+        proof-of-access silently never runs."""
+        task_gen = SimpleNamespace(
+            sampler=SimpleNamespace(
+                dataset=[{"video_url": "https://youtube.com/watch?v=hardened-ref"}]
+            )
+        )
+
+        video_url = pick_proof_of_access_reference_video(task_gen)
+
+        self.assertEqual(video_url, "https://youtube.com/watch?v=hardened-ref")
+
+    def test_pick_proof_of_access_reference_video_returns_none_when_no_dataset(self):
+        self.assertIsNone(pick_proof_of_access_reference_video(SimpleNamespace()))
 
     def _proof_of_access_runtime(self):
         return ValidatorRuntimeState(
