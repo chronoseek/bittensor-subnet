@@ -329,3 +329,63 @@ def test_chutes_runtime_exposes_proof_of_access_contract():
         runtime.miner_logic = None
         runtime.validator_auth = None
         runtime.startup_error = None
+
+
+def test_health_stays_responsive_while_search_is_in_flight():
+    """A slow /search must not block /health on the same event loop.
+
+    Chutes' own verification probe hits /health; if it can't get scheduled
+    while a real search is running, the probe times out and the instance
+    gets torn down - this is exactly the failure Chutes reported in
+    production, and it regresses if /search ever goes back to running
+    synchronously inline on the event loop instead of via asyncio.to_thread.
+    """
+
+    import time as time_module
+
+    def slow_execute_search(payload, *, caller_hotkey=None, enforce_validator_auth=True):
+        time_module.sleep(1.0)
+        return {"request_id": payload.request_id, "results": []}
+
+    async def verify_signature_stub():
+        return "validator-hotkey"
+
+    runtime.miner_logic = MagicMock()
+    runtime.validator_auth = MagicMock()
+    runtime.startup_error = None
+    runtime.app.dependency_overrides[verify_signature] = verify_signature_stub
+    try:
+        with patch.object(runtime, "execute_search", side_effect=slow_execute_search):
+
+            async def exercise_runtime():
+                transport = httpx.ASGITransport(app=runtime.app)
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as client:
+                    search_task = asyncio.ensure_future(
+                        client.post(
+                            "/search",
+                            json={
+                                "protocol_version": "2026-04-10",
+                                "request_id": "slow-search",
+                                "query": "a rabbit",
+                                "top_k": 3,
+                                "video": {"url": "https://www.youtube.com/watch?v=abc123"},
+                            },
+                        )
+                    )
+                    await asyncio.sleep(0.1)
+                    health_response = await asyncio.wait_for(
+                        client.get("/health"), timeout=0.5
+                    )
+                    search_response = await search_task
+                    return health_response, search_response
+
+            health_response, search_response = asyncio.run(exercise_runtime())
+            assert health_response.status_code == 200
+            assert search_response.status_code == 200
+    finally:
+        runtime.app.dependency_overrides.clear()
+        runtime.miner_logic = None
+        runtime.validator_auth = None
+        runtime.startup_error = None
