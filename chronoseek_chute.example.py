@@ -96,10 +96,12 @@ PREBUILT_IMAGE_ID = os.getenv("CHUTES_PREBUILT_IMAGE_ID", "").strip()
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 IMAGE_YTDLP_DENO_PATH = DEFAULT_CHUTES_YTDLP_DENO_PATH
-YTDLP_COOKIES_BROWSER = (
-    os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
-    or "chrome:Default"
-)
+# No default here: the deploy wrapper (chutes_ytdlp_cookie_file_context in
+# chronoseek/chutes/deployment.py) bakes a real cookies.txt file into every
+# build automatically, which downloader.py prefers over any browser fallback.
+# A "chrome:Default" default would be actively wrong here anyway - miner GPU
+# instances have no Chrome profile to read.
+YTDLP_COOKIES_BROWSER = os.getenv("YTDLP_COOKIES_BROWSER", "").strip()
 YTDLP_DENO_PATH = IMAGE_YTDLP_DENO_PATH
 
 

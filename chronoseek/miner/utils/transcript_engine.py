@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 from typing import List
 
+import soundfile as sf
 import torch
 
 from chronoseek.logging import logger
@@ -71,9 +72,21 @@ class TranscriptEngine:
             return []
 
         try:
+            samples, sample_rate = sf.read(audio_path, dtype="float32")
+            if samples.ndim > 1:
+                samples = samples.mean(axis=1)
+        except Exception as exc:
+            logger.warning(f"Failed to read extracted audio for transcription: {exc}")
+            return []
+
+        try:
+            # Feed a raw array rather than a file path: the pipeline shells
+            # out to the ffmpeg CLI internally (ffmpeg_read) for path inputs,
+            # which is exactly the per-request subprocess spawn this runtime
+            # otherwise avoids - see AudioExtractor's docstring.
             result = asr_pipeline(
-                audio_path,
-                return_timestamps=True
+                {"raw": samples, "sampling_rate": sample_rate},
+                return_timestamps=True,
             )
         except Exception as exc:
             logger.warning(f"Transcript generation failed: {exc}")

@@ -32,6 +32,8 @@ yt-dlp = ">=2026.3.17"
 yt-dlp-ejs = ">=0.8.0"
 chutes = "^0.6.8"
 minio = "^7.2.20"
+av = "^18.0.0"
+soundfile = "^0.14.0"
 
 [build-system]
 requires = ["poetry-core"]
