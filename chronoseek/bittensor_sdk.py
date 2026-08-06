@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import bittensor as bt
+
+DEFAULT_CURRENT_BLOCK_MAX_ATTEMPTS = 3
+DEFAULT_CURRENT_BLOCK_RETRY_DELAY_SECONDS = 1.0
 
 
 class SubnetNotFoundError(RuntimeError):
@@ -128,8 +132,33 @@ def fetch_metagraph(
     return MetagraphSnapshot(raw_metagraph, network=getattr(subtensor, "network", None))
 
 
-def current_block(subtensor: Any) -> int:
-    return int(subtensor.block())
+def current_block(
+    subtensor: Any,
+    *,
+    max_attempts: int = DEFAULT_CURRENT_BLOCK_MAX_ATTEMPTS,
+    retry_delay_seconds: float = DEFAULT_CURRENT_BLOCK_RETRY_DELAY_SECONDS,
+) -> int:
+    """Read the current chain block, retrying past transient RPC hiccups.
+
+    A momentarily lagging/dropped chain websocket can make a single
+    ``chain_getHeader`` request come back with a null header (raised by the
+    SDK as e.g. ``BlockNotFound: no header for None``) even though the
+    connection is fine again immediately after. This is called every
+    validator loop tick, so treating it as fatal restarts the whole process
+    over what is usually a one-off blip. The read is side-effect-free, so a
+    short retry is safe.
+    """
+
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return int(subtensor.block())
+        except Exception as error:
+            last_error = error
+            if attempt < max_attempts - 1:
+                time.sleep(retry_delay_seconds)
+    assert last_error is not None
+    raise last_error
 
 
 def subnet_tempo(subtensor: Any, netuid: int) -> int:

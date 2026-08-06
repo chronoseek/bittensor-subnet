@@ -31,8 +31,8 @@ Required for normal validator operation:
 | --- | --- | --- |
 | `WALLET_NAME` | Yes | Coldkey wallet name. |
 | `HOTKEY_NAME` | Yes | Registered validator hotkey name. |
-| `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
-| `NETUID` | Yes | ChronoSeek subnet netuid. |
+| `NETWORK` | No | Defaults to `finney`; set it explicitly for `test`, `local`, or another network. |
+| `NETUID` | No | Defaults to the ChronoSeek mainnet subnet, `20`. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 | `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION` | No | Defaults to `1`. Set to `0` only for tests that require replaceable miner submissions; validators then use the newest revealed submission and do not apply the duplicate-submission penalty. |
 | `CHUTES_API_KEY` | Yes | Used to query private Chutes runtimes. |
@@ -46,7 +46,8 @@ Hardened task generation:
 | `VALIDATOR_TASK_SECRET` or `--validator-task-secret` | Normal validator operation | Set a long random secret. Used for private deterministic sampling. |
 | `HIPPIUS_S3_ACCESS_KEY_ID` | Normal validator operation | Hippius S3 access key ID. |
 | `HIPPIUS_S3_SECRET_ACCESS_KEY` | Normal validator operation | Hippius S3 secret key. |
-| `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, bucket, or region constants when a deployment uses different Hippius-compatible storage. |
+| `HIPPIUS_S3_BUCKET` or `--hippius-s3-bucket` | Normal validator operation | Defaults to `chronoseek`, but that name may already be owned by another operator. Set this to a bucket your Hippius credentials own or can create — startup calls `set_bucket_policy` on it and fails with `AccessDenied` otherwise. |
+| `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, or region constants when a deployment uses different Hippius-compatible storage. |
 
 Vidaio compression:
 
@@ -70,7 +71,7 @@ Minimal `.env` shape:
 
 ```env
 NETWORK=finney
-NETUID=<netuid>
+NETUID=20
 WALLET_NAME=<validator-coldkey>
 HOTKEY_NAME=<validator-hotkey>
 WALLET_PATH=~/.bittensor/wallets
@@ -92,6 +93,85 @@ Start the validator:
 ```bash
 poetry run python validator.py
 ```
+
+### Docker deployment with automatic updates
+
+The GitHub Actions workflow publishes the validator image to
+`creativeessence/chronoseek-subnet` by default. Configure the repository under
+**Settings → Secrets and variables → Actions**:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| Secret | `DOCKERHUB_USERNAME` | Docker Hub user allowed to push the image. |
+| Secret | `DOCKERHUB_TOKEN` | Docker Hub access token with read/write permission. Do not use the account password. |
+| Variable (optional) | `DOCKERHUB_IMAGE` | Alternate `namespace/repository`, if not using `creativeessence/chronoseek-subnet`. |
+
+Create the matching Docker Hub repository before running the workflow. A public
+repository is the simplest deployment because validator hosts and Watchtower
+can pull without registry credentials.
+
+The two GitHub secrets above are only for publishing images. Do not put
+validator runtime credentials in GitHub Actions. Each validator operator keeps
+their own runtime credentials on their validator host.
+
+On each validator host, create and protect the runtime environment file:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+Edit `.env` with that validator's settings:
+
+```env
+DOCKER_IMAGE=creativeessence/chronoseek-subnet:latest
+NETWORK=finney
+NETUID=20
+
+WALLET_NAME=<validator-coldkey>
+HOTKEY_NAME=<validator-hotkey>
+WALLET_PATH=~/.bittensor/wallets
+
+CHUTES_API_KEY=<validator-chutes-api-key>
+HF_TOKEN=<validator-hugging-face-token>
+VALIDATOR_TASK_SECRET=<long-random-validator-secret>
+
+HIPPIUS_S3_BUCKET=<validator-owned-bucket>
+HIPPIUS_S3_ACCESS_KEY_ID=<hippius-access-key>
+HIPPIUS_S3_SECRET_ACCESS_KEY=<hippius-secret-key>
+
+VIDAIO_COMPRESSION_ENABLED=1
+VIDAIO_API_KEY=<vidaio-api-key-if-required>
+LOG_LEVEL=INFO
+```
+
+Compose injects every entry from `.env` into the validator container. The
+wallet keys themselves are not environment variables: Compose mounts
+`~/.bittensor/wallets` read-only, and `WALLET_NAME`/`HOTKEY_NAME` select the
+wallet files to use. The `.env` file is ignored by both Git and Docker builds,
+so it is neither committed nor baked into the published image.
+
+Then start the deployment:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs -f chronoseek-validator
+```
+
+After changing an environment value, recreate the validator container:
+
+```bash
+docker compose up -d --force-recreate validator
+```
+
+Avoid posting the output of `docker compose config` in logs or support chats;
+depending on the Compose version, it may include resolved secret values.
+
+Compose pulls the published image at startup. Watchtower checks Docker Hub every
+five minutes and restarts the validator when a new `latest` image is available.
+The workflow publishes on pushes to `main` or `master`, on `v*` release tags,
+and through manual workflow dispatch.
 
 CLI flags can replace environment variables and override code defaults. For example:
 
@@ -164,6 +244,9 @@ poetry run python validator.py \
 
 ## Operational Notes
 
+- Proof-of-access: alongside `/health`, the validator periodically confirms a miner can actually download and decode a real YouTube video (reused from the same dataset used for hardened task generation, not a separate canary list) by comparing a perceptual hash of decoded frames. A passing result is cached per miner for `--proof-of-access-cache-ttl-hours` (`PROOF_OF_ACCESS_CACHE_TTL_HOURS`, default 6h) before it's rechecked; new miners are always checked immediately. A mismatch, timeout, or expired/missing pass excludes the miner from queries until it passes again, same as failing `/health`. Disable with `--disable-proof-of-access` (`ENABLE_PROOF_OF_ACCESS=0`).
+- Emission weight is winner-take-most: after the burn reservation, only the top 3 miners by moving score get weight (75/20/5), everyone else gets 0. Miners tied on score for a paid slot split that slot's pooled weight evenly. A miner with a score of 0 never receives weight, even if it would otherwise rank in the top 3.
+- Evaluation rounds are paced by block height, not wall-clock time: a round starts every `--evaluation-round-blocks` (`EVALUATION_ROUND_BLOCKS`, default 60) blocks since the previous round's start, or immediately if a slow round already blew past that boundary.
 - Do not send original ActivityNet source URLs, source video IDs, raw captions, or ground-truth timestamps to miners.
 - Keep `VALIDATOR_TASK_SECRET`, Hippius credentials, Chutes credentials, and Vidaio credentials out of committed files.
 - Hardened task generation increases validator-side CPU, disk, network, and storage usage.

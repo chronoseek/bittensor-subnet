@@ -5,6 +5,7 @@ This module exposes the HTTP contract validators query on the miner's deployed
 Chutes runtime. The subnet miner command does not serve this app locally.
 """
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -28,10 +29,14 @@ from chronoseek.logging import configure_logging, logger
 from chronoseek.miner import logic as miner_logic_module
 from chronoseek.miner.auth import ValidatorAuthContext, authorize_hotkey
 from chronoseek.protocol_models import (
+    ProofOfAccessRequest,
+    ProofOfAccessResponse,
     ProtocolError,
     VideoSearchRequest,
     VideoSearchResponse,
 )
+from chronoseek.video.downloader import VideoDownloader, VideoDownloadError
+from chronoseek.video.proof_of_access import compute_proof_of_access_hash
 
 load_dotenv()
 
@@ -47,6 +52,14 @@ class RuntimeConfig:
 miner_logic = None
 validator_auth = None
 startup_error: str | None = None
+
+# execute_search/execute_proof_of_access run a real video download plus (for
+# search) GPU inference - both synchronous and slow. Run them off the event
+# loop entirely so /health stays responsive to Chutes' verification probe
+# while one is in flight, and serialize them so only one runs at a time,
+# matching the implicit one-at-a-time access the blocking calls used to give
+# the shared CLIP model/GPU for free.
+_inference_semaphore = asyncio.Semaphore(1)
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -146,7 +159,7 @@ def execute_search(
     *,
     caller_hotkey: str | None = None,
     enforce_validator_auth: bool = True,
-):
+) -> dict | JSONResponse:
     request_id = payload.request_id or "unknown-request"
     caller = caller_hotkey or "chutes-sdk-authenticated-caller"
     logger.info(f"Received request {request_id} from {caller}: {payload.query}")
@@ -195,7 +208,11 @@ def execute_search(
         logger.info("Starting search processing...")
         results = miner_logic.search(payload.video_url, payload.query, top_k=payload.top_k)
         logger.success(f"Search completed. Found {len(results)} results.")
-        return VideoSearchResponse(request_id=payload.request_id, results=results)
+        response = VideoSearchResponse(
+            request_id=payload.request_id,
+            results=results,
+        )
+        return response.model_dump(mode="json")
     except miner_logic_module.SearchPipelineError as exc:
         logger.error(f"Request {request_id} failed with {exc.code}: {exc.message}")
         status_code = 500
@@ -229,6 +246,98 @@ def execute_search(
         )
 
 
+def execute_proof_of_access(
+    payload: ProofOfAccessRequest,
+    *,
+    caller_hotkey: str | None = None,
+    enforce_validator_auth: bool = True,
+) -> dict | JSONResponse:
+    request_id = payload.request_id or "unknown-request"
+    caller = caller_hotkey or "chutes-sdk-authenticated-caller"
+    logger.info(f"Received proof-of-access request {request_id} from {caller}: {payload.video_url}")
+
+    if validator_auth is None:
+        return build_protocol_error(
+            code="INTERNAL_ERROR",
+            message="Runtime is not initialized.",
+            status_code=503,
+            request_id=payload.request_id,
+            details={"startup_error": startup_error} if startup_error else None,
+        )
+
+    if payload.protocol_version != PROTOCOL_VERSION:
+        return build_protocol_error(
+            code="UNSUPPORTED_PROTOCOL_VERSION",
+            message="The runtime does not support this protocol version.",
+            status_code=400,
+            request_id=payload.request_id,
+        )
+
+    if enforce_validator_auth:
+        if not caller_hotkey:
+            return build_protocol_error(
+                code="INVALID_REQUEST",
+                message="Caller hotkey is required for validator authorization.",
+                status_code=401,
+                request_id=payload.request_id,
+            )
+
+        is_authorized, auth_details = authorize_hotkey(validator_auth, caller_hotkey)
+        if not is_authorized:
+            logger.warning(
+                f"Rejecting proof-of-access request {request_id} from hotkey {caller_hotkey} with stake {auth_details['caller_stake']:.6f} below minimum {auth_details['minimum_validator_stake']:.6f}"
+            )
+            return build_protocol_error(
+                code="INVALID_REQUEST",
+                message="Caller hotkey does not meet the minimum validator stake requirement.",
+                status_code=403,
+                request_id=payload.request_id,
+                details=auth_details,
+            )
+
+    downloaded_video = None
+    try:
+        downloaded_video = VideoDownloader.download_video(
+            payload.video_url,
+            raise_on_failure=True,
+        )
+    except VideoDownloadError as exc:
+        logger.error(f"Proof-of-access download failed: {exc}")
+        return build_protocol_error(
+            code="VIDEO_FETCH_FAILED",
+            message="The video URL could not be fetched by supported download backends.",
+            status_code=502,
+            request_id=payload.request_id,
+            details=exc.details(),
+        )
+
+    try:
+        content_hash = compute_proof_of_access_hash(downloaded_video.path)
+        if content_hash is None:
+            return build_protocol_error(
+                code="VIDEO_UNREADABLE",
+                message="The downloaded video could not be decoded into frames.",
+                status_code=422,
+                request_id=payload.request_id,
+            )
+
+        response = ProofOfAccessResponse(
+            request_id=payload.request_id,
+            content_hash=content_hash,
+        )
+        return response.model_dump(mode="json")
+    except Exception as exc:
+        logger.error(f"Error processing proof-of-access request: {exc}")
+        return build_protocol_error(
+            code="INTERNAL_ERROR",
+            message="The runtime encountered an unexpected internal error.",
+            status_code=500,
+            request_id=payload.request_id,
+        )
+    finally:
+        VideoDownloader.cleanup(downloaded_video)
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_request_validation_error(request: Request, exc: RequestValidationError):
     request_id = None
@@ -258,8 +367,24 @@ async def search(
     payload: VideoSearchRequest,
     caller_hotkey: str = Depends(verify_signature),
 ):
-    return execute_search(
-        payload,
-        caller_hotkey=caller_hotkey,
-        enforce_validator_auth=True,
-    )
+    async with _inference_semaphore:
+        return await asyncio.to_thread(
+            execute_search,
+            payload,
+            caller_hotkey=caller_hotkey,
+            enforce_validator_auth=True,
+        )
+
+
+@app.post("/proof-of-access", response_model=ProofOfAccessResponse)
+async def proof_of_access(
+    payload: ProofOfAccessRequest,
+    caller_hotkey: str = Depends(verify_signature),
+):
+    async with _inference_semaphore:
+        return await asyncio.to_thread(
+            execute_proof_of_access,
+            payload,
+            caller_hotkey=caller_hotkey,
+            enforce_validator_auth=True,
+        )

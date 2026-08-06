@@ -13,12 +13,12 @@ local copy must live in the subnet root and is referenced as
 `chronoseek_chute:chute`.
 """
 
+import asyncio
 import os
 import shutil
 import subprocess
-import sys
+import tempfile
 import threading
-from pathlib import Path
 
 from dotenv import load_dotenv
 from chutes.chute import Chute, NodeSelector
@@ -30,7 +30,12 @@ from chronoseek.constants import (
     DEFAULT_CHUTES_HF_HOME,
     DEFAULT_CHUTES_YTDLP_DENO_PATH,
 )
-from chronoseek.protocol_models import VideoSearchRequest, VideoSearchResponse
+from chronoseek.protocol_models import (
+    ProofOfAccessRequest,
+    ProofOfAccessResponse,
+    VideoSearchRequest,
+    VideoSearchResponse,
+)
 
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -59,39 +64,18 @@ def resolve_image_name(base_name: str, runtime_revision: str) -> str:
     return f"{base_name}-{short_rev}"
 
 
-def repair_cyscale_namespace() -> None:
-    """Prefer vendored cyscale and hide py-scale-codec metadata."""
+def prepare_runtime_ytdlp_cookies() -> None:
+    """Copy baked yt-dlp cookies to a private, writable runtime file."""
 
-    if os.getenv("CHUTES_EXECUTION_CONTEXT") != "REMOTE":
+    source_path = os.path.expanduser(os.getenv("YTDLP_COOKIES", "").strip())
+    if not source_path or not os.path.isfile(source_path):
         return
 
-    vendor_dir = Path(CYSCALE_VENDOR_DIR)
-    vendor_resolved = vendor_dir.resolve()
-    if not vendor_dir.exists():
-        return
-    if str(vendor_dir) not in sys.path:
-        sys.path.insert(0, str(vendor_dir))
-
-    candidates = []
-    for raw_path in sys.path:
-        if not raw_path:
-            continue
-        parent = Path(raw_path)
-        candidates.extend(parent.glob("scalecodec*.dist-info"))
-        candidates.extend(parent.glob("scalecodec*.egg-info"))
-        candidates.extend(parent.glob("scalecodec"))
-
-    for path in candidates:
-        try:
-            resolved = path.resolve()
-            if resolved == vendor_resolved or vendor_resolved in resolved.parents:
-                continue
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-            elif path.exists():
-                path.unlink()
-        except Exception:
-            pass
+    runtime_directory = tempfile.mkdtemp(prefix="chronoseek-ytdlp-cookies-")
+    runtime_path = os.path.join(runtime_directory, "cookies.txt")
+    shutil.copyfile(source_path, runtime_path)
+    os.chmod(runtime_path, 0o600)
+    os.environ["YTDLP_COOKIES"] = runtime_path
 
 
 # Placeholder required by Chutes SDK object construction. The deploy helper
@@ -112,11 +96,12 @@ PREBUILT_IMAGE_ID = os.getenv("CHUTES_PREBUILT_IMAGE_ID", "").strip()
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 IMAGE_YTDLP_DENO_PATH = DEFAULT_CHUTES_YTDLP_DENO_PATH
-CYSCALE_VENDOR_DIR = "/opt/chronoseek/vendor"
-YTDLP_COOKIES_BROWSER = (
-    os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
-    or "chrome:Default"
-)
+# No default here: the deploy wrapper (chutes_ytdlp_cookie_file_context in
+# chronoseek/chutes/deployment.py) bakes a real cookies.txt file into every
+# build automatically, which downloader.py prefers over any browser fallback.
+# A "chrome:Default" default would be actively wrong here anyway - miner GPU
+# instances have no Chrome profile to read.
+YTDLP_COOKIES_BROWSER = os.getenv("YTDLP_COOKIES_BROWSER", "").strip()
 YTDLP_DENO_PATH = IMAGE_YTDLP_DENO_PATH
 
 
@@ -140,7 +125,6 @@ image = (
     .with_env("HF_HOME", DEFAULT_CHUTES_HF_HOME)
     .with_env("DENO_INSTALL", "/opt/deno")
     .with_env("PATH", "/opt/deno/bin:$PATH")
-    .with_env("PYTHONPATH", f"{CYSCALE_VENDOR_DIR}:$PYTHONPATH")
     .with_env("YTDLP_COOKIES_BROWSER", YTDLP_COOKIES_BROWSER)
     .with_env("YTDLP_DENO_PATH", YTDLP_DENO_PATH)
     .run_command(
@@ -164,18 +148,9 @@ image = (
         f"{DEFAULT_CHUTES_HF_HOME} && "
         "chmod -R a+rwx /tmp/pip-cache /tmp/uv-cache /tmp/.cache /data"
     )
-    .run_command(
-        f"mkdir -p {CYSCALE_VENDOR_DIR} && "
-        f"chmod -R a+rx {CYSCALE_VENDOR_DIR}"
-    )
     .run_command("pip install --upgrade pip")
-    .run_command("pip install --only-binary=:all: 'cyscale>=0.3.3,<1.0.0'")
-    .run_command(
-        "pip install --only-binary=:all: "
-        f"--target {CYSCALE_VENDOR_DIR} 'cyscale>=0.3.3,<1.0.0' && "
-        f"chmod -R a+rX {CYSCALE_VENDOR_DIR}"
-    )
-    .run_command(f"pip install '{CHRONOSEEK_PACKAGE}'")
+    .run_command("pip install 'torch==2.11.0' --torch-backend=cu128")
+    .run_command(f"pip install '{CHRONOSEEK_PACKAGE}' --torch-backend=cu128")
     # Chutes later adds the `chutes` user to group root, then runs another
     # package install as that user. Make root-installed packages group-writable
     # so that finalization can update shared dependencies such as uvicorn.
@@ -209,7 +184,12 @@ chute = Chute(
     concurrency=5,
     max_instances=3,
     scaling_threshold=0.5,
-    shutdown_after_seconds=300,
+    # Raised from the SDK default (300s) to reduce how often a scheduled
+    # instance shuts down from idling between validator health checks. This
+    # only helps keep an already-scheduled instance alive longer; it has no
+    # effect on how often the Chutes marketplace grants an instance in the
+    # first place, and idle GPU time is billed against the deploying account.
+    shutdown_after_seconds=86400,
     revision=RUNTIME_REVISION,
     # The runtime must fetch arbitrary validator task videos.
     allow_external_egress=True,
@@ -227,6 +207,7 @@ async def initialize_chronoseek(self):
     if hf_token:
         os.environ["HF_TOKEN"] = os.path.expanduser(hf_token.strip())
     os.environ["HF_HOME"] = os.path.expanduser(DEFAULT_CHUTES_HF_HOME)
+    prepare_runtime_ytdlp_cookies()
 
     deno_path = os.path.expanduser(os.getenv("YTDLP_DENO_PATH", "").strip())
     if not deno_path or not os.path.exists(deno_path):
@@ -235,12 +216,6 @@ async def initialize_chronoseek(self):
     node_path = os.path.expanduser(os.getenv("YTDLP_NODE_PATH", "").strip())
     if node_path and not os.path.exists(node_path):
         os.environ.pop("YTDLP_NODE_PATH", None)
-
-    # Chutes finalization can install substrate-interface, which brings
-    # scalecodec. async-substrate-interface refuses to import while that
-    # distribution is present, so repair the namespace before importing
-    # bittensor through the runtime module.
-    repair_cyscale_namespace()
 
     from chronoseek.miner import runtime as chronoseek_runtime
 
@@ -273,18 +248,54 @@ async def health(self):
     input_schema=VideoSearchRequest,
     output_schema=VideoSearchResponse,
 )
-async def search(self, payload: VideoSearchRequest) -> VideoSearchResponse:
+async def search(self, payload: VideoSearchRequest) -> dict:
     """Run ChronoSeek search as a native Chutes SDK cord.
 
     Chutes native cords do not pass arbitrary public HTTP headers to user code,
     so validator identity is enforced by Chutes API access for this deployment
     path.
+
+    Runs off the cord's own event loop via a worker thread, serialized behind
+    a semaphore - execute_search does a real video download plus GPU
+    inference, and running it inline previously blocked /health (and
+    Chutes' own verification probe) for the whole pipeline duration, causing
+    the probe to time out and the instance to get torn down under load.
     """
 
     from chronoseek.miner import runtime as chronoseek_runtime
 
-    return chronoseek_runtime.execute_search(
-        payload,
-        caller_hotkey=None,
-        enforce_validator_auth=False,
-    )
+    async with chronoseek_runtime._inference_semaphore:
+        return await asyncio.to_thread(
+            chronoseek_runtime.execute_search,
+            payload,
+            caller_hotkey=None,
+            enforce_validator_auth=False,
+        )
+
+
+@chute.cord(
+    public_api_path="/proof-of-access",
+    method="POST",
+    input_schema=ProofOfAccessRequest,
+    output_schema=ProofOfAccessResponse,
+)
+async def proof_of_access(self, payload: ProofOfAccessRequest) -> dict:
+    """Run ChronoSeek proof-of-access as a native Chutes SDK cord.
+
+    Chutes native cords do not pass arbitrary public HTTP headers to user code,
+    so validator identity is enforced by Chutes API access for this deployment
+    path.
+
+    Runs off the cord's own event loop the same way search() does - see its
+    docstring for why.
+    """
+
+    from chronoseek.miner import runtime as chronoseek_runtime
+
+    async with chronoseek_runtime._inference_semaphore:
+        return await asyncio.to_thread(
+            chronoseek_runtime.execute_proof_of_access,
+            payload,
+            caller_hotkey=None,
+            enforce_validator_auth=False,
+        )

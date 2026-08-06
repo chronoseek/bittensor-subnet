@@ -25,3 +25,5 @@ class ValidatorRuntimeState:
     responsive_last_refresh_at: float | None = None
     last_metagraph_sync_block: int | None = None
     telemetry: ValidatorTelemetryState = field(default_factory=ValidatorTelemetryState)
+    proof_of_access_lock: Lock = field(default_factory=Lock)
+    proof_of_access_cache: dict[int, dict[str, Any]] = field(default_factory=dict)

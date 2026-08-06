@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import chronoseek.chutes.deployment as chutes_deployment
@@ -67,6 +68,28 @@ class DummyChutesImage:
 
 class DummyChutesChute:
     image = DummyChutesImage()
+
+
+def test_production_chute_pins_cuda_12_8_torch_build():
+    template = (
+        Path(__file__).resolve().parents[2] / "chronoseek_chute.example.py"
+    ).read_text(encoding="utf-8")
+
+    assert "pip install 'torch==2.11.0' --torch-backend=cu128" in template
+    assert (
+        "pip install '{CHRONOSEEK_PACKAGE}' --torch-backend=cu128"
+        in template
+    )
+
+
+def test_production_chute_prepares_writable_runtime_cookies():
+    template = (
+        Path(__file__).resolve().parents[2] / "chronoseek_chute.example.py"
+    ).read_text(encoding="utf-8")
+
+    assert "shutil.copyfile(source_path, runtime_path)" in template
+    assert "os.chmod(runtime_path, 0o600)" in template
+    assert "prepare_runtime_ytdlp_cookies()" in template
 
 
 def test_metadata_from_chutes_api_response():
@@ -216,7 +239,13 @@ def test_local_chutes_helper_uses_local_build_and_dev_run(tmp_path):
     )
 
     assert build_cmd[-3:] == ["build", "chronoseek_chute:chute", "--local"]
-    assert run_cmd[:4] == ["docker", "run", "--rm", "-it"]
+    assert run_cmd[:3] == ["docker", "run", "--rm"]
+    assert "--name" in run_cmd
+    assert test_chutes_runtime_local.local_container_name(8123) in run_cmd
+    assert "--init" in run_cmd
+    assert "--sig-proxy=false" in run_cmd
+    assert run_cmd[run_cmd.index("--stop-signal") + 1] == "SIGTERM"
+    assert "-it" not in run_cmd
     assert "--env-file" in run_cmd
     assert "CHUTES_EXECUTION_CONTEXT=REMOTE" in run_cmd
     assert "-p" in run_cmd
@@ -230,6 +259,62 @@ def test_local_chutes_helper_uses_local_build_and_dev_run(tmp_path):
         "--dev",
     ]
     assert "https://api.chutes.ai" not in " ".join(run_cmd + build_cmd)
+
+
+def test_local_chutes_helper_stops_container_cleanly_on_interrupt(
+    monkeypatch,
+    capsys,
+):
+    class FakeProcess:
+        def __init__(self):
+            self.wait_calls = []
+            self.terminated = False
+
+        def wait(self, timeout=None):
+            self.wait_calls.append(timeout)
+            if timeout is None and len(self.wait_calls) == 1:
+                raise KeyboardInterrupt
+            return 143
+
+        def terminate(self):
+            self.terminated = True
+
+    process = FakeProcess()
+    popen_calls = []
+    stop_calls = []
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return process
+
+    def fake_run(command, **kwargs):
+        stop_calls.append((command, kwargs))
+
+    monkeypatch.setattr(test_chutes_runtime_local.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(test_chutes_runtime_local.subprocess, "run", fake_run)
+
+    test_chutes_runtime_local.run_local_container(
+        ["docker", "run", "runtime:test"],
+        "chronoseek-chutes-local-8000",
+    )
+
+    assert popen_calls == [
+        (
+            ["docker", "run", "runtime:test"],
+            {"start_new_session": True},
+        )
+    ]
+    assert stop_calls[0][0] == [
+        "docker",
+        "stop",
+        "--time",
+        "10",
+        "chronoseek-chutes-local-8000",
+    ]
+    assert stop_calls[0][1]["check"] is False
+    assert process.wait_calls == [None, 15]
+    assert process.terminated is False
+    assert "Local Chutes container stopped." in capsys.readouterr().out
 
 
 def test_metadata_with_chute_slug_prefers_generated_slug():
@@ -648,13 +733,29 @@ def test_chutes_ytdlp_cookie_file_context_adds_cookie_file(
 
     with chutes_ytdlp_cookie_file_context(image) as applied:
         data, files = image_build_form_payload(image)
+        dockerfile = data["dockerfile"]
 
         assert applied.env_names == ("YTDLP_COOKIES",)
         assert (
-            "ENV YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/local-cookies.txt"
-            in data["dockerfile"]
+            "ENV YTDLP_COOKIES=/opt/chronoseek/miner-files/ytdlp/cookies.txt"
+            in dockerfile
         )
-        assert "--chmod=644" in data["dockerfile"]
+        create_directory = (
+            "RUN install -d -m 755 /opt/chronoseek/miner-files/ytdlp"
+        )
+        add_cookie = (
+            "ADD --chown=root:root --chmod=644 "
+        )
+        enforce_permissions = (
+            "RUN chown root:root "
+            "/opt/chronoseek/miner-files/ytdlp/cookies.txt && "
+            "chmod 644 /opt/chronoseek/miner-files/ytdlp/cookies.txt"
+        )
+        assert create_directory in dockerfile
+        assert add_cookie in dockerfile
+        assert enforce_permissions in dockerfile
+        assert dockerfile.index(create_directory) < dockerfile.index(add_cookie)
+        assert dockerfile.index(add_cookie) < dockerfile.index(enforce_permissions)
         with ZipFile(BytesIO(files["build_context"][1])) as archive:
             names = set(archive.namelist())
         assert any(name.endswith("ytdlp/local_cookies_txt") for name in names)

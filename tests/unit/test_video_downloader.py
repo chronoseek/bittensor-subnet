@@ -176,6 +176,51 @@ def test_validator_availability_routes_vimeo_through_extractor(monkeypatch):
     assert calls == [("extractor", "https://vimeo.com/12345")]
 
 
+@patch("yt_dlp.YoutubeDL")
+def test_check_extractor_platform_reuses_downloader_cookie_and_player_client_config(
+    mock_youtube_dl_cls, monkeypatch, tmp_path
+):
+    """Regression test: the availability pre-check built its own bare yt-dlp
+    options with no cookies at all, so it hit YouTube's bot-check on almost
+    every candidate even when the real download (which does carry cookies)
+    would have succeeded - wasting sampling attempts on videos that were
+    actually accessible."""
+    cookies_file = tmp_path / "cookies.txt"
+    cookies_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookies_file))
+    monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
+
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.return_value = {"id": "abc123"}
+    mock_youtube_dl_cls.return_value.__enter__.return_value = mock_ydl
+
+    captured_cookie_contents = {}
+
+    def capture_options(options):
+        captured_cookie_contents["path"] = options["cookiefile"]
+        captured_cookie_contents["contents"] = Path(
+            options["cookiefile"]
+        ).read_text(encoding="utf-8")
+        captured_cookie_contents["player_client"] = options["extractor_args"][
+            "youtube"
+        ]["player_client"]
+        return mock_youtube_dl_cls.return_value
+
+    mock_youtube_dl_cls.side_effect = capture_options
+
+    checker = VideoAvailabilityChecker(cache_ttl_seconds=0)
+    result = checker._check_extractor_platform(
+        "https://www.youtube.com/watch?v=abc123"
+    )
+
+    assert result.accessible
+    assert captured_cookie_contents["player_client"] == (
+        VideoDownloader.YTDLP_PLAYER_CLIENTS
+    )
+    assert captured_cookie_contents["path"] != str(cookies_file)
+    assert captured_cookie_contents["contents"] == "# Netscape HTTP Cookie File\n"
+
+
 def test_ytdlp_cookie_options_uses_cookie_file_when_present(monkeypatch, tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
@@ -193,6 +238,69 @@ def test_ytdlp_cookie_options_prefers_file_over_browser(monkeypatch, tmp_path):
     opts = VideoDownloader._ytdlp_cookie_options()
     assert "cookiefile" in opts
     assert "cookiesfrombrowser" not in opts
+
+
+def test_download_with_ytdlp_uses_private_writable_cookie_copy(
+    monkeypatch,
+    tmp_path,
+):
+    import yt_dlp
+
+    source_cookies = tmp_path / "cookies.txt"
+    source_cookies.write_text(
+        "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t0\tname\tvalue\n",
+        encoding="utf-8",
+    )
+    source_cookies.chmod(0o444)
+    monkeypatch.setenv("YTDLP_COOKIES", str(source_cookies))
+    monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
+    captured = {}
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            self.options = options
+            cookie_path = Path(options["cookiefile"])
+            captured["cookie_path"] = cookie_path
+            captured["cookie_contents"] = cookie_path.read_text(encoding="utf-8")
+            captured["cookie_mode"] = cookie_path.stat().st_mode & 0o777
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            Path(self.options["cookiefile"]).write_text(
+                "# updated by yt-dlp\n",
+                encoding="utf-8",
+            )
+
+        def extract_info(self, url, download):
+            return {"id": "video", "ext": "mp4"}
+
+        def prepare_filename(self, info):
+            output_path = Path(self.options["outtmpl"] % info)
+            output_path.write_bytes(
+                b"\x00\x00\x00\x14ftypisom\x00\x00\x02\x00isomiso2mp41"
+            )
+            return str(output_path)
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYoutubeDL)
+
+    downloaded = VideoDownloader._download_with_ytdlp(
+        "https://www.youtube.com/watch?v=example",
+        timeout=10,
+    )
+
+    try:
+        runtime_cookie_path = captured["cookie_path"]
+        assert runtime_cookie_path != source_cookies
+        assert runtime_cookie_path.parent == Path(downloaded.cleanup_paths[0])
+        assert captured["cookie_contents"] == source_cookies.read_text(
+            encoding="utf-8"
+        )
+        assert captured["cookie_mode"] == 0o600
+        assert source_cookies.stat().st_mode & 0o777 == 0o444
+    finally:
+        VideoDownloader.cleanup(downloaded)
 
 
 def test_ytdlp_cookie_options_is_empty_without_cookie_config(monkeypatch):

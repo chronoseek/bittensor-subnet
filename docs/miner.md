@@ -29,8 +29,8 @@ For on-chain miner metadata commits:
 | --- | --- | --- |
 | `WALLET_NAME` | Yes | Coldkey wallet name. |
 | `HOTKEY_NAME` | Yes | Registered miner hotkey name. |
-| `NETWORK` | Yes | Usually `finney`, `test`, or `local`. |
-| `NETUID` | Yes | ChronoSeek subnet netuid. |
+| `NETWORK` | No | Defaults to `finney`; set it explicitly for `test`, `local`, or another network. |
+| `NETUID` | No | Defaults to the ChronoSeek mainnet subnet, `20`. |
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 
 For Chutes runtime build/deploy:
@@ -48,7 +48,7 @@ Minimal `.env` shape:
 
 ```env
 NETWORK=finney
-NETUID=<netuid>
+NETUID=20
 WALLET_NAME=<miner-coldkey>
 HOTKEY_NAME=<miner-hotkey>
 WALLET_PATH=~/.bittensor/wallets
@@ -86,8 +86,11 @@ The example runtime exposes:
 
 - `/health`
 - `/search`
+- `/proof-of-access`
 
-Both are native Chutes cords. The runtime does not start a separate FastAPI server inside Chutes.
+All three are native Chutes cords. The runtime does not start a separate FastAPI server inside Chutes.
+
+If you maintain your own `chronoseek_chute.py` (copied earlier from `chronoseek_chute.example.py`), copy the `/proof-of-access` cord over too — it's not auto-generated.
 
 ## Local-First Checklist
 
@@ -153,6 +156,8 @@ poetry run python miner.py \
 ```
 
 Miner runtime submissions are permanent per hotkey. A hotkey can submit only once; to submit a different runtime later, register and use a new miner hotkey. Validators disqualify hotkeys with multiple revealed submissions and assign them zero score.
+
+Copying another hotkey's `chute_slug` into your own submission does not work either: when two or more hotkeys share the same `chute_slug`, only the one whose commitment was revealed first (by reveal block, not registration time) is scored - every other hotkey sharing that slug is permanently disqualified, the same as the duplicate-submission rule above.
 
 For tests that require replacing a submitted runtime, set `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION=0` for both the miner and validator. The miner then skips its duplicate check, and the validator uses the newest revealed submission without applying the duplicate-submission penalty. Production behavior remains enabled by default.
 
@@ -234,6 +239,12 @@ During Chutes image build, a readable `YTDLP_COOKIES` file is copied into the im
 
 If validator task clips come from a non-default Hippius-compatible host, update
 the Hippius defaults in `chronoseek/constants.py`.
+
+## Proof-of-Access
+
+Validators periodically send `POST /proof-of-access` with a real YouTube URL to confirm the runtime can actually download and decode video content, separate from the normal `/search` load. The runtime downloads the URL with the same shared downloader used for `/search`, then returns a hash of decoded frames (first/middle/last) at fixed timestamps — never the raw file. A miner that fails this check (mismatch, timeout, or download/decode failure) is excluded from validator queries until it passes again, the same as failing `/health`.
+
+This check reuses the same validator-stake/Epistula authorization as `/search` on the axon-serving path; on Chutes, validator identity is enforced by Chutes API access instead, same as `/search`.
 
 ## Common Configuration
 

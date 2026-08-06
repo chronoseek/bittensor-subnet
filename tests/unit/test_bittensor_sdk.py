@@ -111,3 +111,29 @@ def test_chain_reads_and_weight_intent_use_bittensor_11_api():
     assert intent.uids == [0, 1]
     assert intent.weights == [0.25, 0.75]
     assert subtensor.execute.call_args.args[1] is wallet
+
+
+def test_current_block_retries_past_transient_rpc_failure():
+    subtensor = MagicMock()
+    subtensor.block.side_effect = [RuntimeError("no header for None"), 123]
+
+    with patch("chronoseek.bittensor_sdk.time.sleep") as sleep_mock:
+        assert current_block(subtensor, retry_delay_seconds=0.0) == 123
+
+    assert subtensor.block.call_count == 2
+    sleep_mock.assert_called_once_with(0.0)
+
+
+def test_current_block_raises_after_exhausting_retries():
+    subtensor = MagicMock()
+    subtensor.block.side_effect = RuntimeError("no header for None")
+
+    with patch("chronoseek.bittensor_sdk.time.sleep"):
+        try:
+            current_block(subtensor, max_attempts=3, retry_delay_seconds=0.0)
+        except RuntimeError as error:
+            assert "no header for None" in str(error)
+        else:
+            raise AssertionError("expected current_block to raise")
+
+    assert subtensor.block.call_count == 3

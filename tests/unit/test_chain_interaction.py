@@ -12,6 +12,26 @@ from chronoseek.chain.submissions import PERMANENT_SUBMISSION_ERROR
 
 
 class TestChainInteraction(unittest.TestCase):
+    def test_miner_config_defaults_to_finney_netuid_20(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(sys, "argv", ["miner.py"]):
+                config = get_config()
+
+        self.assertEqual(config.subtensor.network, "finney")
+        self.assertEqual(config.netuid, 20)
+
+    def test_miner_config_accepts_environment_chain_override(self):
+        with patch.dict(
+            os.environ,
+            {"NETWORK": "test", "NETUID": "298"},
+            clear=True,
+        ):
+            with patch.object(sys, "argv", ["miner.py"]):
+                config = get_config()
+
+        self.assertEqual(config.subtensor.network, "test")
+        self.assertEqual(config.netuid, 298)
+
     def test_miner_config_parses_wallet_cli_args_by_default(self):
         test_args = [
             "miner.py",

@@ -167,6 +167,51 @@ def test_row_oriented_dataset_loads_single_and_multiple_interval_formats(tmp_pat
     assert ground_truths == [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0), (7.0, 8.0)]
 
 
+def test_row_with_sentences_and_timestamps_splits_into_distinct_captions(tmp_path):
+    """Regression test: the real ActivityNet_Captions HF mirror stores each
+    video as one row with a combined `caption` (all sentences concatenated)
+    plus parallel `sentences`/`timestamps` arrays, one timestamp per
+    sentence. The row must be split per-sentence - pairing the combined
+    caption with the whole `timestamps` array instead collapses a video's
+    several distinct captions/events into a single fake caption entry with
+    unrelated intervals attached, and defeats per-caption sampling/shuffling
+    (only one caption ever exists per video)."""
+    dataset_path = tmp_path / "activitynet_rows.json"
+    dataset_path.write_text(
+        json.dumps(
+            [
+                {
+                    "video_id": "v_1cU8sp05Bu0",
+                    "caption": (
+                        "street is shown with different cas passing by the "
+                        "street. man is tanding in a music room playing "
+                        "congas. people are walking in the sidewalk by a "
+                        "store."
+                    ),
+                    "timestamps": [[0, 11.34], [11.34, 64.81], [0, 11.02]],
+                    "sentences": [
+                        "street is shown with different cas passing by the street.",
+                        "man is tanding in a music room playing congas.",
+                        "people are walking in the sidewalk by a store.",
+                    ],
+                },
+            ]
+        )
+    )
+
+    task_gen = ActivityNetTaskGenerator(dataset_path=str(dataset_path))
+    assert len(task_gen.dataset) == 1
+
+    caption_intervals = task_gen.dataset[0]["caption_intervals"]
+    assert caption_intervals == {
+        "street is shown with different cas passing by the street.": [
+            (0.0, 11.34)
+        ],
+        "man is tanding in a music room playing congas.": [(11.34, 64.81)],
+        "people are walking in the sidewalk by a store.": [(0.0, 11.02)],
+    }
+
+
 def test_resolve_snapshot_dataset_file_accepts_row_json(tmp_path):
     snapshot_dir = tmp_path / "snapshot"
     snapshot_dir.mkdir()

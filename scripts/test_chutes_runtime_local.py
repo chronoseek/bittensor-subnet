@@ -25,6 +25,8 @@ from chronoseek.config import PROTOCOL_VERSION
 
 load_dotenv()
 
+LOCAL_CONTAINER_NAME_PREFIX = "chronoseek-chutes-local"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -91,12 +93,21 @@ def local_build_command(chute_ref: str) -> list[str]:
     return [chutes_bin, "build", chute_ref, "--local"]
 
 
+def local_container_name(port: int) -> str:
+    return f"{LOCAL_CONTAINER_NAME_PREFIX}-{int(port)}"
+
+
 def local_run_command(chute_ref: str, image_ref: str, *, port: int, env_file: str) -> list[str]:
     command = [
         "docker",
         "run",
         "--rm",
-        "-it",
+        "--name",
+        local_container_name(port),
+        "--init",
+        "--sig-proxy=false",
+        "--stop-signal",
+        "SIGTERM",
     ]
     env_path = Path(env_file).expanduser()
     if env_path.is_file():
@@ -128,6 +139,37 @@ def print_commands(build_cmd: list[str], run_cmd: list[str]) -> None:
 
 def run_command(command: list[str]) -> None:
     subprocess.run(command, check=True)
+
+
+def stop_local_container(container_name: str) -> None:
+    subprocess.run(
+        ["docker", "stop", "--time", "10", container_name],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def run_local_container(command: list[str], container_name: str) -> None:
+    process = subprocess.Popen(
+        command,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        return_code = process.wait()
+    except KeyboardInterrupt:
+        print("\nStopping local Chutes container...")
+        stop_local_container(container_name)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            process.wait(timeout=5)
+        print("Local Chutes container stopped.")
+        return
+
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, command)
 
 
 def smoke_test(config) -> None:
@@ -172,7 +214,10 @@ def main() -> int:
         if config.build:
             run_command(build_cmd)
         if config.run:
-            run_command(run_cmd)
+            run_local_container(
+                run_cmd,
+                local_container_name(int(config.port)),
+            )
         if config.smoke:
             smoke_test(config)
     except Exception as exc:
