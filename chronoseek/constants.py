@@ -13,6 +13,8 @@ DEFAULT_WALLET_PATH = "~/.bittensor/wallets/"
 DEFAULT_LOG_LEVEL = "INFO"
 
 DEFAULT_MIN_VALIDATOR_STAKE = 10000.0
+DEFAULT_AXON_PORT = 8091
+DEFAULT_AXON_HOST = "0.0.0.0"
 DEFAULT_CHUTES_API_BASE_URL = "https://api.chutes.ai"
 DEFAULT_CHRONOSEEK_LOGO_URL = "https://chronoseek.org/logo.png"
 DEFAULT_CHUTE_BASE_NAME = "chronoseek-runtime"

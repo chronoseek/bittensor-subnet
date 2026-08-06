@@ -142,11 +142,11 @@ from chronoseek.chain.submissions import (
 )
 from chronoseek.chutes.runtime import (
     build_runtime_endpoints_from_map,
-    build_submission_endpoint_map,
     chutes_auth_headers_from_env,
     filter_healthy_runtime_endpoints,
     filter_proof_of_access_passed,
 )
+from chronoseek.utils import build_endpoint_map_with_axon_fallback
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 from chronoseek.video.downloader import VideoDownloader
 from chronoseek.video.proof_of_access import compute_proof_of_access_hash
@@ -391,10 +391,11 @@ async def refresh_responsive_miners_from_submissions(
         for uid, hotkey in enumerate(hotkeys)
         if str(hotkey) in duplicate_hotkeys
     }
-    endpoint_map = build_submission_endpoint_map(
+    endpoint_map, endpoint_sources = build_endpoint_map_with_axon_fallback(
         metagraph=metagraph,
         submissions_by_hotkey=submissions,
         chutes_base_domain=chutes_base_domain,
+        disqualified_uids=disqualified_uids,
     )
     healthy_endpoint_map = await filter_healthy_runtime_endpoints(
         endpoint_map=endpoint_map,
@@ -423,15 +424,20 @@ async def refresh_responsive_miners_from_submissions(
     with runtime.responsive_lock:
         runtime.responsive_uids = set(responsive_uids)
         runtime.miner_endpoints = dict(healthy_endpoint_map)
+        runtime.miner_endpoint_sources = {
+            uid: endpoint_sources[uid] for uid in healthy_endpoint_map if uid in endpoint_sources
+        }
         runtime.disqualified_uids = set(disqualified_uids)
         runtime.responsive_initialized = True
         runtime.responsive_last_refresh_at = refreshed_at
 
+    axon_count = sum(1 for source in endpoint_sources.values() if source == "axon")
     logger.info(
         "Submission metadata refresh completed | "
         f"metadata={len(endpoint_map)}/{len(getattr(metagraph, 'hotkeys', []))} | "
         f"responsive={len(responsive_uids)}/{len(getattr(metagraph, 'hotkeys', []))} | "
         f"disqualified={len(disqualified_uids)} | "
+        f"axon_fallback={axon_count} | "
         f"uids={sorted(responsive_uids)}"
     )
     return responsive_uids
@@ -1176,13 +1182,15 @@ def get_config():
     parser.add_argument(
         "--hippius-s3-endpoint-url",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_ENDPOINT_URL,
+        default=os.getenv("HIPPIUS_S3_ENDPOINT_URL", DEFAULT_HIPPIUS_S3_ENDPOINT_URL),
         help="Hippius S3-compatible endpoint URL used for validator task uploads.",
     )
     parser.add_argument(
         "--hippius-s3-public-base-url",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL,
+        default=os.getenv(
+            "HIPPIUS_S3_PUBLIC_BASE_URL", DEFAULT_HIPPIUS_S3_PUBLIC_BASE_URL
+        ),
         help="Public base URL for uploaded Hippius validator task clips.",
     )
     parser.add_argument(
@@ -1194,13 +1202,15 @@ def get_config():
     parser.add_argument(
         "--hippius-s3-region",
         type=str,
-        default=DEFAULT_HIPPIUS_S3_REGION,
+        default=os.getenv("HIPPIUS_S3_REGION", DEFAULT_HIPPIUS_S3_REGION),
         help="S3 signing region for Hippius uploads.",
     )
     parser.add_argument(
         "--hippius-s3-timeout-seconds",
         type=float,
-        default=DEFAULT_HIPPIUS_S3_TIMEOUT_SECONDS,
+        default=env_float(
+            "HIPPIUS_S3_TIMEOUT_SECONDS", DEFAULT_HIPPIUS_S3_TIMEOUT_SECONDS
+        ),
         help="Hippius S3 upload/delete timeout in seconds.",
     )
     parser.add_argument(

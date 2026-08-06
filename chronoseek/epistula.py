@@ -62,7 +62,9 @@ async def verify_signature(request: Request) -> str:
         signature_bytes = bytes.fromhex(signature)
 
         # Verify using bittensor Keypair
-        if not Keypair(ss58_address=sender_hotkey).verify(message, signature_bytes):
+        if not Keypair(ss58_address=sender_hotkey).verify(
+            message.encode("utf-8"), signature_bytes
+        ):
             raise HTTPException(status_code=401, detail="Invalid signature")
 
     except Exception as e:

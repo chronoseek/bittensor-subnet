@@ -1,6 +1,11 @@
+import os
+import shutil
+import subprocess
+import tempfile
+
 import cv2
 from PIL import Image
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from chronoseek.logging import logger
 
@@ -11,6 +16,103 @@ class FrameExtractor:
     """
 
     @staticmethod
+    def _transcode_to_h264(video_path: str) -> Optional[str]:
+        """
+        Re-encode `video_path` to h264 via the system ffmpeg binary.
+
+        Used as a fallback when OpenCV can't decode a video: OpenCV's bundled
+        FFmpeg build picks its native AV1 decoder, which on some
+        builds/platforms only offers hardware pixel formats and fails
+        outright ("Failed to get pixel format") instead of falling back to
+        software decode - even though the system ffmpeg CLI decodes the same
+        file fine via libdav1d. Returns the transcoded temp file path, or
+        None if ffmpeg is unavailable or the transcode itself fails.
+        """
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.warning("ffmpeg binary not found; cannot transcode unreadable video.")
+            return None
+
+        fd, output_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+        try:
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    video_path,
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-c:a",
+                    "aac",
+                    output_path,
+                ],
+                capture_output=True,
+                timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning(f"Failed to run ffmpeg transcode for {video_path}: {exc}")
+            FrameExtractor._remove_quietly(output_path)
+            return None
+
+        if (
+            result.returncode != 0
+            or not os.path.exists(output_path)
+            or os.path.getsize(output_path) == 0
+        ):
+            stderr_tail = result.stderr.decode("utf-8", errors="replace")[-500:]
+            logger.warning(
+                f"ffmpeg transcode failed for {video_path} "
+                f"(exit code {result.returncode}): {stderr_tail}"
+            )
+            FrameExtractor._remove_quietly(output_path)
+            return None
+
+        return output_path
+
+    @staticmethod
+    def _remove_quietly(path: str) -> None:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _open_readable_capture(
+        video_path: str,
+    ) -> Tuple[Optional[cv2.VideoCapture], Optional[str]]:
+        """
+        Open `video_path` for decoding, transcoding to h264 first if OpenCV
+        can't actually read frames from it (see `_transcode_to_h264`).
+
+        Returns (capture, transcoded_temp_path). `capture` is None if the
+        video is unreadable even after a transcode attempt. The caller owns
+        cleanup of transcoded_temp_path once done with the capture.
+        """
+        cap = cv2.VideoCapture(video_path)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                return cap, None
+        cap.release()
+
+        transcoded_path = FrameExtractor._transcode_to_h264(video_path)
+        if transcoded_path is None:
+            return None, None
+
+        cap = cv2.VideoCapture(transcoded_path)
+        if not cap.isOpened():
+            cap.release()
+            FrameExtractor._remove_quietly(transcoded_path)
+            return None, None
+
+        return cap, transcoded_path
+
+    @staticmethod
     def extract_frames(
         video_path: str, fps: int = 1
     ) -> List[Tuple[float, Image.Image]]:
@@ -19,10 +121,11 @@ class FrameExtractor:
         Returns: List of (timestamp_sec, PIL.Image)
         """
         frames = []
+        transcoded_path = None
         try:
-            cap = cv2.VideoCapture(video_path)
+            cap, transcoded_path = FrameExtractor._open_readable_capture(video_path)
 
-            if not cap.isOpened():
+            if cap is None:
                 logger.warning(f"Could not open video: {video_path}")
                 return []
 
@@ -57,6 +160,9 @@ class FrameExtractor:
         except Exception as e:
             logger.error(f"Error extracting frames: {e}")
             return []
+        finally:
+            if transcoded_path:
+                FrameExtractor._remove_quietly(transcoded_path)
 
     @staticmethod
     def _merge_time_windows(
@@ -92,9 +198,10 @@ class FrameExtractor:
             return []
 
         frames: List[Tuple[float, Image.Image]] = []
+        transcoded_path = None
         try:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
+            cap, transcoded_path = FrameExtractor._open_readable_capture(video_path)
+            if cap is None:
                 logger.warning(f"Could not open video: {video_path}")
                 return []
 
@@ -134,3 +241,6 @@ class FrameExtractor:
         except Exception as e:
             logger.error(f"Error extracting frames in windows: {e}")
             return []
+        finally:
+            if transcoded_path:
+                FrameExtractor._remove_quietly(transcoded_path)

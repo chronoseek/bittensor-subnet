@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from chronoseek.protocol_models import VideoSearchRequest
 from chronoseek.validator.forward import query_miner, run_step
 from chronoseek.chain.submissions import (
@@ -17,8 +19,14 @@ from chronoseek.chutes.runtime import (
     ChutesRuntimeEndpoint,
     build_evaluation_endpoints,
     build_submission_endpoint_map,
+    check_runtime_health,
     chutes_auth_headers_from_env,
     resolve_submission_endpoint,
+)
+from chronoseek.utils import (
+    build_endpoint_map_with_axon_fallback,
+    normalize_endpoint_scheme,
+    resolve_axon_endpoint,
 )
 
 
@@ -26,6 +34,19 @@ class DummyMetagraph:
     def __init__(self):
         self.uids = [0, 1]
         self.hotkeys = ["hk-0", "hk-1"]
+
+
+class DummyMetagraphWithAxons(DummyMetagraph):
+    """Adds Bittensor 11's per-neuron `axon` field (`ip:port` str or None)."""
+
+    def __init__(self, *, uid_axons: dict[int, str | None], hotkeys=None):
+        super().__init__()
+        if hotkeys is not None:
+            self.hotkeys = hotkeys
+        self.neurons = [
+            SimpleNamespace(axon=uid_axons.get(uid))
+            for uid in range(len(self.hotkeys))
+        ]
 
 
 def revealed_commitment(*entries):
@@ -117,6 +138,90 @@ def test_submission_endpoint_map_uses_registered_hotkeys_only():
     )
 
     assert endpoint_map == {1: "https://runtime.example.com"}
+
+
+def test_resolve_axon_endpoint_returns_none_when_unserved():
+    assert resolve_axon_endpoint(None) is None
+    assert resolve_axon_endpoint(SimpleNamespace(axon=None)) is None
+    assert resolve_axon_endpoint(SimpleNamespace(axon="")) is None
+
+
+def test_resolve_axon_endpoint_returns_ip_port_when_served():
+    assert resolve_axon_endpoint(SimpleNamespace(axon="1.2.3.4:9000")) == "http://1.2.3.4:9000"
+
+
+def test_resolve_axon_endpoint_does_not_double_prefix_existing_scheme():
+    assert (
+        resolve_axon_endpoint(SimpleNamespace(axon="https://1.2.3.4:9000"))
+        == "https://1.2.3.4:9000"
+    )
+
+
+def test_endpoint_map_with_axon_fallback_prefers_chutes_when_both_exist():
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={
+            "hk-1": MinerSubmission(hotkey="hk-1", endpoint="https://runtime.example.com"),
+        },
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {1: "https://runtime.example.com"}
+    assert sources == {1: "chutes"}
+
+
+def test_endpoint_map_with_axon_fallback_uses_axon_when_no_commitment():
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={},
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {1: "http://9.9.9.9:9000"}
+    assert sources == {1: "axon"}
+
+
+def test_endpoint_map_with_axon_fallback_treats_chute_id_only_as_no_endpoint():
+    """A chute_id-only submission doesn't resolve to a URL, so it must still
+    fall back to axon exactly as if there were no submission at all."""
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={
+            "hk-1": MinerSubmission(hotkey="hk-1", chute_id="unroutable-id-only"),
+        },
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {1: "http://9.9.9.9:9000"}
+    assert sources == {1: "axon"}
+
+
+def test_endpoint_map_with_axon_fallback_skips_disqualified_uids():
+    metagraph = DummyMetagraphWithAxons(uid_axons={1: "9.9.9.9:9000"})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={},
+        chutes_base_domain="chutes.ai",
+        disqualified_uids={1},
+    )
+
+    assert endpoint_map == {}
+    assert sources == {}
+
+
+def test_endpoint_map_with_axon_fallback_no_endpoint_when_neither_exists():
+    metagraph = DummyMetagraphWithAxons(uid_axons={})
+    endpoint_map, sources = build_endpoint_map_with_axon_fallback(
+        metagraph=metagraph,
+        submissions_by_hotkey={},
+        chutes_base_domain="chutes.ai",
+    )
+
+    assert endpoint_map == {}
+    assert sources == {}
 
 
 class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
@@ -578,3 +683,88 @@ class TestAsyncSubmissionRouting(unittest.IsolatedAsyncioTestCase):
             client.post.call_args.kwargs["headers"]["Authorization"]
             == "Bearer secret"
         )
+
+
+def test_normalize_endpoint_scheme_prefixes_bare_host():
+    assert normalize_endpoint_scheme("9.9.9.9:9000") == "http://9.9.9.9:9000"
+
+
+def test_normalize_endpoint_scheme_leaves_existing_scheme_alone():
+    assert (
+        normalize_endpoint_scheme("https://runtime.example.com")
+        == "https://runtime.example.com"
+    )
+
+
+class TestCheckRuntimeHealthRealTransport(unittest.IsolatedAsyncioTestCase):
+    """Regression coverage for PR #33 review feedback: the previous test
+    suite mocked httpx.AsyncClient entirely, so a bare ip:port endpoint
+    never actually went through httpx's own URL parsing/validation and the
+    missing-scheme bug (httpx.UnsupportedProtocol) went uncaught. These use
+    a real httpx.AsyncClient with only its transport swapped out, so the
+    real URL-parsing code path runs.
+
+    check_runtime_health itself does not normalize its endpoint argument -
+    that contract hasn't changed for the Chutes path (resolve_submission_
+    endpoint has always returned a full URL) and isn't changing for the
+    axon path either: normalization happens once, upstream, in
+    chronoseek/utils.py's resolve_axon_endpoint/normalize_endpoint_scheme,
+    before an endpoint ever reaches endpoint_map. These tests cover both
+    ends of that contract with a real transport.
+    """
+
+    async def test_axon_endpoint_is_pre_normalized_before_reaching_health_check(self):
+        """End-to-end: an axon's bare ip:port, once resolved via
+        resolve_axon_endpoint, must already be a full URL that
+        check_runtime_health can use as-is against a real client."""
+        neuron = SimpleNamespace(axon="9.9.9.9:9000")
+        resolved_endpoint = resolve_axon_endpoint(neuron)
+        self.assertEqual(resolved_endpoint, "http://9.9.9.9:9000")
+
+        requested_urls = []
+
+        def handler(request):
+            requested_urls.append(str(request.url))
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            is_healthy = await check_runtime_health(
+                client=client,
+                uid=7,
+                endpoint=resolved_endpoint,
+                timeout_seconds=5,
+            )
+
+        self.assertTrue(is_healthy)
+        self.assertEqual(requested_urls, ["http://9.9.9.9:9000/health"])
+
+    async def test_check_runtime_health_still_works_for_full_chutes_url(self):
+        def handler(request):
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            is_healthy = await check_runtime_health(
+                client=client,
+                uid=1,
+                endpoint="https://runtime.example.com",
+                timeout_seconds=5,
+            )
+
+        self.assertTrue(is_healthy)
+
+    async def test_check_runtime_health_does_not_normalize_a_bare_endpoint_itself(self):
+        """Documents the actual contract: check_runtime_health assumes a
+        pre-normalized endpoint. A bare ip:port passed directly (bypassing
+        resolve_axon_endpoint) fails - which is exactly why normalization
+        must happen upstream, not defensively here."""
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"ok": True})
+        )) as client:
+            is_healthy = await check_runtime_health(
+                client=client,
+                uid=7,
+                endpoint="9.9.9.9:9000",
+                timeout_seconds=5,
+            )
+
+        self.assertFalse(is_healthy)

@@ -653,6 +653,107 @@ class TestValidatorFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.miner_endpoints, {})
 
     @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
+    async def test_submission_refresh_falls_back_to_axon_when_no_chutes_commitment(
+        self,
+        mock_async_client_cls,
+    ):
+        """Issue #32: a hotkey with no Chutes commitment at all, but a served
+        axon in the metagraph, should be picked up via the axon fallback."""
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["hk-0", "hk-1"]
+        mock_metagraph.uids = [0, 1]
+        mock_metagraph.n = 2
+        mock_metagraph.neurons = [
+            MagicMock(axon=None),
+            MagicMock(axon="9.9.9.9:9000"),
+        ]
+
+        resolver = MagicMock()
+        resolver.get_submissions = AsyncMock(return_value={})
+        resolver.get_duplicate_hotkeys.return_value = set()
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True}
+        client = AsyncMock()
+        client.get.return_value = response
+        mock_async_client_cls.return_value.__aenter__.return_value = client
+
+        runtime = ValidatorRuntimeState(
+            wallet=mock_wallet,
+            metagraph=mock_metagraph,
+            scores=np.array([0.0, 1.0]),
+            score_lock=threading.Lock(),
+        )
+
+        responsive_uids = await refresh_responsive_miners_from_submissions(
+            runtime=runtime,
+            subtensor=MagicMock(),
+            netuid=1,
+            submission_resolver=resolver,
+            chutes_base_domain="chutes.ai",
+            health_timeout_seconds=10,
+        )
+
+        self.assertEqual(responsive_uids, {1})
+        self.assertEqual(runtime.miner_endpoints, {1: "http://9.9.9.9:9000"})
+        self.assertEqual(runtime.miner_endpoint_sources, {1: "axon"})
+        self.assertEqual(
+            client.get.call_args.args[0],
+            "http://9.9.9.9:9000/health",
+        )
+
+    @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
+    async def test_submission_refresh_prefers_chutes_over_axon_when_both_exist(
+        self,
+        mock_async_client_cls,
+    ):
+        """Issue #32: a committed Chutes endpoint always wins over an axon,
+        even when the hotkey also has a served axon in the metagraph."""
+        mock_wallet = MagicMock()
+        mock_metagraph = MagicMock()
+        mock_metagraph.hotkeys = ["hk-0", "hk-1"]
+        mock_metagraph.uids = [0, 1]
+        mock_metagraph.n = 2
+        mock_metagraph.neurons = [
+            MagicMock(axon=None),
+            MagicMock(axon="9.9.9.9:9000"),
+        ]
+
+        submission = MagicMock()
+        submission.endpoint = "https://runtime.example.com"
+        submission.chute_slug = None
+
+        resolver = MagicMock()
+        resolver.get_submissions = AsyncMock(return_value={"hk-1": submission})
+        resolver.get_duplicate_hotkeys.return_value = set()
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"ok": True}
+        client = AsyncMock()
+        client.get.return_value = response
+        mock_async_client_cls.return_value.__aenter__.return_value = client
+
+        runtime = ValidatorRuntimeState(
+            wallet=mock_wallet,
+            metagraph=mock_metagraph,
+            scores=np.array([0.0, 1.0]),
+            score_lock=threading.Lock(),
+        )
+
+        await refresh_responsive_miners_from_submissions(
+            runtime=runtime,
+            subtensor=MagicMock(),
+            netuid=1,
+            submission_resolver=resolver,
+            chutes_base_domain="chutes.ai",
+            health_timeout_seconds=10,
+        )
+
+        self.assertEqual(runtime.miner_endpoints, {1: "https://runtime.example.com"})
+        self.assertEqual(runtime.miner_endpoint_sources, {1: "chutes"})
+
+    @patch("chronoseek.chutes.runtime.httpx.AsyncClient")
     async def test_submission_refresh_records_duplicate_submitter_disqualification(
         self,
         mock_async_client_cls,
@@ -958,6 +1059,55 @@ class TestValidatorForward(unittest.IsolatedAsyncioTestCase):
         sent_json = client.post.call_args.kwargs["json"]
         self.assertEqual(sent_json["video"]["url"], "https://example.com/video.mp4")
         self.assertIsInstance(sent_json["video"]["url"], str)
+
+    @patch("chronoseek.validator.forward.generate_header")
+    async def test_query_uid_scores_zero_on_axon_endpoint_failure_without_crossover(
+        self, mock_generate_header
+    ):
+        """Issue #32: a failed axon-track query is scored as a plain failure
+        (0.0) for that round, with exactly one request attempt - no same-round
+        fallback to any other endpoint/transport."""
+        import httpx as httpx_module
+
+        from chronoseek.chutes.runtime import ChutesRuntimeEndpoint
+        from chronoseek.validator.forward import query_uid
+
+        mock_wallet = MagicMock()
+        mock_wallet.hotkey = MagicMock()
+        mock_generate_header.return_value = {"X-Test": "1"}
+
+        request = VideoSearchRequest(
+            request_id="req-axon-1",
+            video={"url": "https://example.com/video.mp4"},
+            query="a person is speaking",
+            top_k=3,
+        )
+
+        client = AsyncMock()
+        client.post.side_effect = httpx_module.ConnectError("connection refused")
+
+        miner_endpoint = ChutesRuntimeEndpoint(
+            uid=7,
+            hotkey="hk-axon",
+            endpoint="9.9.9.9:9000",  # bare ip:port, as published via ServeAxon
+        )
+
+        uid, score = await query_uid(
+            asyncio.Semaphore(1),
+            miner_endpoint,
+            client,
+            request,
+            mock_wallet,
+            ground_truths=[(1.0, 2.0)],
+            timeout_seconds=5.0,
+        )
+
+        self.assertEqual(uid, 7)
+        self.assertEqual(score, 0.0)
+        self.assertEqual(client.post.call_count, 1)
+        self.assertEqual(
+            client.post.call_args.args[0], "http://9.9.9.9:9000/search"
+        )
 
     async def test_run_step_retries_when_no_accessible_video_is_found(self):
         from chronoseek.validator.forward import run_step
