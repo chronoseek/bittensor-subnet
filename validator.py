@@ -79,7 +79,6 @@ from chronoseek.constants import (
     DEFAULT_MINER_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_MINER_SUBMISSION_CACHE_TTL_SECONDS,
     DEFAULT_MINER_SUBMISSION_HEALTH_TIMEOUT_SECONDS,
-    DEFAULT_MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS,
     DEFAULT_ENABLE_PROOF_OF_ACCESS,
     DEFAULT_PROOF_OF_ACCESS_CACHE_TTL_HOURS,
     DEFAULT_PROOF_OF_ACCESS_TIMEOUT_SECONDS,
@@ -247,25 +246,23 @@ def sync_runtime_metagraph(
     return next_metagraph
 
 
-def responsive_refresh_due(
-    runtime: ValidatorRuntimeState,
-    interval_seconds: float,
-) -> bool:
-    with runtime.responsive_lock:
-        if not runtime.responsive_initialized or runtime.responsive_last_refresh_at is None:
-            return True
-        last_refresh_at = runtime.responsive_last_refresh_at
-
-    return (time.time() - last_refresh_at) >= max(1.0, float(interval_seconds))
-
-
 def pick_proof_of_access_reference_video(task_gen: Any) -> str | None:
     """
     Reuse a video the validator already vets for hardened task generation as
     the proof-of-access reference, instead of maintaining a separate canary
     list.
+
+    `task_gen` is either the plain `ActivityNetTaskGenerator` (legacy mode,
+    `.dataset` directly) or a `HardenedActivityNetTaskGenerator` wrapping an
+    `ActivityNetTaskSampler` (hardened mode, the default) - the wrapper has
+    no `.dataset` attribute of its own, the real dataset lives on its sampler.
     """
-    dataset = getattr(task_gen, "dataset", None) or []
+    dataset = getattr(task_gen, "dataset", None)
+    if not dataset:
+        sampler = getattr(task_gen, "sampler", None)
+        dataset = getattr(sampler, "dataset", None)
+    dataset = dataset or []
+
     for entry in dataset:
         video_url = entry.get("video_url") if isinstance(entry, dict) else None
         if video_url:
@@ -304,6 +301,7 @@ async def refresh_proof_of_access(
 
     if uids_needing_check:
         reference_video_url = pick_proof_of_access_reference_video(task_gen)
+        logger.info(f"Picked proof-of-access reference video: {reference_video_url}")
         expected_hash = None
         if reference_video_url:
             downloaded_video = VideoDownloader.download_video(
@@ -626,44 +624,54 @@ async def run_validator_loop(
                 sync_runtime_metagraph(subtensor, runtime, netuid)
                 runtime.last_metagraph_sync_block = current_block_number
 
-            metagraph = get_metagraph_snapshot(runtime)
-            with runtime.score_lock:
-                scores = resize_scores_for_metagraph(runtime.scores, metagraph)
+            # Round pacing is block-based: a round starts every
+            # evaluation_round_blocks since the previous round's start, or
+            # immediately if a slow round already blew past that boundary.
+            # Submission/health/proof-of-access refresh is synced to this
+            # same cadence rather than its own independent timer - a faster
+            # refresh only ever mattered for a round that hadn't started yet.
+            if current_block_number - last_round_start_block < evaluation_round_blocks:
+                await asyncio.sleep(12)
+                continue
 
-            if responsive_refresh_due(
-                runtime,
-                float(config.miner_submission_refresh_interval_seconds),
-            ):
-                await refresh_responsive_miners_from_submissions(
-                    runtime=runtime,
-                    subtensor=subtensor,
-                    netuid=netuid,
-                    submission_resolver=submission_resolver,
-                    chutes_base_domain=chutes_base_domain,
-                    health_timeout_seconds=get_config_float(
-                        config,
-                        "miner_submission_health_timeout_seconds",
-                        10.0,
-                    ),
-                    provider_headers=provider_headers,
-                    task_gen=task_gen,
-                    enable_proof_of_access=get_config_bool(
-                        config,
-                        "enable_proof_of_access",
-                        DEFAULT_ENABLE_PROOF_OF_ACCESS,
-                    ),
-                    proof_of_access_cache_ttl_seconds=get_config_float(
-                        config,
-                        "proof_of_access_cache_ttl_hours",
-                        DEFAULT_PROOF_OF_ACCESS_CACHE_TTL_HOURS,
-                    )
-                    * 3600.0,
-                    proof_of_access_timeout_seconds=get_config_float(
-                        config,
-                        "proof_of_access_timeout_seconds",
-                        DEFAULT_PROOF_OF_ACCESS_TIMEOUT_SECONDS,
-                    ),
+            # Mark this cycle's attempt now, before we know whether any
+            # candidates turn out to be responsive - otherwise a stretch with
+            # no healthy miners never advances the timer, and every
+            # subsequent tick sees the boundary as still "due" (real block
+            # numbers vastly exceed evaluation_round_blocks), refreshing
+            # every ~12s instead of waiting for the next real boundary.
+            last_round_start_block = current_block_number
+
+            await refresh_responsive_miners_from_submissions(
+                runtime=runtime,
+                subtensor=subtensor,
+                netuid=netuid,
+                submission_resolver=submission_resolver,
+                chutes_base_domain=chutes_base_domain,
+                health_timeout_seconds=get_config_float(
+                    config,
+                    "miner_submission_health_timeout_seconds",
+                    10.0,
+                ),
+                provider_headers=provider_headers,
+                task_gen=task_gen,
+                enable_proof_of_access=get_config_bool(
+                    config,
+                    "enable_proof_of_access",
+                    DEFAULT_ENABLE_PROOF_OF_ACCESS,
+                ),
+                proof_of_access_cache_ttl_seconds=get_config_float(
+                    config,
+                    "proof_of_access_cache_ttl_hours",
+                    DEFAULT_PROOF_OF_ACCESS_CACHE_TTL_HOURS,
                 )
+                * 3600.0,
+                proof_of_access_timeout_seconds=get_config_float(
+                    config,
+                    "proof_of_access_timeout_seconds",
+                    DEFAULT_PROOF_OF_ACCESS_TIMEOUT_SECONDS,
+                ),
+            )
 
             metagraph = get_metagraph_snapshot(runtime)
             with runtime.score_lock:
@@ -692,14 +700,6 @@ async def run_validator_loop(
                 )
                 await asyncio.sleep(12)
                 continue
-
-            # Round pacing is block-based: a round starts every
-            # evaluation_round_blocks since the previous round's start, or
-            # immediately if a slow round already blew past that boundary.
-            if current_block_number - last_round_start_block < evaluation_round_blocks:
-                await asyncio.sleep(12)
-                continue
-            last_round_start_block = current_block_number
 
             # --- 1. Run Validation Step ---
             step_scores = await forward_module.run_step(
@@ -1278,12 +1278,6 @@ def get_config():
         type=float,
         default=DEFAULT_MINER_SUBMISSION_CACHE_TTL_SECONDS,
         help="TTL for cached v2 miner submissions loaded from chain.",
-    )
-    parser.add_argument(
-        "--miner-submission-refresh-interval-seconds",
-        type=float,
-        default=DEFAULT_MINER_SUBMISSION_REFRESH_INTERVAL_SECONDS,
-        help="Interval in seconds between validator refreshes of miner submission metadata.",
     )
     parser.add_argument(
         "--miner-submission-health-timeout-seconds",

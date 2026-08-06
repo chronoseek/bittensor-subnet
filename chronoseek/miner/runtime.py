@@ -5,6 +5,7 @@ This module exposes the HTTP contract validators query on the miner's deployed
 Chutes runtime. The subnet miner command does not serve this app locally.
 """
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -51,6 +52,14 @@ class RuntimeConfig:
 miner_logic = None
 validator_auth = None
 startup_error: str | None = None
+
+# execute_search/execute_proof_of_access run a real video download plus (for
+# search) GPU inference - both synchronous and slow. Run them off the event
+# loop entirely so /health stays responsive to Chutes' verification probe
+# while one is in flight, and serialize them so only one runs at a time,
+# matching the implicit one-at-a-time access the blocking calls used to give
+# the shared CLIP model/GPU for free.
+_inference_semaphore = asyncio.Semaphore(1)
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -358,11 +367,13 @@ async def search(
     payload: VideoSearchRequest,
     caller_hotkey: str = Depends(verify_signature),
 ):
-    return execute_search(
-        payload,
-        caller_hotkey=caller_hotkey,
-        enforce_validator_auth=True,
-    )
+    async with _inference_semaphore:
+        return await asyncio.to_thread(
+            execute_search,
+            payload,
+            caller_hotkey=caller_hotkey,
+            enforce_validator_auth=True,
+        )
 
 
 @app.post("/proof-of-access", response_model=ProofOfAccessResponse)
@@ -370,8 +381,10 @@ async def proof_of_access(
     payload: ProofOfAccessRequest,
     caller_hotkey: str = Depends(verify_signature),
 ):
-    return execute_proof_of_access(
-        payload,
-        caller_hotkey=caller_hotkey,
-        enforce_validator_auth=True,
-    )
+    async with _inference_semaphore:
+        return await asyncio.to_thread(
+            execute_proof_of_access,
+            payload,
+            caller_hotkey=caller_hotkey,
+            enforce_validator_auth=True,
+        )

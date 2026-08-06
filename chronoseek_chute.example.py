@@ -13,6 +13,7 @@ local copy must live in the subnet root and is referenced as
 `chronoseek_chute:chute`.
 """
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -95,10 +96,12 @@ PREBUILT_IMAGE_ID = os.getenv("CHUTES_PREBUILT_IMAGE_ID", "").strip()
 CHRONOSEEK_PACKAGE = "git+https://github.com/chronoseek/bittensor-subnet.git"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 IMAGE_YTDLP_DENO_PATH = DEFAULT_CHUTES_YTDLP_DENO_PATH
-YTDLP_COOKIES_BROWSER = (
-    os.getenv("YTDLP_COOKIES_BROWSER", "chrome:Default").strip()
-    or "chrome:Default"
-)
+# No default here: the deploy wrapper (chutes_ytdlp_cookie_file_context in
+# chronoseek/chutes/deployment.py) bakes a real cookies.txt file into every
+# build automatically, which downloader.py prefers over any browser fallback.
+# A "chrome:Default" default would be actively wrong here anyway - miner GPU
+# instances have no Chrome profile to read.
+YTDLP_COOKIES_BROWSER = os.getenv("YTDLP_COOKIES_BROWSER", "").strip()
 YTDLP_DENO_PATH = IMAGE_YTDLP_DENO_PATH
 
 
@@ -251,15 +254,23 @@ async def search(self, payload: VideoSearchRequest) -> dict:
     Chutes native cords do not pass arbitrary public HTTP headers to user code,
     so validator identity is enforced by Chutes API access for this deployment
     path.
+
+    Runs off the cord's own event loop via a worker thread, serialized behind
+    a semaphore - execute_search does a real video download plus GPU
+    inference, and running it inline previously blocked /health (and
+    Chutes' own verification probe) for the whole pipeline duration, causing
+    the probe to time out and the instance to get torn down under load.
     """
 
     from chronoseek.miner import runtime as chronoseek_runtime
 
-    return chronoseek_runtime.execute_search(
-        payload,
-        caller_hotkey=None,
-        enforce_validator_auth=False,
-    )
+    async with chronoseek_runtime._inference_semaphore:
+        return await asyncio.to_thread(
+            chronoseek_runtime.execute_search,
+            payload,
+            caller_hotkey=None,
+            enforce_validator_auth=False,
+        )
 
 
 @chute.cord(
@@ -274,12 +285,17 @@ async def proof_of_access(self, payload: ProofOfAccessRequest) -> dict:
     Chutes native cords do not pass arbitrary public HTTP headers to user code,
     so validator identity is enforced by Chutes API access for this deployment
     path.
+
+    Runs off the cord's own event loop the same way search() does - see its
+    docstring for why.
     """
 
     from chronoseek.miner import runtime as chronoseek_runtime
 
-    return chronoseek_runtime.execute_proof_of_access(
-        payload,
-        caller_hotkey=None,
-        enforce_validator_auth=False,
-    )
+    async with chronoseek_runtime._inference_semaphore:
+        return await asyncio.to_thread(
+            chronoseek_runtime.execute_proof_of_access,
+            payload,
+            caller_hotkey=None,
+            enforce_validator_auth=False,
+        )
