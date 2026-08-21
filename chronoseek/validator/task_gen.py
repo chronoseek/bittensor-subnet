@@ -8,6 +8,11 @@ from zipfile import ZipFile
 
 import requests
 
+from chronoseek.constants import (
+    DEFAULT_TASK_DATASET_HF_REPO_ID,
+    DEFAULT_TASK_DATASET_HIPPIUS_REPO_ID,
+    DEFAULT_TASK_DATASET_HIPPIUS_REPO_TYPE,
+)
 from chronoseek.logging import logger
 from chronoseek.validator.base_task_gen import BaseTaskGenerator
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
@@ -22,7 +27,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         self,
         dataset_path: str | None = None,
         split: str = "validation",
-        dataset_repo_id: str = "friedrichor/ActivityNet_Captions",
+        dataset_hf_repo_id: str = DEFAULT_TASK_DATASET_HF_REPO_ID,
+        dataset_hippius_repo_id: str = DEFAULT_TASK_DATASET_HIPPIUS_REPO_ID,
+        dataset_hippius_repo_type: str = DEFAULT_TASK_DATASET_HIPPIUS_REPO_TYPE,
         cache_dir: str | None = None,
         dataset_filename: str | None = None,
         require_accessible_videos: bool = False,
@@ -31,12 +38,15 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
     ):
         self.dataset_path = self._normalize_optional_path(dataset_path)
         self.split = split
-        self.dataset_repo_id = dataset_repo_id
+        self.dataset_hf_repo_id = dataset_hf_repo_id
+        self.dataset_hippius_repo_id = dataset_hippius_repo_id
+        self.dataset_hippius_repo_type = dataset_hippius_repo_type
         self.cache_dir = self._normalize_optional_path(cache_dir)
         self.dataset_filename = dataset_filename
         self.require_accessible_videos = require_accessible_videos
         self.availability_checker = availability_checker
         self.max_sampling_attempts = max(1, int(max_sampling_attempts))
+        self.dataset_source: str | None = None
         self.dataset = self._load_dataset()
         self._tasks_by_video_url = {
             task["video_url"]: task for task in self.dataset if task.get("video_url")
@@ -51,13 +61,29 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             return None
         return str(Path(path).expanduser())
 
-    def _load_huggingface_dataset(self) -> List[Dict]:
-        hf_token = os.getenv("HF_TOKEN")
-        if not hf_token:
-            raise ValueError(
-                "A HuggingFace token is required for validator task generation from HuggingFace."
-            )
+    def _load_hippius_dataset(self) -> List[Dict]:
+        try:
+            from hippius_hub import snapshot_download
+        except ImportError as exc:
+            raise RuntimeError(
+                "The `hippius_hub` package is required to download ActivityNet from Hippius."
+            ) from exc
 
+        snapshot_dir = snapshot_download(
+            repo_id=self.dataset_hippius_repo_id,
+            repo_type=self.dataset_hippius_repo_type,
+            token=None,
+            cache_dir=self.cache_dir,
+        )
+
+        dataset_file = self._resolve_snapshot_dataset_file(
+            snapshot_dir,
+            source_label="Hippius",
+            repo_id=self.dataset_hippius_repo_id,
+        )
+        return self._load_local_dataset(dataset_file)
+
+    def _load_huggingface_dataset(self) -> List[Dict]:
         try:
             from huggingface_hub import snapshot_download
         except ImportError as exc:
@@ -66,23 +92,34 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             ) from exc
 
         snapshot_dir = snapshot_download(
-            repo_id=self.dataset_repo_id,
+            repo_id=self.dataset_hf_repo_id,
             repo_type="dataset",
-            token=hf_token,
+            token=os.getenv("HF_TOKEN") or None,
             cache_dir=self.cache_dir,
         )
 
-        dataset_file = self._resolve_snapshot_dataset_file(snapshot_dir)
+        dataset_file = self._resolve_snapshot_dataset_file(
+            snapshot_dir,
+            source_label="Hugging Face",
+            repo_id=self.dataset_hf_repo_id,
+        )
         return self._load_local_dataset(dataset_file)
 
-    def _resolve_snapshot_dataset_file(self, snapshot_dir: str) -> str:
+    def _resolve_snapshot_dataset_file(
+        self,
+        snapshot_dir: str,
+        *,
+        source_label: str = "Hugging Face",
+        repo_id: str | None = None,
+    ) -> str:
         root = Path(snapshot_dir)
 
         if self.dataset_filename:
             candidate = root / self.dataset_filename
             if not candidate.exists():
                 raise FileNotFoundError(
-                    f"Configured ActivityNet file '{self.dataset_filename}' was not found in Hugging Face snapshot."
+                    f"Configured ActivityNet file '{self.dataset_filename}' was not found "
+                    f"in {source_label} snapshot."
                 )
             return str(candidate)
 
@@ -106,7 +143,8 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             return self._download_original_activitynet_split(root)
 
         raise FileNotFoundError(
-            f"No supported ActivityNet JSON file was found in the Hugging Face snapshot for {self.dataset_repo_id}."
+            f"No supported ActivityNet JSON file was found in the {source_label} "
+            f"snapshot for {repo_id}."
         )
 
     def _is_supported_dataset_payload(self, data) -> bool:
@@ -428,9 +466,32 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
                 raise FileNotFoundError(
                     f"ActivityNet task dataset not found at {dataset_path}"
                 )
+            self.dataset_source = "local-path"
             return self._load_local_dataset(dataset_path)
 
-        return self._load_huggingface_dataset()
+        if self.dataset_hippius_repo_id:
+            try:
+                dataset = self._load_hippius_dataset()
+                self.dataset_source = "hippius"
+                return dataset
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to load task dataset from Hippius ({self.dataset_hippius_repo_id}), "
+                    f"falling back to Hugging Face: {exc}"
+                )
+
+        try:
+            dataset = self._load_huggingface_dataset()
+            self.dataset_source = "huggingface"
+            return dataset
+        except Exception as exc:
+            logger.warning(
+                f"Failed to load task dataset from Hugging Face, "
+                f"falling back to bundled local dataset: {exc}"
+            )
+
+        self.dataset_source = "bundled-local"
+        return self._load_local_dataset(self._default_dataset_path())
 
     def refresh_video_lookup(self) -> int:
         if self.availability_checker is None:

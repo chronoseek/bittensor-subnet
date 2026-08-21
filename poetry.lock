@@ -2085,6 +2085,28 @@ files = [
 tests = ["pytest"]
 
 [[package]]
+name = "hippius-hub"
+version = "0.7.0"
+description = "Hippius Hub CLI + Python client: manage your registry namespace, search the AI model index, and pull/push models with a Rust-accelerated transport"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "hippius_hub-0.7.0-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:ea90d64cd1eb84fe72291c78d31a9eddc509d227154714cd74f324e517504d89"},
+    {file = "hippius_hub-0.7.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a2fe6e83ca232ce7a5c5b14d2968bc63922029020274d03b72e650ca1ba5aaa2"},
+    {file = "hippius_hub-0.7.0-cp38-abi3-win_amd64.whl", hash = "sha256:b20fd4eea293975d42d7af824b63eaefe3a2a8e4c06f62e08c52276b8b638a7f"},
+]
+
+[package.dependencies]
+httpx = "*"
+huggingface-hub = ">=1.0,<2.0"
+tqdm = "*"
+typing-extensions = "*"
+
+[package.extras]
+test = ["hypothesis (>=6)", "pytest (>=7)", "respx (>=0.21)"]
+
+[[package]]
 name = "hpack"
 version = "4.2.0"
 description = "Pure-Python HPACK header encoding"
@@ -6424,4 +6446,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12, <3.14"
-content-hash = "08bc43a252f7209de98b893deeb63ea8123e669d88bc566d4bc7c7ede011a35b"
+content-hash = "7e85e638c363c2e7bf21e1d99161e05781ab94a6466165bd5fb8f302b8b9c6c2"

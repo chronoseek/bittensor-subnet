@@ -34,6 +34,7 @@ chutes = "^0.6.8"
 minio = "^7.2.20"
 av = "^18.0.0"
 soundfile = "^0.14.0"
+hippius-hub = "^0.7.0"
 
 [build-system]
 requires = ["poetry-core"]

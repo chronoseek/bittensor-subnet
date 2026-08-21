@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from chronoseek.constants import DEFAULT_TASK_DATASET_HIPPIUS_REPO_ID
 from chronoseek.validator.task_gen import ActivityNetTaskGenerator
 from chronoseek.validator.video_availability import VideoAvailabilityResult
 
@@ -55,6 +56,9 @@ def test_cache_dir_expands_user_before_huggingface_download(monkeypatch, tmp_pat
     monkeypatch.setenv("HF_TOKEN", "hf_test")
 
     with patch(
+        "hippius_hub.snapshot_download",
+        side_effect=RuntimeError("hippius dataset unavailable in test"),
+    ), patch(
         "huggingface_hub.snapshot_download",
         return_value=str(snapshot_dir),
     ) as snapshot_download:
@@ -65,6 +69,90 @@ def test_cache_dir_expands_user_before_huggingface_download(monkeypatch, tmp_pat
         Path("~/.cache/huggingface").expanduser()
     )
     assert not snapshot_download.call_args.kwargs["cache_dir"].startswith("~")
+
+
+def test_dataset_loads_from_hippius_before_huggingface(monkeypatch, tmp_path):
+    snapshot_dir = tmp_path / "hippius-snapshot"
+    snapshot_dir.mkdir()
+    dataset_path = snapshot_dir / "validation.json"
+    dataset_path.write_text(
+        json.dumps(
+            [
+                {
+                    "video_id": "v_demo1234567",
+                    "caption": "a person waves",
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "hippius_hub.snapshot_download",
+        return_value=str(snapshot_dir),
+    ) as hippius_snapshot_download, patch(
+        "huggingface_hub.snapshot_download",
+    ) as hf_snapshot_download:
+        task_gen = ActivityNetTaskGenerator()
+
+    hippius_snapshot_download.assert_called_once()
+    assert (
+        hippius_snapshot_download.call_args.kwargs["repo_id"]
+        == DEFAULT_TASK_DATASET_HIPPIUS_REPO_ID
+    )
+    hf_snapshot_download.assert_not_called()
+    assert task_gen.dataset
+
+
+def test_dataset_falls_back_to_bundled_local_dataset_when_all_remote_sources_fail(
+    monkeypatch,
+):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    with patch(
+        "hippius_hub.snapshot_download",
+        side_effect=RuntimeError("hippius dataset unavailable in test"),
+    ), patch(
+        "huggingface_hub.snapshot_download",
+        side_effect=RuntimeError("huggingface dataset unavailable in test"),
+    ):
+        task_gen = ActivityNetTaskGenerator()
+
+    assert task_gen.dataset
+
+
+def test_huggingface_dataset_loads_without_token(monkeypatch, tmp_path):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    snapshot_dir = tmp_path / "hf-snapshot"
+    snapshot_dir.mkdir()
+    dataset_path = snapshot_dir / "validation.json"
+    dataset_path.write_text(
+        json.dumps(
+            [
+                {
+                    "video_id": "v_demo1234567",
+                    "caption": "a person waves",
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "hippius_hub.snapshot_download",
+        side_effect=RuntimeError("hippius dataset unavailable in test"),
+    ), patch(
+        "huggingface_hub.snapshot_download",
+        return_value=str(snapshot_dir),
+    ) as hf_snapshot_download:
+        task_gen = ActivityNetTaskGenerator()
+
+    assert hf_snapshot_download.call_args.kwargs["token"] is None
+    assert task_gen.dataset
 
 
 def test_generate_task_returns_expected_shape(tmp_path):

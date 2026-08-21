@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--use-smoke-dataset",
         action="store_true",
-        help="Use the bundled small ActivityNet-style smoke manifest instead of TASK_DATASET_PATH/Hugging Face.",
+        help="Use the bundled small ActivityNet-style smoke manifest instead of TASK_DATASET_PATH/Hippius/Hugging Face.",
     )
     parser.add_argument("--split", default=os.getenv("TASK_SPLIT", "validation"))
     parser.add_argument("--hf-cache-dir", default=os.getenv("HF_HOME", ""))
@@ -505,6 +505,7 @@ def build_generator(args: argparse.Namespace):
         "block": block,
         "cache_dir": cache_dir,
         "dataset_path": dataset_path,
+        "dataset_source": source_task_gen.dataset_source,
         "ephemeral_secret": not bool(args.task_secret),
         "generator": generator,
         "manifest": manifest,
@@ -560,7 +561,7 @@ def main() -> int:
             "Generation Context",
             {
                 "block": context["block"],
-                "dataset": context["dataset_path"] or "huggingface",
+                "dataset": context["dataset_path"] or context["dataset_source"],
                 "ephemeral_secret_used": context["ephemeral_secret"],
                 "manifest_path": str(manifest.path),
                 "storage": "hippius" if args.upload_to_hippius else "local-dry-run",

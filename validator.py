@@ -905,7 +905,11 @@ def get_config():
         "--task-dataset-path",
         type=str,
         default=DEFAULT_TASK_DATASET_PATH,
-        help="Optional local task dataset path. If omitted, ActivityNet is loaded from Hugging Face.",
+        help=(
+            "Optional local task dataset path, forces local loading only. If omitted, "
+            "ActivityNet is loaded from Hippius, falling back to Hugging Face, then to "
+            "the bundled local dataset."
+        ),
     )
     parser.add_argument(
         "--task-split",

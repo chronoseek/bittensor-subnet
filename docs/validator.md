@@ -10,7 +10,7 @@ Validators generate synthetic video-search tasks, query miner Chutes runtimes, s
 - Poetry
 - A registered validator hotkey on the configured subnet
 - `ffmpeg` available in `PATH` when hardened task clipping/compression is enabled
-- A Hugging Face token, unless `--task-dataset-path` points to a local ActivityNet-style dataset
+- No dataset credentials needed for normal operation — the validator task dataset loads from a public Hippius-hosted mirror by default, with Hugging Face (token optional) and a small bundled local dataset as automatic fallbacks; see [Task dataset source](#task-dataset-source) below
 - A Chutes API key for querying private miner runtimes
 - Hippius S3 credentials when hardened task generation is enabled
 
@@ -36,7 +36,7 @@ Required for normal validator operation:
 | `WALLET_PATH` | If non-default | Defaults to `~/.bittensor/wallets`. |
 | `ENFORCE_ONE_HOTKEY_ONE_SUBMISSION` | No | Defaults to `1`. Set to `0` only for tests that require replaceable miner submissions; validators then use the newest revealed submission and do not apply the duplicate-submission penalty. |
 | `CHUTES_API_KEY` | Yes | Used to query private Chutes runtimes. |
-| `HF_TOKEN` | Yes, unless `--task-dataset-path` is passed | Required for Hugging Face ActivityNet loading and model downloads. |
+| `HF_TOKEN` | No | Optional. The task dataset loads from Hippius by default (no auth), with Hugging Face as an automatic fallback that works anonymously for public datasets; set `HF_TOKEN` only to raise Hugging Face rate limits or access a gated dataset repo. See [Task dataset source](#task-dataset-source). |
 
 Hardened task generation:
 
@@ -48,6 +48,17 @@ Hardened task generation:
 | `HIPPIUS_S3_SECRET_ACCESS_KEY` | Normal validator operation | Hippius S3 secret key. |
 | `HIPPIUS_S3_BUCKET` or `--hippius-s3-bucket` | Normal validator operation | Defaults to `chronoseek`, but that name may already be owned by another operator. Set this to a bucket your Hippius credentials own or can create — startup calls `set_bucket_policy` on it and fails with `AccessDenied` otherwise. |
 | `DEFAULT_HIPPIUS_S3_*` constants | Non-default storage only | Update endpoint, public base URL, or region constants when a deployment uses different Hippius-compatible storage. |
+
+### Task dataset source
+
+The ActivityNet-derived task dataset is resolved in this order (`chronoseek/validator/task_gen.py`):
+
+1. **`--task-dataset-path` / `TASK_DATASET_PATH`** — if set, loads that local ActivityNet-style manifest only. No network calls, no fallback.
+2. **Hippius** (default) — downloads the dataset via `hippius_hub.snapshot_download` from a public repo (`DEFAULT_TASK_DATASET_HIPPIUS_REPO_ID` in `chronoseek/constants.py`). No credentials required; the `HIPPIUS_S3_*` variables above are unrelated (those are for uploading hardened task clip artifacts, not for reading this dataset).
+3. **Hugging Face** — used automatically if the Hippius download fails. Works anonymously for public dataset repos; set `HF_TOKEN` only to raise rate limits or access a gated repo.
+4. **Bundled local dataset** — a small dataset packaged with the repo, used as a last resort if both remote sources fail, so task generation never hard-fails purely because a remote source is unavailable.
+
+Each tier logs a warning and falls through to the next on failure.
 
 Vidaio compression:
 
@@ -77,7 +88,7 @@ HOTKEY_NAME=<validator-hotkey>
 WALLET_PATH=~/.bittensor/wallets
 
 CHUTES_API_KEY=<chutes-api-key>
-HF_TOKEN=<hugging-face-token>
+# HF_TOKEN=<hugging-face-token>  # optional, see Task dataset source
 
 VALIDATOR_TASK_SECRET=<long-random-secret>
 HIPPIUS_S3_ACCESS_KEY_ID=<hippius-access-key>
@@ -133,7 +144,7 @@ HOTKEY_NAME=<validator-hotkey>
 WALLET_PATH=~/.bittensor/wallets
 
 CHUTES_API_KEY=<validator-chutes-api-key>
-HF_TOKEN=<validator-hugging-face-token>
+# HF_TOKEN=<validator-hugging-face-token>  # optional, see Task dataset source
 VALIDATOR_TASK_SECRET=<long-random-validator-secret>
 
 HIPPIUS_S3_BUCKET=<validator-owned-bucket>
