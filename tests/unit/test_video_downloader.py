@@ -303,6 +303,70 @@ def test_download_with_ytdlp_uses_private_writable_cookie_copy(
         VideoDownloader.cleanup(downloaded)
 
 
+def test_download_with_ytdlp_refreshes_cookies_and_retries_once(
+    monkeypatch,
+    tmp_path,
+):
+    import yt_dlp
+    import chronoseek.video.downloader as downloader_module
+
+    refreshed_cookies = tmp_path / "fresh-cookies.txt"
+    refreshed_cookies.write_text("# Netscape HTTP Cookie File\nfresh\n", encoding="utf-8")
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
+    monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)
+    monkeypatch.setenv("COOKIE_REFRESH_URL", "https://miner.example")
+    refresh_calls = []
+
+    def fake_refresh_cookie_file(**kwargs):
+        refresh_calls.append(kwargs)
+        return str(refreshed_cookies)
+
+    monkeypatch.setattr(
+        downloader_module,
+        "refresh_cookie_file",
+        fake_refresh_cookie_file,
+    )
+    attempts = []
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            self.options = options
+            attempts.append(dict(options))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def extract_info(self, url, download):
+            if len(attempts) == 1:
+                raise RuntimeError("Sign in to confirm you're not a bot")
+            return {"id": "video", "ext": "mp4"}
+
+        def prepare_filename(self, info):
+            output_path = Path(self.options["outtmpl"] % info)
+            output_path.write_bytes(
+                b"\x00\x00\x00\x14ftypisom\x00\x00\x02\x00isomiso2mp41"
+            )
+            return str(output_path)
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYoutubeDL)
+
+    downloaded = VideoDownloader._download_with_ytdlp(
+        "https://www.youtube.com/watch?v=example",
+        timeout=10,
+    )
+    try:
+        assert len(attempts) == 2
+        assert refresh_calls == [{"target_path": None}]
+        assert "cookiefile" not in attempts[0]
+        assert attempts[1]["cookiefile"] == str(refreshed_cookies)
+        assert Path(downloaded.path).is_file()
+    finally:
+        VideoDownloader.cleanup(downloaded)
+
+
 def test_ytdlp_cookie_options_is_empty_without_cookie_config(monkeypatch):
     monkeypatch.delenv("YTDLP_COOKIES", raising=False)
     monkeypatch.delenv("YTDLP_COOKIES_BROWSER", raising=False)

@@ -20,6 +20,10 @@ from chronoseek.hippius.s3 import (
     parse_hippius_s3_url,
 )
 from chronoseek.logging import logger
+from chronoseek.miner.cookie_refresh import (
+    COOKIE_REFRESH_URL_ENV,
+    refresh_cookie_file,
+)
 
 
 @dataclass
@@ -405,6 +409,9 @@ class VideoDownloader:
 
         tmp_dir = tempfile.mkdtemp(prefix="chronoseek-ytdlp-")
         output_template = os.path.join(tmp_dir, "%(id)s.%(ext)s")
+        persistent_cookie_path = cls._env_value(cls._ENV_YTDLP_COOKIES_FILE)
+        if persistent_cookie_path:
+            persistent_cookie_path = os.path.expanduser(persistent_cookie_path)
         cookie_opts = cls._writable_ytdlp_cookie_options(
             cls._ytdlp_cookie_options(),
             runtime_directory=tmp_dir,
@@ -438,15 +445,37 @@ class VideoDownloader:
             **cookie_opts,
         }
         downloaded_path = ""
-        try:
+
+        def run_download() -> str:
             with cls._yt_dlp_clean_parent_env():
                 with yt_dlp.YoutubeDL(options) as ydl:
                     info = ydl.extract_info(url, download=True)
-                    downloaded_path = ydl.prepare_filename(info)
+                    return ydl.prepare_filename(info)
+
+        try:
+            downloaded_path = run_download()
         except Exception as exc:
             err_text = str(exc)
+            print("=" * 20, "Trying to refetch fresh cookies", "=" * 20)
             if cls._is_youtube_bot_or_signin_error(err_text):
-                if not cookie_opts:
+                refresh_url = cls._env_value(COOKIE_REFRESH_URL_ENV)
+                if refresh_url:
+                    try:
+                        refreshed_path = refresh_cookie_file(
+                            target_path=persistent_cookie_path or None,
+                        )
+                        options.pop("cookiesfrombrowser", None)
+                        options["cookiefile"] = refreshed_path
+                        logger.info(
+                            "Retrying yt-dlp once with cookies refreshed from "
+                            "the miner endpoint."
+                        )
+                        downloaded_path = run_download()
+                    except Exception as refresh_exc:
+                        logger.error(f"Cookie refresh/retry failed: {refresh_exc}")
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+                        raise refresh_exc from exc
+                elif not cookie_opts:
                     logger.error(
                         "YouTube blocked this download (bot check). Export cookies from a "
                         "logged-in browser and set "
@@ -463,8 +492,12 @@ class VideoDownloader:
                         "from a browser session that can play this video, ensure the runtime "
                         "process inherits that env var, and confirm the file path is readable."
                     )
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise
+                if not downloaded_path:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    raise
+            else:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                raise
 
         base, ext = os.path.splitext(downloaded_path)
         if ext.lower() != ".mp4":
