@@ -456,7 +456,6 @@ class VideoDownloader:
             downloaded_path = run_download()
         except Exception as exc:
             err_text = str(exc)
-            print("=" * 20, "Trying to refetch fresh cookies", "=" * 20)
             if cls._is_youtube_bot_or_signin_error(err_text):
                 refresh_url = cls._env_value(COOKIE_REFRESH_URL_ENV)
                 if refresh_url:
