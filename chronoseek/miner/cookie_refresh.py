@@ -15,6 +15,12 @@ from pathlib import Path
 
 import requests
 
+from chronoseek.constants import (
+    COOKIE_REFRESH_ENDPOINT_PATH,
+    DEFAULT_COOKIE_REFRESH_CACHE_PATH,
+    DEFAULT_COOKIE_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_COOKIE_REFRESH_TIMEOUT_SECONDS,
+)
 from chronoseek.logging import logger
 
 
@@ -22,11 +28,6 @@ COOKIE_REFRESH_URL_ENV = "COOKIE_REFRESH_URL"
 COOKIE_REFRESH_BINDING_ID_ENV = "COOKIE_REFRESH_BINDING_ID"
 COOKIE_REFRESH_SHARED_SECRET_ENV = "COOKIE_REFRESH_SHARED_SECRET"
 COOKIE_REFRESH_ALLOW_NON_TEE_ENV = "COOKIE_REFRESH_ALLOW_NON_TEE"
-COOKIE_REFRESH_TIMEOUT_SECONDS_ENV = "COOKIE_REFRESH_TIMEOUT_SECONDS"
-COOKIE_REFRESH_INTERVAL_SECONDS_ENV = "COOKIE_REFRESH_INTERVAL_SECONDS"
-COOKIE_REFRESH_CACHE_PATH_ENV = "COOKIE_REFRESH_CACHE_PATH"
-DEFAULT_COOKIE_REFRESH_CACHE_PATH = "/tmp/chronoseek-cookie-cache/cookies.txt"
-COOKIE_REFRESH_PATH = "/v1/cookies/refresh"
 _refresh_stop = threading.Event()
 _refresh_thread: threading.Thread | None = None
 _refresh_thread_lock = threading.Lock()
@@ -106,12 +107,9 @@ def refresh_cookie_file(
         nonce=nonce,
         secret=shared_secret,
     )
-    timeout = max(
-        1.0,
-        float(os.getenv(COOKIE_REFRESH_TIMEOUT_SECONDS_ENV, "15")),
-    )
+    timeout = max(1.0, DEFAULT_COOKIE_REFRESH_TIMEOUT_SECONDS)
     response = requests.post(
-        f"{base_url}{COOKIE_REFRESH_PATH}",
+        f"{base_url}{COOKIE_REFRESH_ENDPOINT_PATH}",
         headers={
             "X-Chronoseek-Binding": binding_id,
             "X-Chronoseek-Timestamp": timestamp,
@@ -127,7 +125,6 @@ def refresh_cookie_file(
 
     configured_target = (
         target_path
-        or os.getenv(COOKIE_REFRESH_CACHE_PATH_ENV, "").strip()
         or (str(Path(runtime_directory) / "cookies.txt") if runtime_directory else "")
         or DEFAULT_COOKIE_REFRESH_CACHE_PATH
     )
@@ -158,11 +155,7 @@ def refresh_cookie_file(
 
 
 def configured_cookie_target() -> str | None:
-    return (
-        os.getenv("YTDLP_COOKIES", "").strip()
-        or os.getenv(COOKIE_REFRESH_CACHE_PATH_ENV, "").strip()
-        or None
-    )
+    return os.getenv("YTDLP_COOKIES", "").strip() or None
 
 
 def _periodic_refresh_loop(interval_seconds: float) -> None:
@@ -181,7 +174,7 @@ def start_periodic_cookie_refresh() -> bool:
     global _refresh_thread
     if not os.getenv(COOKIE_REFRESH_URL_ENV, "").strip():
         return False
-    interval = float(os.getenv(COOKIE_REFRESH_INTERVAL_SECONDS_ENV, "3600"))
+    interval = DEFAULT_COOKIE_REFRESH_INTERVAL_SECONDS
     if interval <= 0:
         return False
     with _refresh_thread_lock:

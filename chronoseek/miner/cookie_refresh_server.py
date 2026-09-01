@@ -14,11 +14,14 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 
+from chronoseek.constants import (
+    DEFAULT_COOKIE_REFRESH_MAX_CLOCK_SKEW_SECONDS,
+    MIN_COOKIE_REFRESH_MAX_CLOCK_SKEW_SECONDS,
+)
 from chronoseek.miner.cookie_refresh import sign_refresh_request
 
 
 REGISTRY_PATH_ENV = "COOKIE_REFRESH_REGISTRY_PATH"
-MAX_CLOCK_SKEW_SECONDS_ENV = "COOKIE_REFRESH_MAX_CLOCK_SKEW_SECONDS"
 _used_nonces: dict[tuple[str, str], float] = {}
 _nonce_lock = threading.Lock()
 
@@ -123,7 +126,10 @@ def refresh_cookies(
         request_time = int(x_chronoseek_timestamp)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail="Invalid timestamp.") from exc
-    max_skew = max(5, int(os.getenv(MAX_CLOCK_SKEW_SECONDS_ENV, "30")))
+    max_skew = max(
+        MIN_COOKIE_REFRESH_MAX_CLOCK_SKEW_SECONDS,
+        DEFAULT_COOKIE_REFRESH_MAX_CLOCK_SKEW_SECONDS,
+    )
     now = time.time()
     if abs(now - request_time) > max_skew:
         raise HTTPException(status_code=401, detail="Expired request.")

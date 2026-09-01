@@ -265,12 +265,13 @@ Create a registry outside the repository and restrict its permissions:
 ```bash
 chmod 600 /srv/chronoseek/cookie-bindings.json
 export COOKIE_REFRESH_REGISTRY_PATH=/srv/chronoseek/cookie-bindings.json
-export COOKIE_REFRESH_HOST=127.0.0.1
 poetry run python scripts/run_cookie_refresh_server.py
 ```
 
 Put the service behind HTTPS before exposing it publicly. Do not bind the
-plain uvicorn process directly to a public interface. Configure the three
+plain uvicorn process directly to a public interface. Its bind host and port
+come from `DEFAULT_COOKIE_REFRESH_SERVER_HOST` and
+`DEFAULT_COOKIE_REFRESH_SERVER_PORT` in `chronoseek/constants.py`. Configure the three
 client values in the axon miner's `.env`. For a remote Chute, configure the
 same values as Chutes Secrets for that exact Chute name or UUID:
 
@@ -284,11 +285,13 @@ chutes secrets create --purpose <chute-name-or-id> \
 ```
 
 Both runtime types refresh proactively according to
-`COOKIE_REFRESH_INTERVAL_SECONDS` (default one hour). When yt-dlp receives a
+`DEFAULT_COOKIE_REFRESH_INTERVAL_SECONDS` in `chronoseek/constants.py`
+(default one hour). When yt-dlp receives a
 YouTube bot/sign-in error between scheduled refreshes, it refreshes immediately
 and retries exactly once. The cookie is atomically written to `YTDLP_COOKIES`;
-`COOKIE_REFRESH_CACHE_PATH` is only an optional client-side fallback when
-`YTDLP_COOKIES` is empty. It is not used by the refresh server.
+when that path is empty, the client uses `DEFAULT_COOKIE_REFRESH_CACHE_PATH`
+from `chronoseek/constants.py`. Optional refresh timing, networking, and cache
+defaults are code constants rather than environment configuration.
 
 Later downloads reuse the refreshed file. A newly scheduled Chutes instance
 starts from its baked writable copy and then joins the same refresh schedule.
