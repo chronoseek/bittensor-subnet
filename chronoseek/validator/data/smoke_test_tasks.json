@@ -8,8 +8,8 @@
       "query": "a person is on screen",
       "ground_truths": [
         {
-          "start": 0.0,
-          "end": 5.0
+          "start": 1.0,
+          "end": 3.0
         }
       ]
     },
@@ -21,8 +21,8 @@
       "query": "a person is walking outside",
       "ground_truths": [
         {
-          "start": 0.0,
-          "end": 10.0
+          "start": 3.0,
+          "end": 9.0
         }
       ]
     },
@@ -34,8 +34,8 @@
       "query": "a person is visible outdoors",
       "ground_truths": [
         {
-          "start": 0.0,
-          "end": 15.0
+          "start": 2.0,
+          "end": 10.0
         }
       ]
     }

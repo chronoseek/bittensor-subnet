@@ -62,6 +62,26 @@ class VideoSearchResponse(BaseModel):
     miner_metadata: dict[str, Any] | None = None
 
 
+class ProofOfAccessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: Literal["2026-04-10"] = PROTOCOL_VERSION
+    request_id: str | None = None
+    video: VideoSource
+
+    @property
+    def video_url(self) -> str:
+        return str(self.video.url)
+
+
+class ProofOfAccessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: Literal["2026-04-10"] = PROTOCOL_VERSION
+    request_id: str | None = None
+    content_hash: str = Field(min_length=1)
+
+
 class ProtocolErrorPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

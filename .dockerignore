@@ -1,0 +1,35 @@
+.git
+.github
+
+# Never copy operator credentials or wallets into an image.
+.env
+.env.*
+.bittensor/
+wallets/
+cookies.txt
+
+# Local Python and editor state.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+
+# Local build/runtime artifacts.
+build/
+dist/
+*.egg-info/
+validator-data/
+.chronoseek-chutes-build/
+chronoseek_chute.py
+# NOT chronoseek_chute_local.py: the Chutes SDK's --local build mode adds
+# this exact file into the image itself, so excluding it breaks local
+# testing entirely. No secrets live in this file - only references to env
+# vars that stay separately excluded above (.env, cookies.txt).
+
+# Not needed by the validator runtime image.
+docs/
+tests/

@@ -1,233 +1,137 @@
 """
-ChronoSeek Miner.
-Exposes the miner logic via a FastAPI endpoint with Epistula verification.
+ChronoSeek miner submission command.
+
+Miners deploy their retrieval runtime on Chutes, then use this command to commit
+the runtime metadata on-chain. This process does not serve HTTP locally.
 """
 
-import os
 import argparse
-import uvicorn
-import bittensor as bt
-from fastapi import FastAPI, Request, Depends
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+import asyncio
+import json
+import os
+import sys
+
 from dotenv import load_dotenv
 
-# Load environment variables
+from chronoseek.bittensor_sdk import (
+    SubnetNotFoundError,
+    add_bittensor_arguments,
+    create_subtensor,
+    create_wallet,
+    fetch_metagraph,
+    parse_config,
+)
+from chronoseek.chain.submissions import (
+    DuplicateMinerSubmissionError,
+    MinerSubmission,
+    commit_miner_submission,
+    get_hotkey_revealed_commitments,
+)
+from chronoseek.constants import (
+    DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+    DEFAULT_HOTKEY_NAME,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_MECHID,
+    DEFAULT_NETUID,
+    DEFAULT_NETWORK,
+    DEFAULT_WALLET_NAME,
+    DEFAULT_WALLET_PATH,
+)
+from chronoseek.logging import configure_logging as configure_application_logging
+from chronoseek.logging import logger
+
 load_dotenv()
 
-from chronoseek.config import PROTOCOL_VERSION
-from chronoseek.protocol_models import (
-    ProtocolError,
-    VideoSearchRequest,
-    VideoSearchResponse,
-)
-from chronoseek.miner.auth import ValidatorAuthContext, authorize_hotkey
-from chronoseek.miner import logic as miner_logic_module
-from chronoseek.epistula import verify_signature
 
-app = FastAPI()
-# Global logic instance (initialized in main)
-miner_logic = None
-validator_auth = None
-
-
-def build_protocol_error(
-    *,
-    code: str,
-    message: str,
-    status_code: int,
-    request_id: str | None = None,
-    details: dict | None = None,
-):
-    payload = ProtocolError(
-        error={
-            "code": code,
-            "message": message,
-            "details": {
-                **(details or {}),
-                **({"request_id": request_id} if request_id else {}),
-            }
-            or None,
-        }
-    )
-    return JSONResponse(
-        status_code=status_code, content=payload.model_dump(mode="json")
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def handle_request_validation_error(
-    request: Request, exc: RequestValidationError
-):
-    request_id = None
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            request_id = body.get("request_id")
-    except Exception:
-        request_id = None
-
-    return build_protocol_error(
-        code="INVALID_REQUEST",
-        message="The search request payload is invalid.",
-        status_code=400,
-        request_id=request_id,
-        details={"errors": exc.errors()},
-    )
-
-
-@app.post("/search", response_model=VideoSearchResponse)
-async def search(
-    request: Request,
-    payload: VideoSearchRequest,
-    caller_hotkey: str = Depends(verify_signature),
-):
-    """
-    Handle search requests from validators.
-    The verify_signature dependency ensures the request is authenticated.
-    """
-    bt.logging.info(
-        f"Received request {payload.request_id or 'unknown-request'} from {caller_hotkey}: {payload.query}"
-    )
-    bt.logging.debug(f"Video URL: {payload.video_url}")
-
-    if miner_logic is None:
-        bt.logging.error("Miner logic not initialized")
-        return build_protocol_error(
-            code="INTERNAL_ERROR",
-            message="Miner logic not initialized.",
-            status_code=503,
-            request_id=payload.request_id,
-        )
-
-    if payload.protocol_version != PROTOCOL_VERSION:
-        return build_protocol_error(
-            code="UNSUPPORTED_PROTOCOL_VERSION",
-            message="The miner does not support this protocol version.",
-            status_code=400,
-            request_id=payload.request_id,
-        )
-
-    is_authorized, auth_details = authorize_hotkey(validator_auth, caller_hotkey)
-    if not is_authorized:
-        bt.logging.warning(
-            f"Rejecting request {payload.request_id or 'unknown-request'} from hotkey {caller_hotkey} with stake {auth_details['caller_stake']:.6f} below minimum {auth_details['minimum_validator_stake']:.6f}"
-        )
-        return build_protocol_error(
-            code="INVALID_REQUEST",
-            message="Caller hotkey does not meet the minimum validator stake requirement.",
-            status_code=403,
-            request_id=payload.request_id,
-            details=auth_details,
-        )
-
-    try:
-        bt.logging.info("Starting search processing...")
-        results = miner_logic.search(
-            payload.video_url, payload.query, top_k=payload.top_k
-        )
-        bt.logging.success(f"Search completed. Found {len(results)} results.")
-        return VideoSearchResponse(request_id=payload.request_id, results=results)
-    except miner_logic_module.SearchPipelineError as e:
-        bt.logging.error(
-            f"Request {payload.request_id or 'unknown-request'} failed with {e.code}: {e.message}"
-        )
-        status_code = 500
-        if e.code in {
-            "INVALID_REQUEST",
-            "UNSUPPORTED_PROTOCOL_VERSION",
-            "QUERY_INVALID",
-        }:
-            status_code = 400
-        elif e.code == "VIDEO_FETCH_FAILED":
-            status_code = 502
-        elif e.code == "VIDEO_UNREADABLE":
-            status_code = 422
-        elif e.code == "TIMEOUT":
-            status_code = 504
-
-        return build_protocol_error(
-            code=e.code,
-            message=e.message,
-            status_code=status_code,
-            request_id=payload.request_id,
-            details=e.details,
-        )
-    except Exception as e:
-        bt.logging.error(f"Error processing request: {e}")
-        return build_protocol_error(
-            code="INTERNAL_ERROR",
-            message="The miner encountered an unexpected internal error.",
-            status_code=500,
-            request_id=payload.request_id,
-        )
-
-
-@app.get("/health")
-async def health():
-    return {
-        "ok": True,
-        "status": "ok",
-        "service": "miner",
-        "protocol_versions": [PROTOCOL_VERSION],
-    }
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def get_config():
-    """
-    Parse arguments and return configuration.
-    Priority: CLI > Environment Variables > Defaults
-    """
-    parser = argparse.ArgumentParser(description="ChronoSeek Miner")
+    parser = argparse.ArgumentParser(description="Commit ChronoSeek miner metadata")
+    add_bittensor_arguments(parser)
 
-    # Add bittensor arguments first
-    bt.Wallet.add_args(parser)
-    bt.Subtensor.add_args(parser)
-    bt.Axon.add_args(parser)
-    bt.logging.add_args(parser)
-
-    # Add custom arguments
+    parser.add_argument(
+        "--network",
+        dest="subtensor.network",
+        type=str,
+        default=os.getenv("NETWORK", DEFAULT_NETWORK),
+        help="Alias for --subtensor.network. Usually finney, test, or local.",
+    )
     parser.add_argument(
         "--netuid",
         type=int,
-        default=int(os.getenv("NETUID", "1")),
+        default=int(os.getenv("NETUID", str(DEFAULT_NETUID))),
         help="Subnet NetUID",
     )
     parser.add_argument(
-        "--min-validator-stake",
-        type=float,
-        default=float(os.getenv("MIN_VALIDATOR_STAKE", "10000")),
-        help="Minimum validator stake required for the miner to accept a signed request.",
+        "--endpoint",
+        type=str,
+        default="",
+        help="Optional direct HTTPS endpoint for the deployed Chutes runtime.",
+    )
+    parser.add_argument(
+        "--chute-id",
+        type=str,
+        default="",
+        help="Canonical Chutes deployment identifier.",
+    )
+    parser.add_argument(
+        "--chute-slug",
+        type=str,
+        default="",
+        help="Chutes slug used by validators to resolve https://{slug}.chutes.ai.",
+    )
+    parser.add_argument("--artifact-id", type=str, default="")
+    parser.add_argument("--artifact-revision", type=str, default="")
+    parser.add_argument("--artifact-digest", type=str, default="")
+    parser.add_argument(
+        "--capability",
+        action="append",
+        default=[],
+        help="Runtime capability. Can be provided multiple times.",
+    )
+    parser.add_argument(
+        "--blocks-until-reveal",
+        type=int,
+        default=1,
+        help="Commit-reveal delay in blocks.",
+    )
+    parser.add_argument(
+        "--check-existing",
+        action="store_true",
+        help="Fetch and print revealed commitments for this wallet hotkey, then exit without submitting.",
+    )
+    parser.add_argument(
+        "--enforce-one-hotkey-one-submission",
+        action=argparse.BooleanOptionalAction,
+        default=env_bool(
+            "ENFORCE_ONE_HOTKEY_ONE_SUBMISSION",
+            DEFAULT_ENFORCE_ONE_HOTKEY_ONE_SUBMISSION,
+        ),
+        help="Reject repeat submissions for a hotkey. Enabled by default.",
     )
 
-    # Set defaults from environment variables for bittensor arguments
-    defaults = {
-        "wallet.name": os.getenv("WALLET_NAME", "default"),
-        "wallet.hotkey": os.getenv("HOTKEY_NAME", "default"),
-        "wallet.path": os.getenv("WALLET_PATH", "~/.bittensor/wallets/"),
-        "subtensor.network": os.getenv("NETWORK", "finney"),
-        "axon.port": int(os.getenv("PORT", "8000")),
-        "logging.level": os.getenv("LOG_LEVEL", "INFO"),
-    }
-    parser.set_defaults(**defaults)
-
-    return bt.Config(parser)
+    parser.set_defaults(
+        **{
+            "wallet.name": os.getenv("WALLET_NAME", DEFAULT_WALLET_NAME),
+            "wallet.hotkey": os.getenv("HOTKEY_NAME", DEFAULT_HOTKEY_NAME),
+            "wallet.path": os.getenv("WALLET_PATH", DEFAULT_WALLET_PATH),
+            "subtensor.network": os.getenv("NETWORK", DEFAULT_NETWORK),
+            "logging.level": os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
+        }
+    )
+    return parse_config(parser)
 
 
-def resolve_server_port(config) -> int:
-    axon_port = getattr(getattr(config, "axon", None), "port", None)
-    if isinstance(axon_port, int) and not isinstance(axon_port, bool):
-        return axon_port
-
-    for index, arg in enumerate(os.sys.argv):
-        if arg == "--axon.port" and index + 1 < len(os.sys.argv):
-            try:
-                return int(os.sys.argv[index + 1])
-            except ValueError:
-                break
-
-    raise ValueError(
-        "Miner server port is not configured. Set --axon.port or provide PORT before config parsing."
+def configure_logging(config) -> None:
+    configure_application_logging(
+        config.logging.level,
+        logging_dir=config.logging.logging_dir,
+        filename="miner.log",
     )
 
 
@@ -236,96 +140,183 @@ def get_wallet_hotkey_address(wallet) -> str | None:
     return getattr(hotkey, "ss58_address", None)
 
 
-def main():
-    global miner_logic
-    global validator_auth
+def optional_text(value) -> str | None:
+    if value is None or value == "":
+        return None
+    return str(value)
 
-    # 0. Load configuration
-    config = get_config()
 
-    # Setup logging
-    bt.logging(config=config, logging_dir=config.logging.logging_dir)
-    bt.logging.on()  # Ensure console logging is on
-
-    # Force debug if requested, otherwise default to INFO
-    if config.logging.level == "DEBUG":
-        bt.logging.set_debug(True)
-    elif config.logging.level == "TRACE":
-        bt.logging.set_trace(True)
-    else:
-        # Default to INFO if not specified
-        bt.logging.set_info(True)
-
-    bt.logging.info(
-        f"Starting ChronoSeek Miner on network={config.subtensor.network}, netuid={config.netuid}"
+def load_subtensor_and_metagraph(config):
+    netuid = int(config.netuid)
+    mechid = DEFAULT_MECHID
+    subtensor = create_subtensor(config)
+    network = optional_text(getattr(subtensor, "network", None))
+    chain_endpoint = optional_text(getattr(subtensor, "endpoint", None))
+    logger.info(
+        "Loading metagraph for "
+        f"network={network}, "
+        f"chain_endpoint={chain_endpoint}, "
+        f"netuid={netuid}, mechid={mechid} "
+        f"(Bittensor subnet mechanism {netuid}.{mechid})"
     )
-    bt.logging.info(f"Full config: {config}")
+    try:
+        metagraph = fetch_metagraph(subtensor, netuid)
+    except SubnetNotFoundError as exc:
+        raise SubnetNotFoundError(
+            f"Subnet netuid={netuid} does not exist on network={network} "
+            f"({chain_endpoint}). Bittensor reports subnet mechanisms as "
+            f"netuid.mechid, so {netuid}.{mechid} means netuid={netuid}, "
+            f"mechid={mechid}. ChronoSeek uses mechid=0. If this is a "
+            "testnet subnet, rerun with --network test."
+        ) from exc
+    return subtensor, metagraph
 
-    # 1. Setup Bittensor objects
-    wallet = bt.Wallet(config=config)
+
+def assert_registered_hotkey(wallet_hotkey: str, metagraph, netuid: int) -> bool:
+    if wallet_hotkey not in metagraph.hotkeys:
+        logger.error(
+            f"Miner hotkey {wallet_hotkey} is NOT registered on netuid {netuid}"
+        )
+        return False
+
+    logger.info(
+        f"Miner registered with UID: {metagraph.hotkeys.index(wallet_hotkey)}"
+    )
+    return True
+
+
+def build_submission_payload(config, hotkey: str) -> MinerSubmission:
+    if not config.endpoint and not config.chute_slug:
+        raise ValueError(
+            "current validators require --endpoint or --chute-slug to resolve the runtime; --chute-id alone is not routable yet"
+        )
+
+    submission = MinerSubmission(
+        hotkey=hotkey,
+        endpoint=config.endpoint or None,
+        chute_id=config.chute_id or None,
+        chute_slug=config.chute_slug or None,
+        artifact_id=config.artifact_id or None,
+        artifact_revision=config.artifact_revision or None,
+        artifact_digest=config.artifact_digest or None,
+        capabilities=list(config.capability or []),
+    )
+    return submission
+
+
+def normalize_commit_data(commit_data):
+    if isinstance(commit_data, str):
+        try:
+            return json.loads(commit_data)
+        except json.JSONDecodeError:
+            return commit_data
+    return commit_data
+
+
+async def check_existing_commitments(config, subtensor, metagraph, wallet_hotkey: str):
+    commits = await get_hotkey_revealed_commitments(
+        subtensor=subtensor,
+        netuid=int(config.netuid),
+        hotkey=wallet_hotkey,
+    )
+    result = {
+        "hotkey": wallet_hotkey,
+        "netuid": int(config.netuid),
+        "registered": wallet_hotkey in getattr(metagraph, "hotkeys", []),
+        "commitments": [
+            {
+                "block": block,
+                "data": normalize_commit_data(commit_data),
+            }
+            for block, commit_data in commits
+        ],
+    }
+
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    if not commits:
+        logger.info(f"No revealed miner commitments found for {wallet_hotkey}.")
+    elif len(commits) > 1:
+        if config.enforce_one_hotkey_one_submission:
+            logger.warning(
+                f"Found {len(commits)} revealed miner commitments for {wallet_hotkey}; validators disqualify duplicate-submitted hotkeys."
+            )
+        else:
+            logger.info(
+                f"Found {len(commits)} revealed miner commitments for {wallet_hotkey}; enforcement is disabled and validators use the newest submission."
+            )
+    else:
+        logger.info(f"Found one revealed miner commitment for {wallet_hotkey}.")
+    return 0
+
+
+async def submit_runtime_metadata(config) -> int:
+    wallet = create_wallet(config)
     wallet_hotkey = get_wallet_hotkey_address(wallet)
     if not wallet_hotkey:
-        bt.logging.error(
-            "Wallet hotkey is unavailable. Check WALLET_NAME, HOTKEY_NAME, and WALLET_PATH before starting the miner."
+        logger.error(
+            "Wallet hotkey is unavailable. Check WALLET_NAME, HOTKEY_NAME, and WALLET_PATH."
         )
-        return
+        return 1
 
-    subtensor = bt.Subtensor(config=config)
-    metagraph = bt.Metagraph(netuid=config.netuid, network=subtensor.network)
-
-    # 2. Check Registration
-    bt.logging.info(f"Wallet: {wallet}")
-
-    if wallet_hotkey not in metagraph.hotkeys:
-        bt.logging.error(
-            f"Miner hotkey {wallet_hotkey} is NOT registered on netuid {config.netuid}"
-        )
-    else:
-        bt.logging.info(
-            f"Miner registered with UID: {metagraph.hotkeys.index(wallet_hotkey)}"
-        )
-
-    validator_auth = ValidatorAuthContext(
-        min_validator_stake=max(0.0, float(config.min_validator_stake)),
-        metagraph=metagraph,
-    )
-    bt.logging.info(
-        f"Configured minimum validator stake requirement: {validator_auth.min_validator_stake:.6f}"
-    )
-
-    # Initialize Logic
-    miner_logic = miner_logic_module.MinerLogic()
-
-    # Determine port
-    server_port = resolve_server_port(config)
-
-    # 3. Serve Axon (Announce IP/Port to the network)
-    bt.logging.info(f"Serving Axon on port {server_port}...")
     try:
-        # Create axon object just for announcement (we run our own uvicorn)
-        axon = bt.Axon(wallet=wallet, port=server_port)
+        subtensor, metagraph = load_subtensor_and_metagraph(config)
+    except SubnetNotFoundError as exc:
+        logger.error(str(exc))
+        return 1
 
-        # Announce to the network
-        bt.logging.info(f"Announcing axon to netuid {config.netuid}...")
-        subtensor.serve_axon(
-            netuid=config.netuid,
-            axon=axon,
+    if config.check_existing:
+        return await check_existing_commitments(
+            config=config,
+            subtensor=subtensor,
+            metagraph=metagraph,
+            wallet_hotkey=wallet_hotkey,
         )
-        bt.logging.success(f"Served Axon successfully on port {server_port}")
 
-    except Exception as e:
-        bt.logging.error(f"Failed to serve Axon: {e}")
-        # We continue even if serve fails, as it might just be a timeout or network issue
-        # and the miner can still function if previously registered correctly.
+    if not assert_registered_hotkey(wallet_hotkey, metagraph, int(config.netuid)):
+        return 1
 
-    bt.logging.info(f"Starting Miner HTTP Server on port {server_port}")
     try:
-        uvicorn.run(app, host="0.0.0.0", port=server_port)
-    except KeyboardInterrupt:
-        bt.logging.info("Miner stopped by user")
-    except Exception as e:
-        bt.logging.error(f"Miner error: {e}")
+        submission = build_submission_payload(config, wallet_hotkey)
+    except Exception as exc:
+        logger.error(f"Invalid miner submission metadata: {exc}")
+        logger.error(
+            "Provide --endpoint or --chute-slug for the deployed runtime. --chute-id is metadata-only until validators can resolve it through Chutes."
+        )
+        return 1
+
+    payload = submission.model_dump(mode="json", exclude_none=True)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    logger.info(
+        f"Committing ChronoSeek v2 runtime metadata for {wallet_hotkey} on netuid={config.netuid}"
+    )
+    try:
+        success = await commit_miner_submission(
+            subtensor=subtensor,
+            wallet=wallet,
+            netuid=int(config.netuid),
+            submission=submission,
+            blocks_until_reveal=int(config.blocks_until_reveal),
+            enforce_one_hotkey_one_submission=bool(
+                config.enforce_one_hotkey_one_submission
+            ),
+        )
+    except DuplicateMinerSubmissionError as exc:
+        logger.error(str(exc))
+        return 1
+
+    if not success:
+        logger.error("Chain rejected v2 miner submission commitment.")
+        return 1
+
+    logger.success("ChronoSeek v2 miner submission committed.")
+    return 0
+
+
+def main():
+    config = get_config()
+    configure_logging(config)
+    return asyncio.run(submit_runtime_metadata(config))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

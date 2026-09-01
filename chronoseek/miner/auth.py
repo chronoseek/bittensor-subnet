@@ -9,8 +9,15 @@ class ValidatorAuthContext:
 
 
 def normalize_stake_value(stake_value: Any) -> float:
-    if hasattr(stake_value, "tao"):
-        return float(stake_value.tao)
+    # bittensor's Balance.tao/.alpha are properties that *raise*
+    # UnitMismatchError for the wrong unit rather than returning something
+    # falsy, so hasattr() on either one propagates the exception straight
+    # through (hasattr only swallows AttributeError) and crashes the whole
+    # request. `netuid` is a plain, non-raising attribute that says which
+    # property is actually safe to read.
+    netuid = getattr(stake_value, "netuid", None)
+    if netuid is not None:
+        return float(stake_value.tao) if netuid == 0 else float(stake_value.alpha)
     if hasattr(stake_value, "item"):
         return float(stake_value.item())
     return float(stake_value)

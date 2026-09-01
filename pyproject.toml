@@ -1,18 +1,16 @@
 [tool.poetry]
 name = "chronoseek-subnet"
-version = "0.1.0"
+version = "2.0.0"
 description = "ChronoSeek (Semantic Video Moment Retrieval) on Bittensor"
-authors = ["CreativeEssence <dalyconnor528@gmail.com>"]
+authors = ["CreativeEssence <connor@chronoseek.org>"]
 readme = "README.md"
 packages = [
     { include = "chronoseek" }
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.12, <3.15"
-bittensor = ">=10.0.0"
-bittensor-cli = ">=9.18.0"
-bittensor-wallet = ">=4.0.0"
+python = ">=3.12, <3.14"
+bittensor = ">=11.0.0"
 click = ">=8.0.0"
 fastapi = ">=0.109.0"
 uvicorn = ">=0.27.0"
@@ -32,6 +30,10 @@ huggingface-hub = ">=1.5.0"
 pyarrow = ">=21.0.0"
 yt-dlp = ">=2026.3.17"
 yt-dlp-ejs = ">=0.8.0"
+chutes = "^0.6.8"
+minio = "^7.2.20"
+av = "^18.0.0"
+soundfile = "^0.14.0"
 
 [build-system]
 requires = ["poetry-core"]
@@ -40,4 +42,12 @@ build-backend = "poetry.core.masonry.api"
 [dependency-groups]
 dev = [
     "pytest (>=9.0.2,<10.0.0)"
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests/unit",
+]
+markers = [
+    "live: opt-in live integration tests that may call paid or externally mutating services",
 ]

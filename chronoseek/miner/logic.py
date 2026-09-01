@@ -3,11 +3,11 @@ import time
 import numpy as np
 from typing import List, Sequence, Tuple
 from chronoseek.protocol_models import VideoSearchResult
-import bittensor as bt
 
 # Modular components
+from chronoseek.logging import logger
 from chronoseek.miner.utils.audio_extractor import AudioExtractor
-from chronoseek.miner.utils.video_downloader import VideoDownloader
+from chronoseek.video.downloader import VideoDownloadError, VideoDownloader
 from chronoseek.miner.utils.frame_extractor import FrameExtractor
 from chronoseek.miner.utils.clip_engine import CLIPProcessorEngine
 from chronoseek.miner.utils.transcript_engine import TranscriptEngine, TranscriptSegment
@@ -60,14 +60,14 @@ class MinerLogic:
         """
         Execute the search pipeline.
         """
-        bt.logging.info(f"Processing query: '{query}' for video: {video_url}")
+        logger.info(f"Processing query: '{query}' for video: {video_url}")
 
         # 1. Download
-        bt.logging.info("=" * 40)
-        bt.logging.info(f"MINER: STARTING SEARCH")
-        bt.logging.info(f"Video: {video_url}")
-        bt.logging.info(f"Query: {query}")
-        bt.logging.info("=" * 40)
+        logger.info("=" * 40)
+        logger.info(f"MINER: STARTING SEARCH")
+        logger.info(f"Video: {video_url}")
+        logger.info(f"Query: {query}")
+        logger.info("=" * 40)
         request_t0 = time.perf_counter()
         download_sec = 0.0
         coarse_extract_sec = 0.0
@@ -78,26 +78,37 @@ class MinerLogic:
         transcript_sec = 0.0
         heuristic_sec = 0.0
 
-        bt.logging.info(f">>> Step 1: Downloading Video")
+        logger.info(f">>> Step 1: Downloading Video")
         t0 = time.perf_counter()
-        downloaded_video = VideoDownloader.download_video(video_url)
-        download_sec = time.perf_counter() - t0
-        if not downloaded_video:
-            bt.logging.error("Video download failed.")
+        try:
+            downloaded_video = VideoDownloader.download_video(
+                video_url,
+                raise_on_failure=True,
+            )
+        except VideoDownloadError as exc:
+            logger.error(f"Video download failed: {exc}")
             raise SearchPipelineError(
                 "VIDEO_FETCH_FAILED",
-                "The video URL could not be fetched.",
+                "The video URL could not be fetched by supported download backends.",
+                exc.details(),
+            ) from exc
+        download_sec = time.perf_counter() - t0
+        if not downloaded_video:
+            logger.error("Video download failed.")
+            raise SearchPipelineError(
+                "VIDEO_FETCH_FAILED",
+                "The video URL could not be fetched by supported download backends.",
                 {"video_url": video_url},
             )
         video_path = downloaded_video.path
-        bt.logging.info(
+        logger.info(
             f"Video downloaded to {video_path} (download: {download_sec:.2f}s)"
         )
 
         try:
             # 2. Coarse frames + CLIP
             coarse_fps = float(self.COARSE_FPS)
-            bt.logging.info(
+            logger.info(
                 f">>> Step 2: Coarse frame extraction ({coarse_fps:g} fps)"
             )
             t0 = time.perf_counter()
@@ -105,13 +116,13 @@ class MinerLogic:
                 video_path, fps=coarse_fps
             )
             if not frames_data:
-                bt.logging.error("Frame extraction failed or video is empty.")
+                logger.error("Frame extraction failed or video is empty.")
                 raise SearchPipelineError(
                     "VIDEO_UNREADABLE",
                     "The downloaded video could not be decoded into frames.",
                     {"video_url": video_url},
                 )
-            bt.logging.info(f"Coarse: extracted {len(frames_data)} frames.")
+            logger.info(f"Coarse: extracted {len(frames_data)} frames.")
 
             coarse_ts, images = zip(*frames_data)
             coarse_ts_arr = np.array(coarse_ts, dtype=np.float64)
@@ -120,7 +131,7 @@ class MinerLogic:
 
             adaptive_fps = self._select_coarse_fps(video_duration_sec)
             if adaptive_fps < coarse_fps:
-                bt.logging.info(
+                logger.info(
                     f"Coarse duration={video_duration_sec:.1f}s; resampling coarse pass "
                     f"at {adaptive_fps:g} fps for faster inference."
                 )
@@ -130,28 +141,28 @@ class MinerLogic:
                     coarse_ts_arr = np.array(coarse_ts, dtype=np.float64)
                     coarse_ts_tuple = tuple(float(t) for t in coarse_ts)
                 else:
-                    bt.logging.warning(
+                    logger.warning(
                         "Adaptive coarse resample returned no frames; using initial coarse set."
                     )
             coarse_extract_sec = time.perf_counter() - t0
-            bt.logging.info(
+            logger.info(
                 f"Coarse frames ready: {len(coarse_ts_tuple)} points "
                 f"(duration: {video_duration_sec:.1f}s, extract: {coarse_extract_sec:.2f}s)"
             )
 
             # 3. Coarse inference
-            bt.logging.info(">>> Step 3a: CLIP inference (coarse)")
+            logger.info(">>> Step 3a: CLIP inference (coarse)")
             t0 = time.perf_counter()
             coarse_probs = self.ml_engine.compute_similarity(query, list(images))
             coarse_infer_sec = time.perf_counter() - t0
             if len(coarse_probs) == 0:
-                bt.logging.error("Inference returned no scores.")
+                logger.error("Inference returned no scores.")
                 raise SearchPipelineError(
                     "INFERENCE_FAILED",
                     "The miner could not compute similarity scores for this request.",
                     {"video_url": video_url},
                 )
-            bt.logging.info(
+            logger.info(
                 f"Coarse max score: {float(np.max(coarse_probs)):.4f} "
                 f"(infer: {coarse_infer_sec:.2f}s)"
             )
@@ -159,7 +170,7 @@ class MinerLogic:
             # 4. Fine windows + second pass (adaptive)
             video_end = float(coarse_ts_arr[-1]) if len(coarse_ts_arr) else 0.0
             if self._should_skip_refine(coarse_probs):
-                bt.logging.info(">>> Step 3b: skipping refine pass (strong coarse confidence)")
+                logger.info(">>> Step 3b: skipping refine pass (strong coarse confidence)")
                 refine_windows = []
             else:
                 num_refine = self._refine_window_budget(top_k)
@@ -176,7 +187,7 @@ class MinerLogic:
             merged_probs = coarse_probs
 
             if refine_windows:
-                bt.logging.info(
+                logger.info(
                     f">>> Step 3b: Refining {len(refine_windows)} temporal windows "
                     f"at ~{self.REFINE_FPS} fps"
                 )
@@ -202,21 +213,21 @@ class MinerLogic:
                             fine_probs,
                             refine_windows,
                         )
-                        bt.logging.info(
+                        logger.info(
                             f"Merged timeline: {len(merged_ts)} points "
                             f"(max {float(np.max(merged_probs)):.4f}, "
                             f"fine_extract: {fine_extract_sec:.2f}s, "
                             f"fine_infer: {fine_infer_sec:.2f}s)"
                         )
                     else:
-                        bt.logging.warning(
+                        logger.warning(
                             "Fine pass produced no scores; using coarse only."
                         )
                 else:
-                    bt.logging.warning("Fine extraction empty; using coarse only.")
+                    logger.warning("Fine extraction empty; using coarse only.")
 
             # 5. Audio extraction + transcript scoring
-            bt.logging.info(">>> Step 4: Extracting audio")
+            logger.info(">>> Step 4: Extracting audio")
             t0 = time.perf_counter()
             extracted_audio = AudioExtractor.extract_audio(video_path)
             audio_extract_sec = time.perf_counter() - t0
@@ -226,15 +237,15 @@ class MinerLogic:
             fusion_mode = "vision_only"
 
             if extracted_audio is None:
-                bt.logging.info(
+                logger.info(
                     f"Audio unavailable; using vision-only scoring (audio_extract: {audio_extract_sec:.2f}s)"
                 )
             else:
-                bt.logging.info(
+                logger.info(
                     f"Audio extracted to {extracted_audio.path} "
                     f"(duration: {extracted_audio.duration_sec:.1f}s, extract: {audio_extract_sec:.2f}s)"
                 )
-                bt.logging.info(">>> Step 5: Generating transcript")
+                logger.info(">>> Step 5: Generating transcript")
                 t0 = time.perf_counter()
                 transcript_segments = self.transcript_engine.transcribe(
                     extracted_audio.path,
@@ -251,22 +262,22 @@ class MinerLogic:
                         scored_audio_segments,
                     )
                     max_audio_score = max(score for _, _, score, _ in scored_audio_segments)
-                    bt.logging.info(
+                    logger.info(
                         f"Transcript segments: {len(transcript_segments)} "
                         f"(transcribe: {transcript_sec:.2f}s, max_audio_score: {max_audio_score:.4f})"
                     )
-                    bt.logging.info(
+                    logger.info(
                         "Fusion mode: vision_audio "
                         f"(vision primary, audio boost factor={self.AUDIO_BOOST_FACTOR:.2f})"
                     )
                 else:
-                    bt.logging.info(
+                    logger.info(
                         f"No usable audio-derived timeline; using vision-only scoring "
                         f"(transcribe: {transcript_sec:.2f}s)"
                     )
 
             # 6. Search Heuristics (Thresholding & Merging)
-            bt.logging.info(">>> Step 6: Applying search heuristics")
+            logger.info(">>> Step 6: Applying search heuristics")
             t0 = time.perf_counter()
             results = self._find_best_segment(
                 fused_probs, fused_ts, top_k=top_k
@@ -275,9 +286,9 @@ class MinerLogic:
             
             if results:
                 best = results[0]
-                bt.logging.success(f"Best Segment: {best.start:.1f}s - {best.end:.1f}s (Conf: {best.confidence:.4f})")
+                logger.success(f"Best Segment: {best.start:.1f}s - {best.end:.1f}s (Conf: {best.confidence:.4f})")
             total_sec = time.perf_counter() - request_t0
-            bt.logging.info(
+            logger.info(
                 "Timing summary: "
                 f"download={download_sec:.2f}s, "
                 f"coarse_extract={coarse_extract_sec:.2f}s, "
@@ -289,13 +300,13 @@ class MinerLogic:
                 f"heuristics={heuristic_sec:.2f}s, "
                 f"total={total_sec:.2f}s"
             )
-            bt.logging.info("=" * 40)
+            logger.info("=" * 40)
             return results
 
         except SearchPipelineError:
             raise
         except Exception as e:
-            bt.logging.error(f"Search pipeline error: {e}")
+            logger.error(f"Search pipeline error: {e}")
             raise SearchPipelineError(
                 "INTERNAL_ERROR",
                 "The miner encountered an unexpected search pipeline error.",

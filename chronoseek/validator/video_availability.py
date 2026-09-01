@@ -1,10 +1,13 @@
 import json
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+
+from chronoseek.video.downloader import VideoDownloader
 
 
 @dataclass
@@ -62,8 +65,8 @@ class VideoAvailabilityChecker:
         if cached is not None:
             return cached
 
-        if self._is_youtube_url(url):
-            result = self._check_youtube(url)
+        if VideoDownloader.is_extractor_platform_url(url):
+            result = self._check_extractor_platform(url)
         else:
             result = self._check_direct_url(url)
 
@@ -75,32 +78,53 @@ class VideoAvailabilityChecker:
         return host in self.YOUTUBE_HOSTS
 
     def _check_youtube(self, url: str) -> VideoAvailabilityResult:
+        return self._check_extractor_platform(url)
+
+    def _check_extractor_platform(self, url: str) -> VideoAvailabilityResult:
         try:
             import yt_dlp
         except ImportError as exc:
             raise RuntimeError(
-                "yt-dlp is required for validator-side YouTube availability checks."
+                "yt-dlp is required for validator-side extractor-platform availability checks."
             ) from exc
 
-        options = {
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-            "logger": _SilentYtDlpLogger(),
-            "socket_timeout": self.timeout,
-            "extract_flat": True,
-        }
+        # Must mirror the downloader's cookie/player-client/js-runtime setup
+        # (VideoDownloader._download_with_ytdlp): without it, this pre-check
+        # hits YouTube's bot-check on almost every candidate even when the
+        # real download (which does carry cookies) would succeed fine,
+        # wasting sampling attempts on videos that are actually accessible.
+        with tempfile.TemporaryDirectory(prefix="chronoseek-ytdlp-check-") as tmp_dir:
+            cookie_opts = VideoDownloader._writable_ytdlp_cookie_options(
+                VideoDownloader._ytdlp_cookie_options(),
+                runtime_directory=tmp_dir,
+            )
+            options = {
+                "skip_download": True,
+                "quiet": True,
+                "no_warnings": True,
+                "logger": _SilentYtDlpLogger(),
+                "socket_timeout": self.timeout,
+                "extract_flat": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": VideoDownloader.YTDLP_PLAYER_CLIENTS,
+                    },
+                },
+                **VideoDownloader._ytdlp_js_runtime_options(),
+                **cookie_opts,
+            }
 
-        try:
-            with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=False)
+            try:
+                with VideoDownloader._yt_dlp_clean_parent_env():
+                    with yt_dlp.YoutubeDL(options) as ydl:
+                        info = ydl.extract_info(url, download=False)
 
-            if not info:
-                return VideoAvailabilityResult(False, "youtube_unavailable")
+                if not info:
+                    return VideoAvailabilityResult(False, "extractor_unavailable")
 
-            return VideoAvailabilityResult(True, "youtube_ok")
-        except Exception as exc:
-            return VideoAvailabilityResult(False, self._normalize_youtube_error(exc))
+                return VideoAvailabilityResult(True, "extractor_ok")
+            except Exception as exc:
+                return VideoAvailabilityResult(False, self._normalize_extractor_error(exc))
 
     def _check_direct_url(self, url: str) -> VideoAvailabilityResult:
         try:
@@ -112,18 +136,21 @@ class VideoAvailabilityChecker:
             return VideoAvailabilityResult(False, str(exc))
 
     def _normalize_youtube_error(self, exc: Exception) -> str:
+        return self._normalize_extractor_error(exc)
+
+    def _normalize_extractor_error(self, exc: Exception) -> str:
         message = str(exc).lower()
         if "confirm you’re not a bot" in message or "confirm you're not a bot" in message:
-            return "youtube_bot_check"
+            return "extractor_bot_check"
         if "private video" in message:
-            return "youtube_private"
+            return "extractor_private"
         if "video unavailable" in message:
-            return "youtube_unavailable"
+            return "extractor_unavailable"
         if "sign in" in message:
-            return "youtube_sign_in_required"
+            return "extractor_sign_in_required"
         if "unsupported url" in message:
-            return "youtube_unsupported"
-        return "youtube_check_failed"
+            return "extractor_unsupported"
+        return "extractor_check_failed"
 
     def _load_cache(self, cache_path: Path | None) -> dict:
         if cache_path is None or not cache_path.exists():

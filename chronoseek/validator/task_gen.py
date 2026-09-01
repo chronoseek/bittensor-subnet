@@ -7,15 +7,15 @@ from typing import Tuple, List, Dict
 from zipfile import ZipFile
 
 import requests
-import bittensor as bt
 
+from chronoseek.logging import logger
 from chronoseek.validator.base_task_gen import BaseTaskGenerator
 from chronoseek.validator.video_availability import VideoAvailabilityChecker
 
 
 class ActivityNetTaskGenerator(BaseTaskGenerator):
     """
-    Generates tasks based on the ActivityNet Captions dataset (MVP Scope).
+    Generates synthetic evaluation tasks from ActivityNet Captions.
     """
 
     def __init__(
@@ -29,10 +29,10 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
         availability_checker: VideoAvailabilityChecker | None = None,
         max_sampling_attempts: int = 50,
     ):
-        self.dataset_path = dataset_path
+        self.dataset_path = self._normalize_optional_path(dataset_path)
         self.split = split
         self.dataset_repo_id = dataset_repo_id
-        self.cache_dir = cache_dir
+        self.cache_dir = self._normalize_optional_path(cache_dir)
         self.dataset_filename = dataset_filename
         self.require_accessible_videos = require_accessible_videos
         self.availability_checker = availability_checker
@@ -44,6 +44,12 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
     def _default_dataset_path(self) -> str:
         return str(Path(__file__).resolve().parent / "data" / "smoke_test_tasks.json")
+
+    @staticmethod
+    def _normalize_optional_path(path: str | None) -> str | None:
+        if not path:
+            return None
+        return str(Path(path).expanduser())
 
     def _load_huggingface_dataset(self) -> List[Dict]:
         hf_token = os.getenv("HF_TOKEN")
@@ -120,7 +126,9 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             "https://cs.stanford.edu/people/ranjaykrishna/densevid/captions.zip"
         )
         cache_root = (
-            Path(self.cache_dir) if self.cache_dir else snapshot_root.parent.parent
+            Path(self.cache_dir).expanduser()
+            if self.cache_dir
+            else snapshot_root.parent.parent
         )
         activitynet_cache = cache_root / "chronoseek-activitynet"
         activitynet_cache.mkdir(parents=True, exist_ok=True)
@@ -249,6 +257,52 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             )
         return tasks
 
+    def _row_caption_interval_pairs(
+        self, row: dict
+    ) -> List[Tuple[str, List[Tuple[float, float]]]]:
+        """
+        Each row's `sentences`/`timestamps` are parallel arrays: every
+        sentence describes its own distinct moment, paired 1:1 with its own
+        timestamp (matching the ActivityNet_Captions schema). They must be
+        zipped per-sentence rather than collapsed onto the row's combined
+        `caption` field (the concatenation of all sentences), which would
+        pair one caption describing several unrelated events with every
+        interval in the row - and collapse a video's several distinct
+        captions down to one, defeating per-caption sampling/shuffling.
+        """
+        sentences = row.get("sentences")
+        timestamps = row.get("timestamps")
+        if (
+            isinstance(sentences, list)
+            and isinstance(timestamps, list)
+            and len(sentences) == len(timestamps)
+        ):
+            pairs = []
+            for sentence, pair in zip(sentences, timestamps):
+                intervals = self._normalize_interval_list(pair)
+                if sentence and intervals:
+                    pairs.append((str(sentence), intervals))
+            return pairs
+
+        caption = row.get("caption") or row.get("query") or row.get("sentence")
+        intervals = self._normalize_interval_list(
+            row.get("ground_truths")
+            if "ground_truths" in row
+            else (
+                row.get("ground_truth")
+                if "ground_truth" in row
+                else (
+                    [row.get("start_time"), row.get("end_time")]
+                    if row.get("start_time") is not None
+                    and row.get("end_time") is not None
+                    else row.get("timestamps")
+                )
+            )
+        )
+        if caption and intervals:
+            return [(str(caption), intervals)]
+        return []
+
     def _normalize_activitynet_rows(self, rows: List[dict]) -> List[Dict]:
         grouped: Dict[str, Dict] = {}
 
@@ -265,23 +319,11 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             if not video_url and video_id:
                 video_url = f"https://www.youtube.com/watch?v={str(video_id)[2:]}"
 
-            caption = row.get("caption") or row.get("query") or row.get("sentence")
-            intervals = self._normalize_interval_list(
-                row.get("ground_truths")
-                if "ground_truths" in row
-                else (
-                    row.get("ground_truth")
-                    if "ground_truth" in row
-                    else (
-                        [row.get("start_time"), row.get("end_time")]
-                        if row.get("start_time") is not None
-                        and row.get("end_time") is not None
-                        else row.get("timestamps")
-                    )
-                )
-            )
+            if not video_url:
+                continue
 
-            if not video_url or not caption or not intervals:
+            caption_interval_pairs = self._row_caption_interval_pairs(row)
+            if not caption_interval_pairs:
                 continue
 
             task_key = str(video_id or video_url)
@@ -294,7 +336,8 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
                     "caption_intervals": defaultdict(list),
                 }
 
-            grouped[task_key]["caption_intervals"][caption].extend(intervals)
+            for caption, intervals in caption_interval_pairs:
+                grouped[task_key]["caption_intervals"][caption].extend(intervals)
 
         tasks = []
         for task in grouped.values():
@@ -380,11 +423,12 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
 
     def _load_dataset(self) -> List[Dict]:
         if self.dataset_path:
-            if not os.path.exists(self.dataset_path):
+            dataset_path = str(Path(self.dataset_path).expanduser())
+            if not os.path.exists(dataset_path):
                 raise FileNotFoundError(
-                    f"ActivityNet task dataset not found at {self.dataset_path}"
+                    f"ActivityNet task dataset not found at {dataset_path}"
                 )
-            return self._load_local_dataset(self.dataset_path)
+            return self._load_local_dataset(dataset_path)
 
         return self._load_huggingface_dataset()
 
@@ -419,7 +463,7 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             return None
 
         fallback_url = random.choice(accessible_urls)
-        bt.logging.info(
+        logger.info(
             f"Falling back to cached accessible validator task video {fallback_url}"
         )
         return self._build_task_result(self._tasks_by_video_url[fallback_url])
@@ -437,7 +481,7 @@ class ActivityNetTaskGenerator(BaseTaskGenerator):
             if self.require_accessible_videos and self.availability_checker is not None:
                 availability = self.availability_checker.check(video["video_url"])
                 if not availability.accessible:
-                    bt.logging.info(
+                    logger.info(
                         f"Skipping unavailable validator task video {video['video_url']}: {availability.reason}"
                     )
                     continue

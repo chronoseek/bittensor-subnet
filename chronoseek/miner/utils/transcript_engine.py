@@ -2,8 +2,10 @@ import os
 from dataclasses import dataclass
 from typing import List
 
-import bittensor as bt
+import soundfile as sf
 import torch
+
+from chronoseek.logging import logger
 
 
 @dataclass
@@ -34,14 +36,14 @@ class TranscriptEngine:
 
         token = os.getenv("HF_TOKEN")
         if not token:
-            bt.logging.warning(
+            logger.warning(
                 "HF_TOKEN not found in environment. Transcript model downloads may be rate-limited."
             )
 
         try:
             from transformers import pipeline
 
-            bt.logging.info(
+            logger.info(
                 f"Loading transcript model '{self.model_id}' on "
                 f"{'cuda' if self.device >= 0 else 'cpu'}..."
             )
@@ -52,10 +54,10 @@ class TranscriptEngine:
                 device=self.device,
                 chunk_length_s=30,
             )
-            bt.logging.success("Transcript model loaded successfully.")
+            logger.success("Transcript model loaded successfully.")
         except Exception as exc:
             self._disabled = True
-            bt.logging.warning(
+            logger.warning(
                 f"Transcript model unavailable; continuing in vision-only mode: {exc}"
             )
             return None
@@ -70,25 +72,46 @@ class TranscriptEngine:
             return []
 
         try:
-            result = asr_pipeline(audio_path, return_timestamps=True)
+            samples, sample_rate = sf.read(audio_path, dtype="float32")
+            if samples.ndim > 1:
+                samples = samples.mean(axis=1)
         except Exception as exc:
-            bt.logging.warning(f"Transcript generation failed: {exc}")
+            logger.warning(f"Failed to read extracted audio for transcription: {exc}")
+            return []
+
+        try:
+            # Feed a raw array rather than a file path: the pipeline shells
+            # out to the ffmpeg CLI internally (ffmpeg_read) for path inputs,
+            # which is exactly the per-request subprocess spawn this runtime
+            # otherwise avoids - see AudioExtractor's docstring.
+            result = asr_pipeline(
+                {"raw": samples, "sampling_rate": sample_rate},
+                return_timestamps=True,
+            )
+        except Exception as exc:
+            logger.warning(f"Transcript generation failed: {exc}")
             return []
 
         segments = self._parse_segments(result, audio_duration_sec)
         if not segments:
-            bt.logging.info("Transcript generation returned no timestamped segments.")
+            logger.info("Transcript generation returned no timestamped segments.")
         return segments
 
     @staticmethod
-    def _parse_segments(result, audio_duration_sec: float | None) -> List[TranscriptSegment]:
+    def _parse_segments(
+        result, audio_duration_sec: float | None
+    ) -> List[TranscriptSegment]:
         chunks = result.get("chunks") if isinstance(result, dict) else None
         if chunks:
             segments: List[TranscriptSegment] = []
             for chunk in chunks:
                 raw_text = str(chunk.get("text", "")).strip()
                 timestamp = chunk.get("timestamp")
-                if not raw_text or not isinstance(timestamp, (list, tuple)) or len(timestamp) != 2:
+                if (
+                    not raw_text
+                    or not isinstance(timestamp, (list, tuple))
+                    or len(timestamp) != 2
+                ):
                     continue
                 start, end = timestamp
                 if start is None:
