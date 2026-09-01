@@ -237,6 +237,81 @@ YTDLP_COOKIES_BROWSER=chrome:Default
 
 During Chutes image build, a readable `YTDLP_COOKIES` file is copied into the image and the environment is rewritten to the container path.
 
+### Refresh cookies for axon and Chutes miners
+
+An operator can run one cookie-refresh service for multiple miners and bind
+each axon runtime or deployed Chute to its exact endpoint credentials. The
+service reads its registry and source cookie file on every authenticated
+request, so replacing expired cookies does not require restarting the refresh
+service, axon runtime, or Chute.
+
+Create a registry outside the repository and restrict its permissions:
+
+```json
+{
+  "bindings": {
+    "miner-hotkey-a-chute": {
+      "secret": "replace-with-at-least-32-random-characters",
+      "cookie_file": "/srv/chronoseek/miner-a/cookies.txt"
+    },
+    "miner-hotkey-b-chute": {
+      "secret": "use-a-different-secret-for-every-chute",
+      "cookie_file": "/srv/chronoseek/miner-b/cookies.txt"
+    }
+  }
+}
+```
+
+```bash
+chmod 600 /srv/chronoseek/cookie-bindings.json
+export COOKIE_REFRESH_REGISTRY_PATH=/srv/chronoseek/cookie-bindings.json
+poetry run python scripts/run_cookie_refresh_server.py
+```
+
+Put the service behind HTTPS before exposing it publicly. Do not bind the
+plain uvicorn process directly to a public interface. Its bind host and port
+come from `DEFAULT_COOKIE_REFRESH_SERVER_HOST` and
+`DEFAULT_COOKIE_REFRESH_SERVER_PORT` in `chronoseek/constants.py`. Configure the three
+client values in the axon miner's `.env`. For a remote Chute, configure the
+same values as Chutes Secrets for that exact Chute name or UUID:
+
+```bash
+chutes secrets create --purpose <chute-name-or-id> \
+  --key COOKIE_REFRESH_URL --value https://miner.example.com
+chutes secrets create --purpose <chute-name-or-id> \
+  --key COOKIE_REFRESH_BINDING_ID --value miner-hotkey-a-chute
+chutes secrets create --purpose <chute-name-or-id> \
+  --key COOKIE_REFRESH_SHARED_SECRET --value <matching-binding-secret>
+```
+
+Both runtime types refresh proactively according to
+`DEFAULT_COOKIE_REFRESH_INTERVAL_SECONDS` in `chronoseek/constants.py`
+(default one hour). When yt-dlp receives a
+YouTube bot/sign-in error between scheduled refreshes, it refreshes immediately
+and retries exactly once. The cookie is atomically written to `YTDLP_COOKIES`;
+when that path is empty, the client uses `DEFAULT_COOKIE_REFRESH_CACHE_PATH`
+from `chronoseek/constants.py`. Optional refresh timing, networking, and cache
+defaults are code constants rather than environment configuration.
+
+Later downloads reuse the refreshed file. A newly scheduled Chutes instance
+starts from its baked writable copy and then joins the same refresh schedule.
+Requests are HMAC-authenticated with a short timestamp window and single-use
+nonce. Local axon clients are accepted; any client running with Chutes' remote
+execution context is rejected unless its launch token identifies a TEE. The
+per-Chute secret must be injected with Chutes Secrets, never committed or baked
+into the image.
+
+Rotate cookies atomically so a request never observes a partial file:
+
+```bash
+install -m 600 /path/to/new-cookies.txt /srv/chronoseek/miner-a/cookies.txt.new
+mv /srv/chronoseek/miner-a/cookies.txt.new /srv/chronoseek/miner-a/cookies.txt
+```
+
+`miner.py` remains a one-shot on-chain submission command; the refresh server
+is a separate long-running operator process and can serve any number of axon
+and Chutes bindings.
+
 If validator task clips come from a non-default Hippius-compatible host, update
 the Hippius defaults in `chronoseek/constants.py`.
 

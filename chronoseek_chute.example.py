@@ -29,6 +29,7 @@ from chronoseek.constants import (
     DEFAULT_CHUTE_BASE_NAME,
     DEFAULT_CHUTES_HF_HOME,
     DEFAULT_CHUTES_YTDLP_DENO_PATH,
+    DEFAULT_COOKIE_REFRESH_CACHE_PATH,
 )
 from chronoseek.protocol_models import (
     ProofOfAccessRequest,
@@ -103,6 +104,7 @@ IMAGE_YTDLP_DENO_PATH = DEFAULT_CHUTES_YTDLP_DENO_PATH
 # instances have no Chrome profile to read.
 YTDLP_COOKIES_BROWSER = os.getenv("YTDLP_COOKIES_BROWSER", "").strip()
 YTDLP_DENO_PATH = IMAGE_YTDLP_DENO_PATH
+YTDLP_COOKIES = DEFAULT_COOKIE_REFRESH_CACHE_PATH
 
 
 image = (
@@ -125,6 +127,7 @@ image = (
     .with_env("HF_HOME", DEFAULT_CHUTES_HF_HOME)
     .with_env("DENO_INSTALL", "/opt/deno")
     .with_env("PATH", "/opt/deno/bin:$PATH")
+    .with_env("YTDLP_COOKIES", YTDLP_COOKIES)
     .with_env("YTDLP_COOKIES_BROWSER", YTDLP_COOKIES_BROWSER)
     .with_env("YTDLP_DENO_PATH", YTDLP_DENO_PATH)
     .run_command(

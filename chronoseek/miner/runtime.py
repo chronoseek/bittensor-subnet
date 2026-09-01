@@ -28,6 +28,10 @@ from chronoseek.epistula import verify_signature
 from chronoseek.logging import configure_logging, logger
 from chronoseek.miner import logic as miner_logic_module
 from chronoseek.miner.auth import ValidatorAuthContext, authorize_hotkey
+from chronoseek.miner.cookie_refresh import (
+    start_periodic_cookie_refresh,
+    stop_periodic_cookie_refresh,
+)
 from chronoseek.protocol_models import (
     ProofOfAccessRequest,
     ProofOfAccessResponse,
@@ -92,6 +96,7 @@ def initialize_runtime() -> None:
     logger.info(
         f"Starting ChronoSeek Chutes runtime on network={config.network}, netuid={config.netuid}"
     )
+    start_periodic_cookie_refresh()
 
     try:
         metagraph = load_runtime_metagraph(config)
@@ -112,7 +117,10 @@ def initialize_runtime() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_runtime()
-    yield
+    try:
+        yield
+    finally:
+        stop_periodic_cookie_refresh()
 
 
 app = FastAPI(lifespan=lifespan)
